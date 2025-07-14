@@ -156,6 +156,11 @@ extern "C-unwind" fn iterate_foreign_scan(
         info!("Fetching data from Redis for key prefix: {}", table_key_prefix);
         let conn = state.redis_connection.as_mut().expect("Redis connection is not established");
         let map: HashMap<String, String> = conn.hgetall(table_key_prefix).expect("Failed to fetch data from Redis");
+
+        if map.is_empty() {
+            state.is_read = true; 
+            return slot;
+        }
         
         for (col_name, value_str) in map.iter() {
             let colno = state.header_name_to_colno[col_name];

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use pgrx::pg_sys::{Oid, Datum, MemoryContext};
+use pgrx::pg_sys::MemoryContext;
 pub struct RedisFdwState {
     pub tmp_ctx: MemoryContext,
     pub header_name_to_colno: HashMap<String, usize>,

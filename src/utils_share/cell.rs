@@ -282,9 +282,9 @@ fn write_array<T: std::fmt::Display>(
     write!(f, "[{}]", res)
 }
 
-pub fn parse_cell(val: &str) -> Cell {
-    match val.parse::<i32>() {
-        Ok(i) => Cell::I32(i),
-        Err(_) => Cell::String(val.to_string()),
-    }
-}
+// pub fn parse_cell(val: &str) -> Cell {
+//     match val.parse::<i32>() {
+//         Ok(i) => Cell::I32(i),
+//         Err(_) => Cell::String(val.to_string()),
+//     }
+// }

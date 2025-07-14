@@ -163,6 +163,7 @@ pub unsafe fn tuple_table_slot_to_row(slot: *mut pgrx::pg_sys::TupleTableSlot) -
 /// 
 /// # Returns
 /// A Rust `String` containing the contents of the C string. If the pointer is null, an empty string is returned.
+#[inline]
 pub fn string_from_cstr(c_str: *const i8) -> String {
     if c_str.is_null() {
         return String::new();
