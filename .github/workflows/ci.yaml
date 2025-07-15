@@ -38,7 +38,10 @@ jobs:
             ca-certificates
           echo ""
           sudo apt-get install -y postgresql-${{ env.PG_VER }} postgresql-server-dev-${{ env.PG_VER }}
-          
+
+      - name: Start Redis container
+        run: docker run -d --name redis-server -p 8899:6379 redis
+        
       - name: Install cargo-pgrx
         run: cargo install cargo-pgrx 
 
