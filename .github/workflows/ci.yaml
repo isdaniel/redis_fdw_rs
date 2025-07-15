@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        pg-version: [ 14, 15, 16, 17]
+      fail-fast: false
+
+    env:
+      PG_VER: ${{ matrix.pg-version }}
+      PG_BIN: /usr/lib/postgresql/${{ matrix.pg-version }}/bin
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install PostgreSQL ${{ env.PG_VER }} APT repository and system dependencies
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+          sudo apt-get update
+          echo "----- Install system dependencies -----"
+          sudo apt-get install -y \
+            libreadline-dev \
+            zlib1g-dev \
+            flex \
+            bison \
+            build-essential \
+            clang \
+            llvm \
+            ca-certificates
+          echo ""
+          sudo apt-get install -y postgresql-${{ env.PG_VER }} postgresql-server-dev-${{ env.PG_VER }}
+          
+      - name: Install cargo-pgrx
+        run: cargo install cargo-pgrx 
+
+      - name: Initialize pgrx for PostgreSQL ${{ env.PG_VER }}
+        run: cargo pgrx init --pg${{ env.PG_VER }} ${{ env.PG_BIN }}/pg_config
+
+      - name: Report versions
+        run: |
+          cargo --version
+          ${{ env.PG_BIN }}/pg_config --version
+
+      - name: Chmod pg_config
+        run: |
+          sudo chmod 777 /usr/share/postgresql/${{ env.PG_VER }} -R
+          sudo chmod 777 /usr/lib/postgresql/${{ env.PG_VER }} -R
+          
+      - name: Run Tests for PostgreSQL ${{ env.PG_VER }}
+        run: cargo pgrx test --release pg${{ env.PG_VER }}
+
+      - name: Package for PostgreSQL ${{ env.PG_VER }}
+        run: cargo pgrx package --pg-config=${{ env.PG_BIN }}/pg_config
