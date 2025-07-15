@@ -202,7 +202,7 @@ impl fmt::Display for Cell {
             Cell::F64(v) => write!(f, "{}", v),
             Cell::I64(v) => write!(f, "{}", v),
             Cell::Numeric(v) => write!(f, "{}", v),
-            Cell::String(v) => write!(f, "'{}'", v),
+            Cell::String(v) => write!(f, "{}", v),
             Cell::Date(v) => unsafe {
                 let dt =
                     fcinfo::direct_function_call_as_datum(pgrx::pg_sys::date_out, &[(*v).into_datum()])
@@ -210,7 +210,7 @@ impl fmt::Display for Cell {
                 let dt_cstr = CStr::from_ptr(dt.cast_mut_ptr());
                 write!(
                     f,
-                    "'{}'",
+                    "{}",
                     dt_cstr.to_str().expect("date should be a valid string")
                 )
             },
@@ -221,7 +221,7 @@ impl fmt::Display for Cell {
                 let ts_cstr = CStr::from_ptr(ts.cast_mut_ptr());
                 write!(
                     f,
-                    "'{}'",
+                    "{}",
                     ts_cstr.to_str().expect("time hould be a valid string")
                 )
             },
@@ -234,7 +234,7 @@ impl fmt::Display for Cell {
                 let ts_cstr = CStr::from_ptr(ts.cast_mut_ptr());
                 write!(
                     f,
-                    "'{}'",
+                    "{}",
                     ts_cstr
                         .to_str()
                         .expect("timestamp should be a valid string")

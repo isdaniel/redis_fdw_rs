@@ -54,12 +54,13 @@ unsafe fn get_options_from_fdw(relid: Oid) -> *mut pg_sys::List {
     let table = pg_sys::GetForeignTable(relid);
     let server = pg_sys::GetForeignServer((*table).serverid);
     let wrapper = pg_sys::GetForeignDataWrapper((*server).fdwid);
-    //pg_sys::GetUserMapping(pg_sys::GetUserId(), (*server).fdwid);
+    // let mapping= pg_sys::GetUserMapping(pg_sys::GetUserId(), (*server).fdwid);
     let mut opts_list = std::ptr::null_mut();
     
     opts_list = list_concat(opts_list, (*wrapper).options);
     opts_list = list_concat(opts_list, (*server).options);
     opts_list = list_concat(opts_list, (*table).options);
+    //opts_list = list_concat(opts_list, (*mapping).options);
     opts_list
 }
 
@@ -294,4 +295,9 @@ pub unsafe fn find_rowid_column(
     }
 
     None
+}
+
+
+pub fn cell_to_string(cell: Option<&Cell>) -> String {
+    cell.map(|c| c.to_string()).unwrap_or_else(|| "NULL".to_string())
 }
