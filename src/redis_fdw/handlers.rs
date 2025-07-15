@@ -77,7 +77,9 @@ extern "C-unwind" fn get_foreign_paths(
             100.0,                     
             ptr::null_mut(),            
             ptr::null_mut(),            
-            ptr::null_mut(),           
+            ptr::null_mut(), 
+             #[cfg(feature = "pg17")]
+            ptr::null_mut(),     
             ptr::null_mut(),           
         );
         pgrx::pg_sys::add_path(baserel, path as *mut pgrx::pg_sys::Path);
