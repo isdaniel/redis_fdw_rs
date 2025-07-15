@@ -2,11 +2,11 @@ use std::{collections::HashMap, ptr};
 use pgrx::{ pg_sys::{ Datum, Index, MemoryContextData, ModifyTable, PlannerInfo}, prelude::*, AllocatedByRust, PgBox, PgRelation, PgTupleDesc
 };
 use redis::Commands;
-use crate::{redis_fdw::state::RedisFdwState, utils_share::{
+use crate::{redis_fdw::state::{RedisFdwState, RedisTableType}, utils_share::{
     memory::create_wrappers_memctx,
     row::Row,
     utils::{
-        self, build_attr_name_to_index_map, cell_to_string, delete_wrappers_memctx, deserialize_from_list, exec_clear_tuple, find_rowid_column, get_datum, get_foreign_table_options, serialize_to_list, tuple_desc_attr, tuple_table_slot_to_row
+        self, cell_to_string, delete_wrappers_memctx, deserialize_from_list, exec_clear_tuple, find_rowid_column, get_datum, get_foreign_table_options, serialize_to_list, tuple_table_slot_to_row, write_datum_to_slot
     }
 }};
 
@@ -126,9 +126,7 @@ extern "C-unwind" fn begin_foreign_scan(
 
         state.update_from_options(options);
         state.init_redis_connection_from_options();
-
-        //todo support table_type Hash, Set, List, ZSet in future.
-        state.hash_hgetall();
+        state.set_table_type();
 
         // Connect to Redis and handle potential errors
         log!("Connected to Redis");
@@ -149,18 +147,26 @@ extern "C-unwind" fn iterate_foreign_scan(
         
         exec_clear_tuple(slot);
 
-        if state.data.len() == 0 || state.is_read_end() {
+        if state.data_len() == 0 || state.is_read_end() {
             return slot;
         }
-
-        let row = state.data[state.row_count as usize].clone();
-
-        for (colno, value) in vec![row.0,row.1].iter().enumerate() {
-            let pgtype = (*tuple_desc_attr(tupdesc, colno )).atttypid;
-            let datum_value = get_datum(value, pgtype);
-            (*slot).tts_values.add(colno).write(datum_value);
-            (*slot).tts_isnull.add(colno).write(false);
+        
+        match &state.table_type {
+            RedisTableType::Hash(data) => {
+                let (key, value) = &data[state.row_count as usize];
+                write_datum_to_slot(slot, tupdesc, 0, key);
+                write_datum_to_slot(slot, tupdesc, 1, value);
+            },
+            RedisTableType::List(data) => {
+                let element = &data[state.row_count as usize];
+                write_datum_to_slot(slot, tupdesc, 0, element);
+            },
+            _ => {
+                error!("Unsupported table_type: {:?}", state.table_type);
+                return slot;
+            }
         }
+
         state.row_count += 1;
         pgrx::pg_sys::ExecStoreVirtualTuple(slot);
         slot
@@ -239,6 +245,8 @@ unsafe extern "C-unwind" fn plan_foreign_modify(
     info!("Foreign table options for modify: {:?}", opts);
     state.update_from_options(opts);
     state.init_redis_connection_from_options();
+    //todo enhance performance by caching data on modify
+    state.set_table_type();
     let p: *mut RedisFdwState = Box::leak(Box::new(state)) as *mut RedisFdwState;
     let state: PgBox<RedisFdwState> = PgBox::<RedisFdwState>::from_pg(p as _);
     serialize_to_list(state)
@@ -273,21 +281,28 @@ unsafe extern "C-unwind" fn exec_foreign_insert(
     log!("---> exec_foreign_insert");
     let mut state = PgBox::<RedisFdwState>::from_pg((*rinfo).ri_FdwState as _);
     let row: Row = tuple_table_slot_to_row(slot);
-    let mut fields: Vec<(String, String)> = Vec::new();
-    let fields: Vec<(String, String)> = row
-        .cells
-        .windows(2)
-        .step_by(2)
-        .map(|pair| {
-            let key = cell_to_string(pair[0].as_ref());
-            let val = cell_to_string(pair[1].as_ref());
 
-            info!("Inserted column: {}, value: {}", key, val);
-            (key, val)
-        })
-        .collect();
-    
-    state.hash_hset_multiple(&fields);
+    if let RedisTableType::List(_) = state.table_type {
+        if let Some(first_cell) = row.cells.get(0) {
+            let value = cell_to_string(first_cell.as_ref());
+            state.list_rpush(&value);
+        }
+    } else if let RedisTableType::Hash(_) = state.table_type {
+        let fields: Vec<(String, String)> = row
+            .cells
+            .windows(2)
+            .step_by(2)
+            .map(|pair| {
+                let key = cell_to_string(pair[0].as_ref());
+                let val = cell_to_string(pair[1].as_ref());
+                (key, val)
+            })
+            .collect();
+        state.hash_hset_multiple(&fields);
+    } else {
+        error!("Unsupported table_type for insert: {:?}", state.table_type);
+    }
+
     (*slot).tts_tableOid = pgrx::pg_sys::InvalidOid;
     slot
 }

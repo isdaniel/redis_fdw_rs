@@ -2,27 +2,29 @@ use std::collections::HashMap;
 use pgrx::pg_sys::MemoryContext;
 use redis::Commands;
 
+#[derive(Debug, Clone)]
 pub enum RedisTableType {
     String,
-    Hash,
-    List,
+    Hash(Vec<(String, String)>),
+    List(Vec<String>),
     Set,
     ZSet,
     None
 }
 
-impl RedisTableType {
-    pub fn from_str(s: &str) -> RedisTableType {
-        match s.to_lowercase().as_str() {
-            "string" => RedisTableType::String,
-            "hash" => RedisTableType::Hash,
-            "list" => RedisTableType::List,
-            "set" => RedisTableType::Set,
-            "zset" => RedisTableType::ZSet,
-            _ => RedisTableType::None,
-        }
-    }
-}
+
+// impl RedisTableType {
+//     pub fn from_str(s: &str) -> RedisTableType {
+//         match s.to_lowercase().as_str() {
+//             "string" => RedisTableType::String,
+//             "hash" => RedisTableType::Hash(Vec::new()), 
+//             "list" => RedisTableType::List(Vec::new()),  
+//             "set" => RedisTableType::Set,
+//             "zset" => RedisTableType::ZSet,
+//             _ => RedisTableType::None,
+//         }
+//     }
+// }
 
 /// Read FDW state
 pub struct RedisFdwState {
@@ -33,7 +35,6 @@ pub struct RedisFdwState {
     pub table_type: RedisTableType,
     pub table_key_prefix: String,
     pub opts: HashMap<String, String>,
-    pub data: Vec<(String, String)>,
     pub row_count: u32,
 }
 
@@ -47,7 +48,6 @@ impl RedisFdwState {
             database: 0,
             host_port: String::default(),
             opts: HashMap::default(),
-            data: Vec::new(), 
             row_count: 0,
         }
     }
@@ -76,12 +76,6 @@ impl RedisFdwState {
             .expect("`host_port` option is required for redis_fdw")
             .clone();
 
-        self.table_type = RedisTableType::from_str(
-            self.opts
-                .get("table_type")
-                .expect("`table_type` option is required for redis_fdw"),
-        );
-
         if let Some(db_str) = self.opts.get("database") {
             self.database = db_str
                 .parse::<i64>()
@@ -92,13 +86,38 @@ impl RedisFdwState {
             self.table_key_prefix = prefix.clone();
         }
     }
-    //SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]
-    pub fn hash_hgetall(&mut self) {
+
+    pub fn set_table_type(&mut self) {
+        let table_type =  self.opts
+                .get("table_type")
+                .expect("`table_type` option is required for redis_fdw");
+            
+        self.table_type = match table_type.to_lowercase().as_str() {
+            "string" => RedisTableType::String,
+            "hash" => self.hash_hgetall(), 
+            "list" => self.list_lrange(),  
+            "set" => RedisTableType::Set,
+            "zset" => RedisTableType::ZSet,
+            _ => RedisTableType::None,
+        };
+    }
+    
+    fn list_lrange(&mut self) -> RedisTableType {
         let conn = self.redis_connection.as_mut().expect("Redis connection is not initialized");
+        
         let table_key_prefix = &self.table_key_prefix;
-        self.data = conn.hgetall(table_key_prefix).map(|map: HashMap<String, String>| {
+        let data: Vec<String> = conn.lrange(table_key_prefix, 0, -1).expect("Failed to get Redis list data");
+        RedisTableType::List(data)
+    }
+
+    fn hash_hgetall(&mut self) -> RedisTableType {
+        let conn = self.redis_connection.as_mut().expect("Redis connection is not initialized");
+        
+        let table_key_prefix = &self.table_key_prefix;
+        let data = conn.hgetall(table_key_prefix).map(|map: HashMap<String, String>| {
             map.into_iter().collect()
         }).expect("Failed to get Redis hash data");
+        RedisTableType::Hash(data)
     } 
 
     pub fn hash_hset_multiple(&mut self, fields: &[(String, String)]) {
@@ -107,8 +126,25 @@ impl RedisFdwState {
         let _: () = conn.hset_multiple(table_key_prefix, fields).expect("Failed to set Redis hash field");
     }
 
+    pub fn list_rpush(&mut self, value: &str) {
+        let conn: &mut redis::Connection = self.redis_connection.as_mut().expect("Redis connection is not initialized");
+        let table_key_prefix = &self.table_key_prefix;
+        let _: () = conn.rpush(table_key_prefix, value).expect("Failed to push value to Redis list");
+    }
+
     pub fn is_read_end(&self) -> bool {
-        self.row_count >= self.data.len() as u32
+        self.row_count >= self.data_len() as u32
+    }
+
+    pub fn data_len(&self) -> usize {
+        match &self.table_type {
+            RedisTableType::String => 0,
+            RedisTableType::Hash(data) => data.len(),
+            RedisTableType::List(data) => data.len(),
+            RedisTableType::Set => 0,  // Not implemented
+            RedisTableType::ZSet => 0, // Not implemented
+            RedisTableType::None => 0,
+        }
     }
 }
 

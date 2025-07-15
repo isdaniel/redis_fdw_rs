@@ -301,3 +301,16 @@ pub unsafe fn find_rowid_column(
 pub fn cell_to_string(cell: Option<&Cell>) -> String {
     cell.map(|c| c.to_string()).unwrap_or_else(|| "NULL".to_string())
 }
+
+
+pub unsafe fn write_datum_to_slot(
+    slot: *mut pgrx::pg_sys::TupleTableSlot,
+    tupdesc: pgrx::pg_sys::TupleDesc,
+    colno: usize,
+    value: &str,
+) {
+    let pgtype = (*tuple_desc_attr(tupdesc, colno)).atttypid;
+    let datum = get_datum(value, pgtype);
+    (*slot).tts_values.add(colno).write(datum);
+    (*slot).tts_isnull.add(colno).write(false);
+}
