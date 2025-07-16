@@ -13,7 +13,7 @@ A high-performance Redis Foreign Data Wrapper (FDW) for PostgreSQL written in Ru
 
 ## Prerequisites
 
-- PostgreSQL 14, 15, 16
+- PostgreSQL 14, 15, 16, or 17
 - Redis server
 - Rust toolchain (for building from source)
 
@@ -102,41 +102,85 @@ SERVER redis_server
 OPTIONS (password 'your_redis_password');
 ```
 
-## Supported Redis Data Types
+## Supported Redis Data Types (Usage Examples)
 
-### Hash Tables 
-Perfect for key-value pairs and structured data:
+### Table Type Characteristics
+
+#### String Table (`table_type 'string'`)
+- **Purpose**: Store a single string value
+- **SQL Columns**: 1 column (value)
+- **Use Cases**: Configuration values, counters, simple key-value storage
+- **Redis Commands**: SET, GET, DEL
+
+#### Hash Table (`table_type 'hash'`)
+- **Purpose**: Store field-value pairs (like a dictionary/map)
+- **SQL Columns**: 2 columns (field, value)  
+- **Use Cases**: User profiles, object attributes, structured data
+- **Redis Commands**: HSET, HGETALL, HDEL
+
+#### List Table (`table_type 'list'`)
+- **Purpose**: Store ordered sequence of elements
+- **SQL Columns**: 1 column (element)
+- **Use Cases**: Task queues, activity feeds, ordered collections
+- **Redis Commands**: RPUSH, LRANGE, LREM
+
+#### Set Table (`table_type 'set'`)
+- **Purpose**: Store unordered collection of unique elements
+- **SQL Columns**: 1 column (member)
+- **Use Cases**: Tags, categories, unique collections
+- **Redis Commands**: SADD, SMEMBERS, SREM
+
+#### Sorted Set Table (`table_type 'zset'`)
+- **Purpose**: Store ordered collection with scores
+- **SQL Columns**: 2 columns (member, score)
+- **Use Cases**: Leaderboards, rankings, priority queues
+- **Redis Commands**: ZADD, ZRANGE, ZREM
+
+### SQL Table Definitions
 ```sql
-CREATE FOREIGN TABLE redis_hash_table (key text, value text) 
-SERVER redis_server
-OPTIONS (
-    database '0',
-    table_type 'hash',
-    table_key_prefix 'user:'
-);
+-- String table (single value storage)
+CREATE FOREIGN TABLE redis_string (value TEXT)
+SERVER redis_server OPTIONS (table_type 'string', table_key_prefix 'config:app_name');
 
--- Usage examples
-SELECT * FROM redis_hash_table;
-INSERT INTO redis_hash_table VALUES ('name', 'John Doe');
-INSERT INTO redis_hash_table VALUES ('email', 'john@example.com');
+-- Hash table
+CREATE FOREIGN TABLE redis_hash (field TEXT, value TEXT) 
+SERVER redis_server OPTIONS (table_type 'hash', table_key_prefix 'user:1');
+
+-- List table  
+CREATE FOREIGN TABLE redis_list (element TEXT)
+SERVER redis_server OPTIONS (table_type 'list', table_key_prefix 'items');
+
+-- Set table
+CREATE FOREIGN TABLE redis_set (member TEXT)
+SERVER redis_server OPTIONS (table_type 'set', table_key_prefix 'tags');
+
+-- Sorted set table
+CREATE FOREIGN TABLE redis_zset (member TEXT, score FLOAT8)
+SERVER redis_server OPTIONS (table_type 'zset', table_key_prefix 'leaderboard');
 ```
 
-### Lists Tables
-
-For ordered collections:
+### SQL Operations
 ```sql
-CREATE FOREIGN TABLE redis_list_table (element text) 
-SERVER redis_server
-OPTIONS (
-    database '0',
-    table_type 'list',
-    table_key_prefix 'tasks:'
-);
+-- String operations
+INSERT INTO redis_string VALUES ('MyApplicationName');
+SELECT * FROM redis_string;
+UPDATE redis_string SET value = 'UpdatedAppName';
 
--- Usage examples
-SELECT * FROM redis_list_table;
-INSERT INTO redis_list_table VALUES ('Task 1');
-INSERT INTO redis_list_table VALUES ('Task 2');
+-- Hash operations
+INSERT INTO redis_hash VALUES ('name', 'John'), ('age', '30');
+SELECT * FROM redis_hash;
+
+-- List operations
+INSERT INTO redis_list VALUES ('apple'), ('banana');
+SELECT * FROM redis_list;
+
+-- Set operations  
+INSERT INTO redis_set VALUES ('red'), ('green'), ('blue');
+SELECT * FROM redis_set;
+
+-- Sorted set operations
+INSERT INTO redis_zset VALUES ('player1', 100.5), ('player2', 95.0);
+SELECT * FROM redis_zset ORDER BY score DESC;
 ```
 
 ## Configuration Options
@@ -147,17 +191,37 @@ INSERT INTO redis_list_table VALUES ('Task 2');
 ### Table Options
 - `database`: Redis database number (default: 0) - **Optional**
 - `table_type`: Redis data type - **Required**
-  - `'hash'` - Fully implemented ✅
-  - `'list'` - Fully implemented ✅  
-  - `'set'` - Not implemented 🚧
-  - `'zset'` - Not implemented 🚧
-  - `'string'` - Not implemented 🚧
+  - `'string'` - Partial implemented ✅
+  - `'hash'` - Partial implemented ✅
+  - `'list'` - Partial implemented ✅  
+  - `'set'` - Partial implemented ✅
+  - `'zset'` - Partial implemented ✅
 - `table_key_prefix`: Key prefix for Redis operations - **Required**
 
 ### User Mapping Options
 - `password`: Redis authentication password - **Optional**
 
 ## Advanced Usage
+
+### String Table Examples
+```sql
+-- Configuration storage
+CREATE FOREIGN TABLE app_config (value TEXT)
+SERVER redis_server OPTIONS (table_type 'string', table_key_prefix 'config:database_url');
+
+CREATE FOREIGN TABLE app_version (value TEXT)
+SERVER redis_server OPTIONS (table_type 'string', table_key_prefix 'app:version');
+
+-- Usage
+INSERT INTO app_config VALUES ('postgresql://localhost:5432/mydb');
+INSERT INTO app_version VALUES ('1.2.3');
+
+SELECT 'Database URL: ' || value FROM app_config;
+SELECT 'App Version: ' || value FROM app_version;
+
+-- Update configuration
+UPDATE app_config SET value = 'postgresql://newhost:5432/mydb';
+```
 
 ### Complex Queries
 ```sql

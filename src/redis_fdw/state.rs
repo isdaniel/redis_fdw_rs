@@ -1,30 +1,104 @@
 use std::collections::HashMap;
 use pgrx::pg_sys::MemoryContext;
-use redis::Commands;
+ use crate::redis_fdw::{
+    interface::RedisTableOperations, 
+    redis_hash_table::RedisHashTable, 
+    redis_list_table::RedisListTable, 
+    redis_set_table::RedisSetTable, 
+    redis_string_table::RedisStringTable, 
+    redis_zset_table::RedisZSetTable
+};
 
+
+/// Enum representing different Redis table types with their implementations
 #[derive(Debug, Clone)]
 pub enum RedisTableType {
-    String,
-    Hash(Vec<(String, String)>),
-    List(Vec<String>),
-    Set,
-    ZSet,
-    None
+    String(RedisStringTable),
+    Hash(RedisHashTable),
+    List(RedisListTable),
+    Set(RedisSetTable),
+    ZSet(RedisZSetTable),
+    None,
 }
 
-
-// impl RedisTableType {
-//     pub fn from_str(s: &str) -> RedisTableType {
-//         match s.to_lowercase().as_str() {
-//             "string" => RedisTableType::String,
-//             "hash" => RedisTableType::Hash(Vec::new()), 
-//             "list" => RedisTableType::List(Vec::new()),  
-//             "set" => RedisTableType::Set,
-//             "zset" => RedisTableType::ZSet,
-//             _ => RedisTableType::None,
-//         }
-//     }
-// }
+impl RedisTableType {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "string" => RedisTableType::String(RedisStringTable::new()),
+            "hash" => RedisTableType::Hash(RedisHashTable::new()),
+            "list" => RedisTableType::List(RedisListTable::new()),
+            "set" => RedisTableType::Set(RedisSetTable::new()),
+            "zset" => RedisTableType::ZSet(RedisZSetTable::new()),
+            _ => RedisTableType::None,
+        }
+    }
+    
+    pub fn load_data(&mut self, conn: &mut redis::Connection, key_prefix: &str) -> Result<(), redis::RedisError> {
+        match self {
+            RedisTableType::String(table) => table.load_data(conn, key_prefix),
+            RedisTableType::Hash(table) => table.load_data(conn, key_prefix),
+            RedisTableType::List(table) => table.load_data(conn, key_prefix),
+            RedisTableType::Set(table) => table.load_data(conn, key_prefix),
+            RedisTableType::ZSet(table) => table.load_data(conn, key_prefix),
+            RedisTableType::None => Ok(()),
+        }
+    }
+    
+    pub fn data_len(&self) -> usize {
+        match self {
+            RedisTableType::String(table) => table.data_len(),
+            RedisTableType::Hash(table) => table.data_len(),
+            RedisTableType::List(table) => table.data_len(),
+            RedisTableType::Set(table) => table.data_len(),
+            RedisTableType::ZSet(table) => table.data_len(),
+            RedisTableType::None => 0,
+        }
+    }
+    
+    pub fn get_row(&self, index: usize) -> Option<Vec<String>> {
+        match self {
+            RedisTableType::String(table) => table.get_row(index),
+            RedisTableType::Hash(table) => table.get_row(index),
+            RedisTableType::List(table) => table.get_row(index),
+            RedisTableType::Set(table) => table.get_row(index),
+            RedisTableType::ZSet(table) => table.get_row(index),
+            RedisTableType::None => None,
+        }
+    }
+    
+    pub fn insert(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
+        match self {
+            RedisTableType::String(table) => table.insert(conn, key_prefix, data),
+            RedisTableType::Hash(table) => table.insert(conn, key_prefix, data),
+            RedisTableType::List(table) => table.insert(conn, key_prefix, data),
+            RedisTableType::Set(table) => table.insert(conn, key_prefix, data),
+            RedisTableType::ZSet(table) => table.insert(conn, key_prefix, data),
+            RedisTableType::None => Ok(()),
+        }
+    }
+    
+    pub fn delete(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
+        match self {
+            RedisTableType::String(table) => table.delete(conn, key_prefix, data),
+            RedisTableType::Hash(table) => table.delete(conn, key_prefix, data),
+            RedisTableType::List(table) => table.delete(conn, key_prefix, data),
+            RedisTableType::Set(table) => table.delete(conn, key_prefix, data),
+            RedisTableType::ZSet(table) => table.delete(conn, key_prefix, data),
+            RedisTableType::None => Ok(()),
+        }
+    }
+    
+    pub fn update(&mut self, conn: &mut redis::Connection, key_prefix: &str, old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
+        match self {
+            RedisTableType::String(table) => table.update(conn, key_prefix, old_data, new_data),
+            RedisTableType::Hash(table) => table.update(conn, key_prefix, old_data, new_data),
+            RedisTableType::List(table) => table.update(conn, key_prefix, old_data, new_data),
+            RedisTableType::Set(table) => table.update(conn, key_prefix, old_data, new_data),
+            RedisTableType::ZSet(table) => table.update(conn, key_prefix, old_data, new_data),
+            RedisTableType::None => Ok(()),
+        }
+    }
+}
 
 /// Read FDW state
 pub struct RedisFdwState {
@@ -88,84 +162,73 @@ impl RedisFdwState {
     }
 
     pub fn set_table_type(&mut self) {
-        let table_type =  self.opts
-                .get("table_type")
-                .expect("`table_type` option is required for redis_fdw");
+        let table_type = self.opts
+            .get("table_type")
+            .expect("`table_type` option is required for redis_fdw");
             
-        self.table_type = match table_type.to_lowercase().as_str() {
-            "string" => RedisTableType::String,
-            "hash" => self.hash_hgetall(), 
-            "list" => self.list_lrange(),  
-            "set" => RedisTableType::Set,
-            "zset" => RedisTableType::ZSet,
-            _ => RedisTableType::None,
-        };
+        self.table_type = RedisTableType::from_str(table_type);
+        
+        // Load data from Redis
+        if let Some(conn) = self.redis_connection.as_mut() {
+            let _ = self.table_type.load_data(conn, &self.table_key_prefix);
+        }
     }
     
-    fn list_lrange(&mut self) -> RedisTableType {
-        let conn = self.redis_connection.as_mut().expect("Redis connection is not initialized");
-        
-        let table_key_prefix = &self.table_key_prefix;
-        let data: Vec<String> = conn.lrange(table_key_prefix, 0, -1).expect("Failed to get Redis list data");
-        RedisTableType::List(data)
-    }
-
-    fn hash_hgetall(&mut self) -> RedisTableType {
-        let conn = self.redis_connection.as_mut().expect("Redis connection is not initialized");
-        
-        let table_key_prefix = &self.table_key_prefix;
-        let data = conn.hgetall(table_key_prefix).map(|map: HashMap<String, String>| {
-            map.into_iter().collect()
-        }).expect("Failed to get Redis hash data");
-        RedisTableType::Hash(data)
-    } 
-
-    pub fn hash_hset_multiple(&mut self, fields: &[(String, String)]) {
-        let conn: &mut redis::Connection = self.redis_connection.as_mut().expect("Redis connection is not initialized");
-        let table_key_prefix = &self.table_key_prefix;
-        let _: () = conn.hset_multiple(table_key_prefix, fields).expect("Failed to set Redis hash field");
-    }
-
-    pub fn list_rpush(&mut self, value: &str) {
-        let conn: &mut redis::Connection = self.redis_connection.as_mut().expect("Redis connection is not initialized");
-        let table_key_prefix = &self.table_key_prefix;
-        let _: () = conn.rpush(table_key_prefix, value).expect("Failed to push value to Redis list");
-    }
-
     pub fn is_read_end(&self) -> bool {
-        self.row_count >= self.data_len() as u32
+        self.row_count >= self.table_type.data_len() as u32
     }
 
     pub fn data_len(&self) -> usize {
-        match &self.table_type {
-            RedisTableType::String => 0,
-            RedisTableType::Hash(data) => data.len(),
-            RedisTableType::List(data) => data.len(),
-            RedisTableType::Set => 0,  // Not implemented
-            RedisTableType::ZSet => 0, // Not implemented
-            RedisTableType::None => 0,
+        self.table_type.data_len()
+    }
+
+    /// Insert data using the appropriate table type
+    pub fn insert_data(&mut self, data: &[String]) -> Result<(), redis::RedisError> {
+        if let Some(conn) = self.redis_connection.as_mut() {
+            self.table_type.insert(conn, &self.table_key_prefix, data)
+        } else {
+            Err(redis::RedisError::from((redis::ErrorKind::IoError, "Redis connection not initialized")))
         }
+    }
+
+    /// Delete data using the appropriate table type
+    pub fn delete_data(&mut self, data: &[String]) -> Result<(), redis::RedisError> {
+        if let Some(conn) = self.redis_connection.as_mut() {
+            self.table_type.delete(conn, &self.table_key_prefix, data)
+        } else {
+            Err(redis::RedisError::from((redis::ErrorKind::IoError, "Redis connection not initialized")))
+        }
+    }
+
+    /// Update data using the appropriate table type
+    pub fn update_data(&mut self, old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
+        if let Some(conn) = self.redis_connection.as_mut() {
+            self.table_type.update(conn, &self.table_key_prefix, old_data, new_data)
+        } else {
+            Err(redis::RedisError::from((redis::ErrorKind::IoError, "Redis connection not initialized")))
+        }
+    }
+
+    /// Get a row at the specified index
+    pub fn get_row(&self, index: usize) -> Option<Vec<String>> {
+        self.table_type.get_row(index)
+    }
+
+    // Legacy methods for backward compatibility
+    pub fn hash_hset_multiple(&mut self, fields: &[(String, String)]) {
+        let data: Vec<String> = fields.iter()
+            .flat_map(|(k, v)| vec![k.clone(), v.clone()])
+            .collect();
+        let _ = self.insert_data(&data);
+    }
+
+    pub fn list_rpush(&mut self, value: &str) {
+        let _ = self.insert_data(&[value.to_string()]);
+    }
+
+    pub fn hdel_multiple(&mut self, fields: &Vec<String>) {
+        let _ = self.delete_data(fields);
     }
 }
 
-///// Write FDW state (for INSERT/UPDATE/DELETE)
-// pub struct RedisModifyFdwState {
-//     pub base: RedisBaseState
-// }
-
-// impl RedisModifyFdwState {
-//     pub fn new(tmp_ctx: MemoryContext) -> Self {
-//         RedisModifyFdwState {
-//             base: RedisBaseState {
-//                 tmp_ctx,
-//                 redis_connection: None,
-//                 table_type: String::default(),
-//                 table_key_prefix: String::default(),
-//                 database: 0,
-//                 host_port: String::default(),
-//                 opts: HashMap::default(),
-//             }
-//         }
-//     }
-// }
 
