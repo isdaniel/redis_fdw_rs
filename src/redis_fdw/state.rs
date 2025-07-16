@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 use pgrx::pg_sys::MemoryContext;
  use crate::redis_fdw::{
-    interface::RedisTableOperations, 
-    redis_hash_table::RedisHashTable, 
-    redis_list_table::RedisListTable, 
-    redis_set_table::RedisSetTable, 
-    redis_string_table::RedisStringTable, 
-    redis_zset_table::RedisZSetTable
+    tables::{
+        RedisTableOperations, 
+        RedisHashTable, 
+        RedisListTable, 
+        RedisSetTable, 
+        RedisStringTable, 
+        RedisZSetTable
+    }
 };
 
 

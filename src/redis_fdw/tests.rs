@@ -3,8 +3,7 @@
 mod tests {
     use pgrx::prelude::*;
     use crate::redis_fdw::{
-        redis_hash_table::RedisHashTable, 
-        redis_list_table::RedisListTable,  
+        tables::{RedisHashTable, RedisListTable},
         state::{RedisFdwState, RedisTableType}
     };
     use std::ptr;

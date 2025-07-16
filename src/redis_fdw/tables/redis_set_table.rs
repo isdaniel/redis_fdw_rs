@@ -1,21 +1,22 @@
-use crate::redis_fdw::interface::RedisTableOperations;
 use redis::Commands;
 
-/// Redis List table type
+use crate::redis_fdw::tables::interface::RedisTableOperations;
+
+/// Redis Set table type
 #[derive(Debug, Clone)]
-pub struct RedisListTable {
+pub struct RedisSetTable {
     pub data: Vec<String>,
 }
 
-impl RedisListTable {
+impl RedisSetTable {
     pub fn new() -> Self {
         Self { data: Vec::new() }
     }
 }
 
-impl RedisTableOperations for RedisListTable {
+impl RedisTableOperations for RedisSetTable {
     fn load_data(&mut self, conn: &mut redis::Connection, key_prefix: &str) -> Result<(), redis::RedisError> {
-        self.data = conn.lrange(key_prefix, 0, -1)?;
+        self.data = conn.smembers( key_prefix)?;
         Ok(())
     }
     
@@ -29,17 +30,26 @@ impl RedisTableOperations for RedisListTable {
     
     fn insert(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
         for value in data {
-            let _: i32 = conn.rpush(key_prefix, value)?;
-            self.data.push(value.clone());
+            let added: i32 = conn.sadd(key_prefix, value)?;
+            if added > 0 {
+                self.data.push(value.clone());
+            }
         }
         Ok(())
     }
     
     fn delete(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
-        unimplemented!("Update operation for Redis List is not defined in this context");
+        for value in data {
+            let _: i32 = conn.srem( key_prefix, value)?;
+            self.data.retain(|x| x != value);
+        }
+        Ok(())
     }
     
     fn update(&mut self, conn: &mut redis::Connection, key_prefix: &str, old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
-        unimplemented!("Update operation for Redis List is not defined in this context");
+        // For sets, update means remove old and add new
+        self.delete(conn, key_prefix, old_data)?;
+        self.insert(conn, key_prefix, new_data)?;
+        Ok(())
     }
 }

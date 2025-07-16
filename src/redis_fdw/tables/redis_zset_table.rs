@@ -1,6 +1,6 @@
 use redis::Commands;
 
-use crate::redis_fdw::interface::RedisTableOperations;
+use crate::redis_fdw::tables::interface::RedisTableOperations;
 
 /// Redis Sorted Set table type
 #[derive(Debug, Clone)]

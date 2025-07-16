@@ -1,11 +1,6 @@
 mod handlers;
 mod state;
-mod interface;
-mod redis_hash_table;
-mod redis_list_table;
-mod redis_set_table;
-mod redis_string_table;
-mod redis_zset_table;
+pub mod tables;
 
 
 #[cfg(test)]

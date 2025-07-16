@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use redis::Commands;
 
-use crate::redis_fdw::interface::RedisTableOperations;
+use crate::redis_fdw::tables::interface::RedisTableOperations;
 
 /// Redis Hash table type
 #[derive(Debug, Clone)]

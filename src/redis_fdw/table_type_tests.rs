@@ -3,7 +3,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::redis_fdw::{interface::RedisTableOperations, redis_hash_table::RedisHashTable, redis_list_table::RedisListTable, state::*};
+    use crate::redis_fdw::{tables::{RedisTableOperations, RedisHashTable, RedisListTable}, state::*};
 
     // #[test]
     // fn test_redis_string_table() {
