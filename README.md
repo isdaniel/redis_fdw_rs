@@ -191,7 +191,7 @@ SELECT * FROM redis_zset ORDER BY score DESC;
 ### Table Options
 - `database`: Redis database number (default: 0) - **Optional**
 - `table_type`: Redis data type - **Required**
-  - `'string'` - Partal implemented ✅
+  - `'string'` - Partial implemented ✅
   - `'hash'` - Partial implemented ✅
   - `'list'` - Partial implemented ✅  
   - `'set'` - Partial implemented ✅
