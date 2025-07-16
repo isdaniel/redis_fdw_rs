@@ -1,13 +1,10 @@
-use std::{collections::HashMap, ptr};
-use pgrx::{ pg_sys::{ Datum, Index, MemoryContextData, ModifyTable, PlannerInfo}, prelude::*, AllocatedByRust, PgBox, PgRelation, PgTupleDesc
+use std::ptr;
+use pgrx::{ pg_sys::{ Index, MemoryContextData, ModifyTable, PlannerInfo}, prelude::*, AllocatedByRust, PgBox, PgRelation, PgTupleDesc
 };
-use redis::Commands;
-use crate::{redis_fdw::state::{RedisFdwState, RedisTableType}, utils_share::{
+use crate::{redis_fdw::state::{RedisFdwState}, utils_share::{
     memory::create_wrappers_memctx,
     row::Row,
-    utils::{
-        self, cell_to_string, delete_wrappers_memctx, deserialize_from_list, exec_clear_tuple, find_rowid_column, get_datum, get_foreign_table_options, serialize_to_list, tuple_table_slot_to_row, write_datum_to_slot
-    }
+    utils::*
 }};
 
 pub type FdwRoutine<A = AllocatedByRust> = PgBox<pgrx::pg_sys::FdwRoutine, A>;
@@ -112,7 +109,7 @@ unsafe extern "C-unwind" fn get_foreign_plan(
 #[pg_guard]
 extern "C-unwind" fn begin_foreign_scan(
     node: *mut pgrx::pg_sys::ForeignScanState,
-    eflags: ::std::os::raw::c_int,
+    _eflags: ::std::os::raw::c_int,
 ) {
 
     log!("---> begin_foreign_scan");
@@ -153,20 +150,13 @@ extern "C-unwind" fn iterate_foreign_scan(
             return slot;
         }
         
-        match &state.table_type {
-            RedisTableType::Hash(data) => {
-                let (key, value) = &data[state.row_count as usize];
-                write_datum_to_slot(slot, tupdesc, 0, key);
-                write_datum_to_slot(slot, tupdesc, 1, value);
-            },
-            RedisTableType::List(data) => {
-                let element = &data[state.row_count as usize];
-                write_datum_to_slot(slot, tupdesc, 0, element);
-            },
-            _ => {
-                error!("Unsupported table_type: {:?}", state.table_type);
-                return slot;
+        if let Some(row_data) = state.get_row(state.row_count as usize) {
+            for (col_idx, value) in row_data.iter().enumerate() {
+                write_datum_to_slot(slot, tupdesc, col_idx, value);
             }
+        } else {
+            error!("Failed to get row data at index: {}", state.row_count);
+            return slot;
         }
 
         state.row_count += 1;
@@ -230,7 +220,7 @@ unsafe extern "C-unwind" fn add_foreign_update_targets(
 #[pg_guard]
 unsafe extern "C-unwind" fn plan_foreign_modify(
     root: *mut PlannerInfo,
-    plan: *mut ModifyTable,
+    _plan: *mut ModifyTable,
     result_relation: Index,
     _subplan_index: ::core::ffi::c_int,
 ) -> *mut pgrx::pg_sys::List {
@@ -247,7 +237,6 @@ unsafe extern "C-unwind" fn plan_foreign_modify(
     info!("Foreign table options for modify: {:?}", opts);
     state.update_from_options(opts);
     state.init_redis_connection_from_options();
-    //todo enhance performance by caching data on modify
     state.set_table_type();
     let p: *mut RedisFdwState = Box::leak(Box::new(state)) as *mut RedisFdwState;
     let state: PgBox<RedisFdwState> = PgBox::<RedisFdwState>::from_pg(p as _);
@@ -256,21 +245,21 @@ unsafe extern "C-unwind" fn plan_foreign_modify(
 
 #[pg_guard]
 unsafe extern "C-unwind" fn begin_foreign_modify(
-    mtstate: *mut pgrx::pg_sys::ModifyTableState,
+    _mtstate: *mut pgrx::pg_sys::ModifyTableState,
     rinfo: *mut pgrx::pg_sys::ResultRelInfo,
     fdw_private: *mut pgrx::pg_sys::List,
-    subplan_index: ::std::os::raw::c_int,
-    eflags: ::std::os::raw::c_int,
+    _subplan_index: ::std::os::raw::c_int,
+    _eflags: ::std::os::raw::c_int,
 ) {
     log!("---> begin_foreign_modify");
     let state = deserialize_from_list::<RedisFdwState>(fdw_private as _);
     (*rinfo).ri_FdwState = state.into_pg() as *mut std::os::raw::c_void;
 }
 
-#[inline]
-pub(super) unsafe fn outer_plan_state(node: *mut pg_sys::PlanState) -> *mut pg_sys::PlanState {
-    (*node).lefttree
-}
+// #[inline]
+// pub(super) unsafe fn outer_plan_state(node: *mut pg_sys::PlanState) -> *mut pg_sys::PlanState {
+//     (*node).lefttree
+// }
 
 
 #[pg_guard]
@@ -284,25 +273,16 @@ unsafe extern "C-unwind" fn exec_foreign_insert(
     let mut state = PgBox::<RedisFdwState>::from_pg((*rinfo).ri_FdwState as _);
     let row: Row = tuple_table_slot_to_row(slot);
 
-    if let RedisTableType::List(_) = state.table_type {
-        if let Some(first_cell) = row.cells.get(0) {
-            let value = cell_to_string(first_cell.as_ref());
-            state.list_rpush(&value);
-        }
-    } else if let RedisTableType::Hash(_) = state.table_type {
-        let fields: Vec<(String, String)> = row
-            .cells
-            .windows(2)
-            .step_by(2)
-            .map(|pair| {
-                let key = cell_to_string(pair[0].as_ref());
-                let val = cell_to_string(pair[1].as_ref());
-                (key, val)
-            })
-            .collect();
-        state.hash_hset_multiple(&fields);
-    } else {
-        error!("Unsupported table_type for insert: {:?}", state.table_type);
+    // Convert row cells to string data
+    let data: Vec<String> = row
+        .cells
+        .iter()
+        .map(|cell| cell_to_string(cell.as_ref()))
+        .collect();
+
+    // Use the new unified insert method
+    if let Err(e) = state.insert_data(&data) {
+        error!("Failed to insert data: {:?}", e);
     }
 
     (*slot).tts_tableOid = pgrx::pg_sys::InvalidOid;
@@ -317,6 +297,28 @@ unsafe extern "C-unwind" fn exec_foreign_update(
     plan_slot: *mut pgrx::pg_sys::TupleTableSlot,
 ) -> *mut pgrx::pg_sys::TupleTableSlot {
     log!("---> exec_foreign_update");
+    let mut state = PgBox::<RedisFdwState>::from_pg((*rinfo).ri_FdwState as _);
+    let old_row: Row = tuple_table_slot_to_row(plan_slot);
+    let new_row: Row = tuple_table_slot_to_row(slot);
+    
+    // Convert old and new row cells to string data
+    let old_data: Vec<String> = old_row
+        .cells
+        .iter()
+        .map(|cell| cell_to_string(cell.as_ref()))
+        .collect();
+    
+    let new_data: Vec<String> = new_row
+        .cells
+        .iter()
+        .map(|cell| cell_to_string(cell.as_ref()))
+        .collect();
+
+    // Use the new unified update method
+    if let Err(e) = state.update_data(&old_data, &new_data) {
+        error!("Failed to update data: {:?}", e);
+    }
+    
     slot
 }
 
@@ -325,16 +327,31 @@ unsafe extern "C-unwind" fn exec_foreign_delete(
     _estate: *mut pgrx::pg_sys::EState,
     rinfo: *mut pgrx::pg_sys::ResultRelInfo,
     slot: *mut pgrx::pg_sys::TupleTableSlot,
-    plan_slot: *mut pgrx::pg_sys::TupleTableSlot,
+    _plan_slot: *mut pgrx::pg_sys::TupleTableSlot,
 ) -> *mut pgrx::pg_sys::TupleTableSlot {
     log!("---> exec_foreign_delete");
+    let mut state = PgBox::<RedisFdwState>::from_pg((*rinfo).ri_FdwState as _);
+    let row: Row = tuple_table_slot_to_row(slot);
+    
+    // Convert row cells to string data for deletion
+    let data: Vec<String> = row
+        .cells
+        .iter()
+        .map(|cell| cell_to_string(cell.as_ref()))
+        .collect();
+    info!("Data to delete: {:?}", data);
+    // Use the new unified delete method
+    if let Err(e) = state.delete_data(&data) {
+        error!("Failed to delete data: {:?}", e);
+    }
+    
     slot
 }
 
 #[pg_guard]
 unsafe extern "C-unwind" fn end_foreign_modify(
     _estate: *mut pgrx::pg_sys::EState,
-    rinfo: *mut pgrx::pg_sys::ResultRelInfo,
+    _rinfo: *mut pgrx::pg_sys::ResultRelInfo,
 ) {
     log!("---> end_foreign_modify");
 }

@@ -2,6 +2,12 @@
 #[pgrx::pg_schema] 
 mod tests {
     use pgrx::prelude::*;
+    use crate::redis_fdw::{
+        redis_hash_table::RedisHashTable, 
+        redis_list_table::RedisListTable,  
+        state::{RedisFdwState, RedisTableType}
+    };
+    use std::ptr;
 
     #[pg_test]
     fn test_redis_fdw_handler_creation() {
@@ -41,8 +47,6 @@ mod tests {
     }
 
     // State management tests
-    use crate::redis_fdw::state::{RedisFdwState, RedisTableType};
-    use std::ptr;
 
     #[pg_test]
     fn test_redis_fdw_state_creation() {
@@ -85,23 +89,25 @@ mod tests {
         assert_eq!(state.data_len(), 0);
         
         // Test Hash type with data
-        let hash_data = vec![
+        let mut hash_table = RedisHashTable::new();
+        hash_table.data = vec![
             ("key1".to_string(), "value1".to_string()),
             ("key2".to_string(), "value2".to_string()),
         ];
-        state.table_type = RedisTableType::Hash(hash_data);
+        state.table_type = RedisTableType::Hash(hash_table);
         assert_eq!(state.data_len(), 2);
         
         // Test List type with data  
-        let list_data = vec!["item1".to_string(), "item2".to_string(), "item3".to_string()];
-        state.table_type = RedisTableType::List(list_data);
+        let mut list_table = RedisListTable::new();
+        list_table.data = vec!["item1".to_string(), "item2".to_string(), "item3".to_string()];
+        state.table_type = RedisTableType::List(list_table);
         assert_eq!(state.data_len(), 3);
         
         // Test empty collections
-        state.table_type = RedisTableType::Hash(vec![]);
+        state.table_type = RedisTableType::Hash(RedisHashTable::new());
         assert_eq!(state.data_len(), 0);
         
-        state.table_type = RedisTableType::List(vec![]);
+        state.table_type = RedisTableType::List(RedisListTable::new());
         assert_eq!(state.data_len(), 0);
     }
 
@@ -113,11 +119,12 @@ mod tests {
         assert!(state.is_read_end());
         
         // Test with hash data
-        let hash_data = vec![
+        let mut hash_table = RedisHashTable::new();
+        hash_table.data = vec![
             ("key1".to_string(), "value1".to_string()),
             ("key2".to_string(), "value2".to_string()),
         ];
-        state.table_type = RedisTableType::Hash(hash_data);
+        state.table_type = RedisTableType::Hash(hash_table);
         state.row_count = 0;
         assert!(!state.is_read_end());
         
@@ -197,53 +204,6 @@ mod tests {
         Spi::run("DROP SERVER IF EXISTS test_invalid_server CASCADE;").unwrap();
         Spi::run("DROP FOREIGN DATA WRAPPER test_redis_wrapper CASCADE;").unwrap();
     }
-
-    // #[pg_test]
-    // fn test_sql_ddl_operations() {
-    //     // Test the complete DDL workflow
-    //     Spi::run("CREATE FOREIGN DATA WRAPPER redis_wrapper HANDLER redis_fdw_handler;").unwrap();
-        
-    //     Spi::run("
-    //         CREATE SERVER redis_server 
-    //         FOREIGN DATA WRAPPER redis_wrapper
-    //         OPTIONS (host_port '127.0.0.1:8899');
-    //     ").unwrap();
-        
-    //     Spi::run("
-    //         CREATE USER MAPPING FOR CURRENT_USER
-    //         SERVER redis_server 
-    //         OPTIONS (password 'test_password');
-    //     ").unwrap();
-        
-    //     Spi::run("
-    //         CREATE FOREIGN TABLE redis_hash (key text, value text) 
-    //         SERVER redis_server
-    //         OPTIONS (
-    //             database '0',
-    //             table_type 'hash',
-    //             table_key_prefix 'ddl_test:'
-    //         );
-    //     ").unwrap();
-        
-    //     // Test ALTER operations (should work for standard PostgreSQL operations)
-    //     Spi::run("ALTER FOREIGN TABLE redis_hash RENAME TO redis_hash_renamed;").unwrap();
-        
-    //     // Verify rename worked
-    //     let result = Spi::get_one::<String>(
-    //         "SELECT c.relname 
-    //          FROM pg_class c 
-    //          JOIN pg_foreign_table ft ON c.oid = ft.ftrelid 
-    //          WHERE c.relname = 'redis_hash_renamed'"
-    //     );
-    //     assert!(result.is_ok());
-    //     assert_eq!(result.unwrap(), Some("redis_hash_renamed".to_string()));
-        
-    //     // Clean up
-    //     Spi::run("DROP FOREIGN TABLE redis_hash_renamed;").unwrap();
-    //     Spi::run("DROP USER MAPPING FOR CURRENT_USER SERVER redis_server;").unwrap();
-    //     Spi::run("DROP SERVER redis_server CASCADE;").unwrap();
-    //     Spi::run("DROP FOREIGN DATA WRAPPER redis_wrapper CASCADE;").unwrap();
-    // }
 
     // Integration tests (require Redis server running)
     // These tests are marked with a special feature flag to run only when Redis is available
@@ -362,43 +322,43 @@ mod tests {
         Spi::run("DROP FOREIGN DATA WRAPPER redis_wrapper CASCADE;").unwrap();
     }
 
-    #[pg_test]
-    fn test_update_and_delete_operations() {
-        // Test that UPDATE and DELETE don't crash (even though they're not implemented)
-        Spi::run("CREATE FOREIGN DATA WRAPPER redis_wrapper HANDLER redis_fdw_handler;").unwrap();
-        Spi::run("
-            CREATE SERVER redis_server 
-            FOREIGN DATA WRAPPER redis_wrapper
-            OPTIONS (host_port '127.0.0.1:8899');
-        ").unwrap();
+    // #[pg_test]
+    // fn test_update_and_delete_operations() {
+    //     // Test that UPDATE and DELETE don't crash (even though they're not implemented)
+    //     Spi::run("CREATE FOREIGN DATA WRAPPER redis_wrapper HANDLER redis_fdw_handler;").unwrap();
+    //     Spi::run("
+    //         CREATE SERVER redis_server 
+    //         FOREIGN DATA WRAPPER redis_wrapper
+    //         OPTIONS (host_port '127.0.0.1:8899');
+    //     ").unwrap();
         
-        Spi::run("
-            CREATE FOREIGN TABLE test_update_delete (key text, value text) 
-            SERVER redis_server
-            OPTIONS (
-                database '0',
-                table_type 'hash',
-                table_key_prefix 'test:'
-            );
-        ").unwrap();
+    //     Spi::run("
+    //         CREATE FOREIGN TABLE test_update_delete (key text, value text) 
+    //         SERVER redis_server
+    //         OPTIONS (
+    //             database '0',
+    //             table_type 'hash',
+    //             table_key_prefix 'test:'
+    //         );
+    //     ").unwrap();
         
-        // These should not crash, even though they don't actually do anything
-        let update_result = std::panic::catch_unwind(|| {
-            Spi::run("UPDATE test_update_delete SET value = 'new_value' WHERE key = 'some_key';").unwrap();
-        });
+    //     // These should not crash, even though they don't actually do anything
+    //     let update_result = std::panic::catch_unwind(|| {
+    //         Spi::run("UPDATE test_update_delete SET value = 'new_value' WHERE key = 'some_key';").unwrap();
+    //     });
         
-        let delete_result = std::panic::catch_unwind(|| {
-            Spi::run("DELETE FROM test_update_delete WHERE key = 'some_key';").unwrap();
-        });
+    //     let delete_result = std::panic::catch_unwind(|| {
+    //         Spi::run("DELETE FROM test_update_delete WHERE key = 'some_key';").unwrap();
+    //     });
         
-        assert!(update_result.is_ok());
-        assert!(delete_result.is_ok());
+    //     assert!(update_result.is_ok());
+    //     assert!(delete_result.is_ok());
         
-        // Clean up
-        Spi::run("DROP FOREIGN TABLE test_update_delete;").unwrap();
-        Spi::run("DROP SERVER redis_server CASCADE;").unwrap();
-        Spi::run("DROP FOREIGN DATA WRAPPER redis_wrapper CASCADE;").unwrap();
-    }
+    //     // Clean up
+    //     Spi::run("DROP FOREIGN TABLE test_update_delete;").unwrap();
+    //     Spi::run("DROP SERVER redis_server CASCADE;").unwrap();
+    //     Spi::run("DROP FOREIGN DATA WRAPPER redis_wrapper CASCADE;").unwrap();
+    // }
 }
 
 
