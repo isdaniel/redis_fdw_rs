@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use pgrx::pg_sys::MemoryContext;
- use crate::redis_fdw::{
+use crate::redis_fdw::{
     tables::{
         RedisTableOperations, 
         RedisHashTable, 
@@ -112,6 +112,7 @@ pub struct RedisFdwState {
     pub table_key_prefix: String,
     pub opts: HashMap<String, String>,
     pub row_count: u32,
+    pub key_attno : i16
 }
 
 impl RedisFdwState {
@@ -125,6 +126,7 @@ impl RedisFdwState {
             host_port: String::default(),
             opts: HashMap::default(),
             row_count: 0,
+            key_attno : 0
         }
     }
 }
@@ -214,22 +216,6 @@ impl RedisFdwState {
     /// Get a row at the specified index
     pub fn get_row(&self, index: usize) -> Option<Vec<String>> {
         self.table_type.get_row(index)
-    }
-
-    // Legacy methods for backward compatibility
-    pub fn hash_hset_multiple(&mut self, fields: &[(String, String)]) {
-        let data: Vec<String> = fields.iter()
-            .flat_map(|(k, v)| vec![k.clone(), v.clone()])
-            .collect();
-        let _ = self.insert_data(&data);
-    }
-
-    pub fn list_rpush(&mut self, value: &str) {
-        let _ = self.insert_data(&[value.to_string()]);
-    }
-
-    pub fn hdel_multiple(&mut self, fields: &Vec<String>) {
-        let _ = self.delete_data(fields);
     }
 }
 

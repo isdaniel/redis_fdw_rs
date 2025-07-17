@@ -1,11 +1,10 @@
 use std::ptr;
-use pgrx::{ pg_sys::{ Index, MemoryContextData, ModifyTable, PlannerInfo}, prelude::*, AllocatedByRust, PgBox, PgRelation, PgTupleDesc
-};
-use crate::{redis_fdw::state::{RedisFdwState}, utils_share::{
-    memory::create_wrappers_memctx,
-    row::Row,
-    utils::*
+use pgrx::{ pg_sys::{Index, MemoryContextData, ModifyTable, PlannerInfo}, prelude::*, AllocatedByRust, PgBox, PgRelation};
+use crate::{redis_fdw::state::RedisFdwState, utils_share::{
+    memory::create_wrappers_memctx, row::Row, utils::*
 }};
+
+const REDISMODY: &str = "__redis_UD_key_name";
 
 pub type FdwRoutine<A = AllocatedByRust> = PgBox<pgrx::pg_sys::FdwRoutine, A>;
 
@@ -156,7 +155,6 @@ extern "C-unwind" fn iterate_foreign_scan(
             }
         } else {
             error!("Failed to get row data at index: {}", state.row_count);
-            return slot;
         }
 
         state.row_count += 1;
@@ -198,22 +196,21 @@ unsafe extern "C-unwind" fn add_foreign_update_targets(
     _target_rte: *mut pgrx::pg_sys::RangeTblEntry,
     target_relation: pgrx::pg_sys::Relation,
 ) {
- 
     log!("---> add_foreign_update_targets");
-    if let Some(attr) = find_rowid_column(target_relation) {
-        // make a Var representing the desired value
-        let var = pg_sys::makeVar(
-            rtindex as _,
-            attr.attnum,
-            attr.atttypid,
-            attr.atttypmod,
-            attr.attcollation,
-            0,
-        );
+    let attr =
+		*tuple_desc_attr(relation_get_descr(target_relation), 0);
+        
+    let var = pg_sys::makeVar(
+        rtindex as _,
+        1,//attr.attnum,
+        attr.atttypid,
+        attr.atttypmod,
+        pg_sys::InvalidOid,//attr.attlen,
+        0,
+    );
 
-        // register it as a row-identity column needed by this target rel
-        pg_sys::add_row_identity_var(root, var, rtindex, &attr.attname.data as _);
-    }
+    // register it as a row-identity column needed by this target rel
+    pg_sys::add_row_identity_var(root, var, rtindex, REDISMODY.as_ptr() as _);
 }
 
 
@@ -228,7 +225,7 @@ unsafe extern "C-unwind" fn plan_foreign_modify(
     let rte = pg_sys::planner_rt_fetch(result_relation, root);
     let rel = PgRelation::with_lock((*rte).relid, pg_sys::NoLock as _);
     // search for rowid attribute in tuple descrition
-    let tup_desc = PgTupleDesc::from_relation(&rel);
+    //let tup_desc = PgTupleDesc::from_relation(&rel);
     let ftable_id = rel.oid();
     let ctx_name = format!("Wrappers_modify_{}", ftable_id.to_u32());
     let ctx = create_wrappers_memctx(&ctx_name);
@@ -245,21 +242,24 @@ unsafe extern "C-unwind" fn plan_foreign_modify(
 
 #[pg_guard]
 unsafe extern "C-unwind" fn begin_foreign_modify(
-    _mtstate: *mut pgrx::pg_sys::ModifyTableState,
+    mtstate: *mut pgrx::pg_sys::ModifyTableState,
     rinfo: *mut pgrx::pg_sys::ResultRelInfo,
     fdw_private: *mut pgrx::pg_sys::List,
     _subplan_index: ::std::os::raw::c_int,
     _eflags: ::std::os::raw::c_int,
 ) {
     log!("---> begin_foreign_modify");
-    let state = deserialize_from_list::<RedisFdwState>(fdw_private as _);
+    let mut state = deserialize_from_list::<RedisFdwState>(fdw_private as _);
+     let subplan = (*outer_plan_state(&mut (*mtstate).ps)).plan;
+    state.key_attno = pg_sys::ExecFindJunkAttributeInTlist((*subplan).targetlist, REDISMODY.as_ptr() as _);
+    info!("Key attribute number: {}", state.key_attno);
     (*rinfo).ri_FdwState = state.into_pg() as *mut std::os::raw::c_void;
 }
 
-// #[inline]
-// pub(super) unsafe fn outer_plan_state(node: *mut pg_sys::PlanState) -> *mut pg_sys::PlanState {
-//     (*node).lefttree
-// }
+#[inline]
+pub(super) unsafe fn outer_plan_state(node: *mut pg_sys::PlanState) -> *mut pg_sys::PlanState {
+    (*node).lefttree
+}
 
 
 #[pg_guard]
@@ -292,34 +292,12 @@ unsafe extern "C-unwind" fn exec_foreign_insert(
 #[pg_guard]
 unsafe extern "C-unwind" fn exec_foreign_update(
     _estate: *mut pgrx::pg_sys::EState,
-    rinfo: *mut pgrx::pg_sys::ResultRelInfo,
-    slot: *mut pgrx::pg_sys::TupleTableSlot,
-    plan_slot: *mut pgrx::pg_sys::TupleTableSlot,
+    _rinfo: *mut pgrx::pg_sys::ResultRelInfo,
+    _slot: *mut pgrx::pg_sys::TupleTableSlot,
+    _plan_slot: *mut pgrx::pg_sys::TupleTableSlot,
 ) -> *mut pgrx::pg_sys::TupleTableSlot {
     log!("---> exec_foreign_update");
-    let mut state = PgBox::<RedisFdwState>::from_pg((*rinfo).ri_FdwState as _);
-    let old_row: Row = tuple_table_slot_to_row(plan_slot);
-    let new_row: Row = tuple_table_slot_to_row(slot);
-    
-    // Convert old and new row cells to string data
-    let old_data: Vec<String> = old_row
-        .cells
-        .iter()
-        .map(|cell| cell_to_string(cell.as_ref()))
-        .collect();
-    
-    let new_data: Vec<String> = new_row
-        .cells
-        .iter()
-        .map(|cell| cell_to_string(cell.as_ref()))
-        .collect();
-
-    // Use the new unified update method
-    if let Err(e) = state.update_data(&old_data, &new_data) {
-        error!("Failed to update data: {:?}", e);
-    }
-    
-    slot
+    unimplemented!("Update operations are not yet implemented for Redis FDW");
 }
 
 #[pg_guard]
@@ -327,26 +305,37 @@ unsafe extern "C-unwind" fn exec_foreign_delete(
     _estate: *mut pgrx::pg_sys::EState,
     rinfo: *mut pgrx::pg_sys::ResultRelInfo,
     slot: *mut pgrx::pg_sys::TupleTableSlot,
-    _plan_slot: *mut pgrx::pg_sys::TupleTableSlot,
+    plan_slot: *mut pgrx::pg_sys::TupleTableSlot,
 ) -> *mut pgrx::pg_sys::TupleTableSlot {
     log!("---> exec_foreign_delete");
-    let mut state = PgBox::<RedisFdwState>::from_pg((*rinfo).ri_FdwState as _);
-    let row: Row = tuple_table_slot_to_row(slot);
     
-    // Convert row cells to string data for deletion
-    let data: Vec<String> = row
-        .cells
-        .iter()
-        .map(|cell| cell_to_string(cell.as_ref()))
-        .collect();
-    info!("Data to delete: {:?}", data);
-    // Use the new unified delete method
-    if let Err(e) = state.delete_data(&data) {
-        error!("Failed to delete data: {:?}", e);
+    // Extract state and validate it's not null
+    let mut state = PgBox::<RedisFdwState>::from_pg((*rinfo).ri_FdwState as _);
+    
+    // Extract the key attribute for deletion
+    match extract_delete_key(&state, plan_slot) {
+        Ok(key) => {
+            log!("Attempting to delete key: '{}'", key);
+            
+            // Perform the deletion operation
+            if let Err(e) = state.delete_data(&[key.clone()]) {
+                error!("Failed to delete key '{}': {:?}", key, e);
+                // Note: We continue rather than panic to maintain PostgreSQL stability
+            } else {
+                log!("Successfully deleted key: '{}'", key);
+            }
+        }
+        Err(err_msg) => {
+            error!("Failed to extract delete key: {}", err_msg);
+        }
     }
+    
+    // Mark slot as having an invalid table OID since this is a delete operation
+    (*slot).tts_tableOid = pgrx::pg_sys::InvalidOid;
     
     slot
 }
+
 
 #[pg_guard]
 unsafe extern "C-unwind" fn end_foreign_modify(
@@ -356,3 +345,37 @@ unsafe extern "C-unwind" fn end_foreign_modify(
     log!("---> end_foreign_modify");
 }
 
+
+/// Extract the key to be deleted from the plan slot
+/// 
+/// # Safety
+/// This function assumes valid pointers for state and plan_slot
+unsafe fn extract_delete_key(
+    state: &RedisFdwState, 
+    plan_slot: *mut pgrx::pg_sys::TupleTableSlot
+) -> Result<String, &'static str> {
+    // Validate key attribute number
+    if state.key_attno <= 0 {
+        return Err("Invalid key attribute number");
+    }
+    
+    // Extract the junk attribute (row identifier)
+    let mut is_null = false;
+    let datum = exec_get_junk_attribute(
+        plan_slot,
+        state.key_attno,
+        &mut is_null,
+    );
+
+    // Convert datum to string safely
+    match String::from_datum(datum, is_null) {
+        Some(key_string) => {
+            if key_string.is_empty() {
+                Err("Delete key is empty")
+            } else {
+                Ok(key_string)
+            }
+        }
+        None => Err("Failed to convert datum to string"),
+    }
+}

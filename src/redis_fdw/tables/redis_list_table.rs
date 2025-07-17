@@ -14,6 +14,9 @@ impl RedisListTable {
 }
 
 impl RedisTableOperations for RedisListTable {
+    
+    /// Load data from Redis list
+    /// This method retrieves all elements from the Redis list at the specified key prefix.
     fn load_data(&mut self, conn: &mut redis::Connection, key_prefix: &str) -> Result<(), redis::RedisError> {
         self.data = conn.lrange(key_prefix, 0, -1)?;
         Ok(())
