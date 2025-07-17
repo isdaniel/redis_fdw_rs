@@ -1,5 +1,5 @@
-use std::{collections::HashMap, ffi::{c_int, c_void, CStr, CString}, num::NonZeroUsize, slice};
-use pgrx::{list::{self, List}, memcx::{self, MemCx}, pg_sys::{self, defGetString, fmgr_info, getTypeInputInfo, list_concat, Datum, FmgrInfo, InputFunctionCall, MemoryContext, Oid}, FromDatum, IntoDatum, PgBox, PgRelation, PgTupleDesc};
+use std::{collections::HashMap, ffi::{c_void, CStr, CString}, num::NonZeroUsize};
+use pgrx::{list::{self, List}, memcx::{self, MemCx}, pg_sys::{self, defGetString, fmgr_info, getTypeInputInfo, list_concat, Datum, FmgrInfo, FormData_pg_attribute, InputFunctionCall, MemoryContext, Oid, TupleDescData}, FromDatum, IntoDatum, PgBox, PgTupleDesc};
 
 #[cfg(any(feature = "pg13", feature = "pg14"))]
 use pgrx::pg_sys::Value;
@@ -62,36 +62,6 @@ unsafe fn get_options_from_fdw(relid: Oid) -> *mut pg_sys::List {
     opts_list = list_concat(opts_list, (*table).options);
     //opts_list = list_concat(opts_list, (*mapping).options);
     opts_list
-}
-
-pub unsafe fn build_attr_name_to_index_map(
-    relation: pg_sys::Relation,
-) -> HashMap<String, usize> {
-    let mut map = HashMap::new();
-    let rd_att = (*relation).rd_att;
-    let natts = (*rd_att).natts;
-
-    for i in 0..natts {
-        let attr = tuple_desc_attr(rd_att, i as usize);
-        let col_name = string_from_cstr((*attr).attname.data.as_ptr());
-        map.insert(col_name, i as usize);
-    }
-
-    map
-}
-
-/// Get the attribute descriptor for a given attribute number in a tuple descriptor
-/// This function is unsafe because it dereferences raw pointers and assumes that the tuple descriptor is valid and properly initialized.
-/// # Arguments
-/// * `tupdesc`: A pointer to a `TupleDesc` structure.
-/// * `attnum`: The attribute number (1-based index) for which to retrieve the attribute descriptor.
-/// # Returns
-/// A pointer to the `FormData_pg_attribute` structure for the specified attribute number.
-/// # Note
-/// The attribute number is 1-based, meaning that `attnum = 1` corresponds to the first attribute in the tuple descriptor.
-#[inline]
-pub unsafe fn tuple_desc_attr(tupdesc: pg_sys::TupleDesc, attnum: usize) -> *const pg_sys::FormData_pg_attribute {
-     (*tupdesc).attrs.as_mut_ptr().add(attnum)
 }
 
 /// Clear the contents of a `TupleTableSlot`
@@ -278,30 +248,9 @@ pub unsafe fn delete_wrappers_memctx(ctx: MemoryContext) {
     }
 }
 
-
-pub unsafe fn find_rowid_column(
-    target_relation: pg_sys::Relation,
-) -> Option<pg_sys::FormData_pg_attribute> {
-    // get rowid column name from table options
-    //todo
-    let rowid_name = ROWID;
-
-    // find rowid attribute
-    let tup_desc = PgTupleDesc::from_pg_copy((*target_relation).rd_att);
-    for attr in tup_desc.iter().filter(|a| !a.is_dropped()) {
-        if pgrx::name_data_to_str(&attr.attname) == rowid_name {
-            return Some(*attr);
-        }
-    }
-
-    None
-}
-
-
 pub fn cell_to_string(cell: Option<&Cell>) -> String {
     cell.map(|c| c.to_string()).unwrap_or_else(|| "NULL".to_string())
 }
-
 
 pub unsafe fn write_datum_to_slot(
     slot: *mut pgrx::pg_sys::TupleTableSlot,
@@ -313,4 +262,62 @@ pub unsafe fn write_datum_to_slot(
     let datum = get_datum(value, pgtype);
     (*slot).tts_values.add(colno).write(datum);
     (*slot).tts_isnull.add(colno).write(false);
+}
+
+pub unsafe fn tuple_desc_attr_address(desc: *mut TupleDescData) -> *mut FormData_pg_attribute {
+    let base = desc as *mut u8;
+    let offset = std::mem::size_of::<TupleDescData>();
+    base.add(offset) as *mut FormData_pg_attribute
+}
+
+/// Get a pointer to the attribute at the specified index in the tuple descriptor
+/// # Safety
+/// This function is unsafe because it dereferences raw pointers and assumes that the tuple descriptor
+/// is valid and that the index is within bounds.
+/// # Arguments
+/// * `desc`: A pointer to a `TupleDescData` structure.
+/// * `i`: The index of the attribute to retrieve.
+/// # Returns
+/// A pointer to the `FormData_pg_attribute` structure representing the attribute at the specified index
+/// in the tuple descriptor.
+/// # Note
+/// This function is intended to be used in the context of PostgreSQL foreign data wrappers (FDW) or other PostgreSQL extensions where the tuple descriptor is properly managed and initialized.
+/// It is the caller's responsibility to ensure that the tuple descriptor is valid and that the index
+/// is within bounds. If the index is out of bounds, dereferencing the pointer may lead
+/// to undefined behavior, including segmentation faults or data corruption.
+/// It is recommended to use this function only in the context of PostgreSQL foreign data wrappers (FDWs) or other PostgreSQL extensions where the tuple descriptor is properly managed and initialized.
+/// It is also the caller's responsibility to ensure that the tuple descriptor is not modified while
+/// this function is being used, as modifying the tuple descriptor may lead to undefined behavior.
+pub unsafe fn tuple_desc_attr(desc: *mut TupleDescData, i: usize) -> *mut FormData_pg_attribute {
+    assert!(!desc.is_null());
+    assert!(i < (*desc).natts as usize);
+
+    let attrs = tuple_desc_attr_address(desc);
+    attrs.add(i)
+}
+
+#[inline]
+pub unsafe fn relation_get_descr(relation: pg_sys::Relation) -> pg_sys::TupleDesc {
+    (*relation).rd_att
+}
+
+pub unsafe fn exec_get_junk_attribute(
+    slot: *mut pg_sys::TupleTableSlot,
+    attno: pg_sys::AttrNumber,
+    is_null: *mut bool,
+) -> pg_sys::Datum {
+    assert!(!slot.is_null());
+    assert!(attno > 0);
+
+    let slot = &mut *slot;
+    let attno_usize = attno as usize;
+
+    // Ensure attributes up to attno are fetched
+    if attno_usize > slot.tts_nvalid as usize {
+        pg_sys::slot_getsomeattrs(slot, attno_usize as i32);
+    }
+
+    // Get the value and null flag
+    *is_null = *slot.tts_isnull.offset((attno_usize - 1) as isize);
+    *slot.tts_values.offset((attno_usize - 1) as isize)
 }

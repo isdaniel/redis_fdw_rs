@@ -5,10 +5,12 @@ A high-performance Redis Foreign Data Wrapper (FDW) for PostgreSQL written in Ru
 ## Features
 
 - **High-performance data access** from Redis to PostgreSQL
-- **Redis data types support**: Hash (fully implemented), List (fully implemented)
-- **Supported operations**: SELECT, INSERT (UPDATE and DELETE planned for future releases)
+- **Redis data types support**: Hash, List, Set, ZSet, and String (with varying levels of implementation)
+- **Supported operations**: SELECT, INSERT, UPDATE, DELETE (with improved error handling)
 - **Connection management** and memory optimization
 - **Built with Rust** for memory safety and performance
+- **Modular architecture** with organized table type implementations
+- **Enhanced error handling** for robust foreign data operations
 - **Compatible with PostgreSQL 14-17**
 
 ## Prerequisites
@@ -191,11 +193,11 @@ SELECT * FROM redis_zset ORDER BY score DESC;
 ### Table Options
 - `database`: Redis database number (default: 0) - **Optional**
 - `table_type`: Redis data type - **Required**
-  - `'string'` - Partial implemented ✅
-  - `'hash'` - Partial implemented ✅
-  - `'list'` - Partial implemented ✅  
-  - `'set'` - Partial implemented ✅
-  - `'zset'` - Partial implemented ✅
+  - `'string'` - Partial implemented ✅ (SELECT, INSERT, DELETE; UPDATE not implemented)
+  - `'hash'` - Partial implemented ✅ (SELECT, INSERT, DELETE; UPDATE not implemented)
+  - `'list'` - Partial implemented ✅ (SELECT, INSERT; UPDATE, DELETE not implemented)
+  - `'set'` - Partial implemented ✅ (SELECT, INSERT, DELETE; UPDATE not implemented)
+  - `'zset'` - Partial implemented ✅ (SELECT, INSERT, DELETE; UPDATE not implemented)
 - `table_key_prefix`: Key prefix for Redis operations - **Required**
 
 ### User Mapping Options
@@ -254,15 +256,71 @@ INSERT INTO redis_list_table VALUES
   ('Task 3');
 ```
 
+## Current Implementation Status
+
+| Redis Type | SELECT | INSERT | UPDATE | DELETE | Status |
+|------------|--------|--------|--------|--------|--------|
+| Hash       | ✅     | ✅     | 🚧     | ✅     | **Partial** (UPDATE in progress) |
+| List       | ✅     | ✅     | 🚧     | 🚧     | **Partial** (UPDATE/DELETE in progress) |
+| Set        | ✅     | ✅     | 🚧     | ✅     | **Partial** (UPDATE in progress) |
+| ZSet       | ✅     | ✅     | 🚧     | ✅     | **Partial** (UPDATE in progress) |
+| String     | ✅     | ✅     | 🚧     | ✅     | **Partial** (UPDATE in progress) |
+
+## Recent Changes (v0.2.0)
+
+### Code Restructuring
+- **Modular Architecture**: Reorganized Redis table implementations into a dedicated `tables/` module
+- **Improved Organization**: 
+  - `src/redis_fdw/tables/` - Contains all table type implementations
+  - `src/redis_fdw/tables/interface.rs` - Common trait definitions
+  - `src/redis_fdw/tables/mod.rs` - Module exports and re-exports
+- **Better Maintainability**: Cleaner separation of concerns between different Redis data types
+
+### Enhanced Error Handling
+- **Robust DELETE Operations**: Improved `exec_foreign_delete` function with comprehensive error handling
+- **Key Validation**: Added proper validation for deletion keys (null checks, empty string handling)
+- **Graceful Degradation**: Better error recovery to maintain PostgreSQL stability
+- **Enhanced Logging**: More detailed logging for debugging and monitoring
+
+### Technical Improvements
+- **Memory Safety**: Enhanced unsafe code blocks with better validation
+- **Code Quality**: Reduced code duplication and improved maintainability
+- **Performance**: Optimized memory allocation and connection handling
+
 ## Current Limitations
 
-- **UPDATE operations**: Not yet implemented (will return successfully but no changes made)
-- **DELETE operations**: Not yet implemented (will return successfully but no changes made)
-- **Set, ZSet, String types**: Defined but not implemented
+- **UPDATE Operations**: UPDATE operations are not yet implemented for any Redis table type (returns `unimplemented!` error)
+- **List Operations**: UPDATE and DELETE operations for List type are not yet fully implemented
 - **Transactions**: Redis operations are not transactional with PostgreSQL
 - **Complex WHERE clauses**: Filtering happens at PostgreSQL level, not pushed down to Redis
+- **Large Data Sets**: All data for a table is loaded at scan initialization (not suitable for very large Redis keys)
+- **Connection Pooling**: Each operation creates a new Redis connection (connection pooling planned)
 
 ## Development
+
+### Project Structure
+```
+src/
+├── redis_fdw/
+│   ├── handlers.rs          # PostgreSQL FDW handler functions
+│   ├── mod.rs              # Main module definition
+│   ├── state.rs            # FDW state management
+│   ├── table_type_tests.rs # Unit tests for table types
+│   ├── tests.rs            # Integration tests
+│   └── tables/             # 📁 Redis table implementations
+│       ├── mod.rs          # Table module exports
+│       ├── interface.rs    # Common trait definitions
+│       ├── redis_hash_table.rs    # Hash table implementation
+│       ├── redis_list_table.rs    # List table implementation
+│       ├── redis_set_table.rs     # Set table implementation
+│       ├── redis_string_table.rs  # String table implementation
+│       └── redis_zset_table.rs    # Sorted set implementation
+└── utils_share/            # Shared utilities
+    ├── cell.rs             # Data cell types
+    ├── memory.rs           # Memory management
+    ├── row.rs              # Row operations
+    └── utils.rs            # General utilities
+```
 
 ### Building from Source
 ```bash
@@ -324,9 +382,11 @@ See [TESTING.md](TESTING.md) for detailed testing documentation.
    - `table_type` (table option) 
    - `table_key_prefix` (table option)
 
-5. **Unsupported table type**: Currently only `'hash'` and `'list'` are supported
+5. **Unsupported table type**: All Redis table types (`hash`, `list`, `set`, `zset`, `string`) are supported for SELECT and INSERT operations
 
-6. **UPDATE/DELETE not working**: These operations are not yet implemented
+6. **UPDATE operations failing**: UPDATE operations are not yet implemented and will return an `unimplemented!` error
+
+7. **DELETE operations failing on Lists**: DELETE operations for List type are not yet fully implemented
 
 ### Debug Logging
 
@@ -339,16 +399,23 @@ Look for log messages starting with `---> redis_fdw` to trace execution.
 
 ## Roadmap
 
+### Recently Completed ✅
+- ✅ Code restructuring and modular architecture
+- ✅ Enhanced error handling for DELETE operations
+- ✅ Implementation of SELECT and INSERT operations for all Redis data types
+- ✅ DELETE operations for Hash, Set, ZSet, and String data types
+- ✅ Improved memory safety and validation
+
 ### Planned Features
-- 🚧 UPDATE and DELETE operations for Hash and List types
-- 🚧 Set data type support
-- 🚧 Sorted Set (ZSet) data type support  
-- 🚧 String data type support
-- 🚧 WHERE clause pushdown to Redis
-- 🚧 Connection pooling
+- 🚧 **UPDATE operations for all Redis table types** - Currently returns `unimplemented!` error
+- 🚧 Complete DELETE operations for List types
+- 🚧 WHERE clause pushdown to Redis for better performance
+- 🚧 Connection pooling and reuse
 - 🚧 Async operations support
 - 🚧 Redis Cluster support
-- 🚧 Better error handling and recovery
+- 🚧 Streaming support for large data sets
+- 🚧 Advanced Redis operations (SCAN, pattern matching)
+- 🚧 Transaction support and rollback capabilities
 
 ## Contributing
 
