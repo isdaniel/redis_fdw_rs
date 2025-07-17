@@ -195,7 +195,7 @@ SELECT * FROM redis_zset ORDER BY score DESC;
 - `table_type`: Redis data type - **Required**
   - `'string'` - Partial implemented ✅ (SELECT, INSERT, DELETE; UPDATE not implemented)
   - `'hash'` - Partial implemented ✅ (SELECT, INSERT, DELETE; UPDATE not implemented)
-  - `'list'` - Partial implemented ✅ (SELECT, INSERT; UPDATE, DELETE not implemented)
+  - `'list'` - Partial implemented ✅ (SELECT, INSERT DELETE; UPDATE not implemented)
   - `'set'` - Partial implemented ✅ (SELECT, INSERT, DELETE; UPDATE not implemented)
   - `'zset'` - Partial implemented ✅ (SELECT, INSERT, DELETE; UPDATE not implemented)
 - `table_key_prefix`: Key prefix for Redis operations - **Required**
@@ -261,7 +261,7 @@ INSERT INTO redis_list_table VALUES
 | Redis Type | SELECT | INSERT | UPDATE | DELETE | Status |
 |------------|--------|--------|--------|--------|--------|
 | Hash       | ✅     | ✅     | 🚧     | ✅     | **Partial** (UPDATE in progress) |
-| List       | ✅     | ✅     | 🚧     | 🚧     | **Partial** (UPDATE/DELETE in progress) |
+| List       | ✅     | ✅     | 🚧     | ✅     | **Partial** (UPDATE in progress) |
 | Set        | ✅     | ✅     | 🚧     | ✅     | **Partial** (UPDATE in progress) |
 | ZSet       | ✅     | ✅     | 🚧     | ✅     | **Partial** (UPDATE in progress) |
 | String     | ✅     | ✅     | 🚧     | ✅     | **Partial** (UPDATE in progress) |
@@ -343,7 +343,7 @@ cargo test
 cargo pgrx test
 
 # Run integration tests with Redis (requires Redis server)
-docker run -d --name redis-test -p 6379:6379 redis
+docker run -d --name redis-test -p 8899:6379 redis
 cargo pgrx test --features integration_tests
 docker stop redis-test && docker rm redis-test
 

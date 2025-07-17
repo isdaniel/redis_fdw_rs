@@ -39,10 +39,24 @@ impl RedisTableOperations for RedisListTable {
     }
     
     fn delete(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
-        unimplemented!("Update operation for Redis List is not defined in this context");
+        for value in data {
+            // LREM removes all occurrences of value from the list
+            // Using count = 0 to remove all occurrences
+            let _: i32 = conn.lrem(key_prefix, 0, value)?;
+            // Remove from local data cache
+            self.data.retain(|x| x != value);
+        }
+        Ok(())
     }
     
     fn update(&mut self, conn: &mut redis::Connection, key_prefix: &str, old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
-        unimplemented!("Update operation for Redis List is not defined in this context");
+        
+        // First, remove all old data values
+        self.delete(conn, key_prefix, old_data)?;
+        
+        // Then insert new data values
+        self.insert(conn, key_prefix, new_data)?;
+        
+        Ok(())
     }
 }

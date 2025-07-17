@@ -1,5 +1,5 @@
 use std::ptr;
-use pgrx::{ pg_sys::{Index, MemoryContextData, ModifyTable, PlannerInfo}, prelude::*, AllocatedByRust, PgBox, PgRelation};
+use pgrx::{ pg_sys::{Index, MemoryContextData, ModifyTable, PlannerInfo}, prelude::*, AllocatedByRust, PgBox, PgMemoryContexts, PgRelation};
 use crate::{redis_fdw::state::RedisFdwState, utils_share::{
     memory::create_wrappers_memctx, row::Row, utils::*
 }};
@@ -118,14 +118,14 @@ extern "C-unwind" fn begin_foreign_scan(
         let relation = (*node).ss.ss_currentRelation;
         let relid = (*relation).rd_id;
         let mut state =  PgBox::<RedisFdwState>::from_pg((*plan).fdw_private as _); 
-
-        let options = get_foreign_table_options(relid);
-        log!("Foreign table options: {:?}", options);
-
-        state.update_from_options(options);
-        state.init_redis_connection_from_options();
-        state.set_table_type();
-
+        PgMemoryContexts::For(state.tmp_ctx).switch_to(|_| {
+            let options = get_foreign_table_options(relid);
+            log!("Foreign table options: {:?}", options);
+            state.update_from_options(options);
+            state.init_redis_connection_from_options();
+            state.set_table_type();
+        });
+       
         // Connect to Redis and handle potential errors
         log!("Connected to Redis");
         (*node).fdw_state = state.into_pg() as _;
@@ -133,34 +133,31 @@ extern "C-unwind" fn begin_foreign_scan(
 }
 
 #[pg_guard]
-extern "C-unwind" fn iterate_foreign_scan(
+unsafe extern "C-unwind" fn iterate_foreign_scan(
     node: *mut pgrx::pg_sys::ForeignScanState,
 ) -> *mut pgrx::pg_sys::TupleTableSlot {
     log!("---> iterate_foreign_scan");
+    let mut state = PgBox::<RedisFdwState>::from_pg((*node).fdw_state as _);
+    let slot = (*node).ss.ss_ScanTupleSlot;
+    let tupdesc = (*slot).tts_tupleDescriptor;
+    
+    exec_clear_tuple(slot);
 
-    unsafe {
-        let mut state = PgBox::<RedisFdwState>::from_pg((*node).fdw_state as _);
-        let slot = (*node).ss.ss_ScanTupleSlot;
-        let tupdesc = (*slot).tts_tupleDescriptor;
-        
-        exec_clear_tuple(slot);
-
-        if state.data_len() == 0 || state.is_read_end() {
-            return slot;
-        }
-        
-        if let Some(row_data) = state.get_row(state.row_count as usize) {
-            for (col_idx, value) in row_data.iter().enumerate() {
-                write_datum_to_slot(slot, tupdesc, col_idx, value);
-            }
-        } else {
-            error!("Failed to get row data at index: {}", state.row_count);
-        }
-
-        state.row_count += 1;
-        pgrx::pg_sys::ExecStoreVirtualTuple(slot);
-        slot
+    if state.data_len() == 0 || state.is_read_end() {
+        return slot;
     }
+    
+    if let Some(row_data) = state.get_row(state.row_count as usize) {
+        for (col_idx, value) in row_data.iter().enumerate() {
+            write_datum_to_slot(slot, tupdesc, col_idx, value);
+        }
+    } else {
+        error!("Failed to get row data at index: {}", state.row_count);
+    }
+
+    state.row_count += 1;
+    pgrx::pg_sys::ExecStoreVirtualTuple(slot);
+    slot
 }
 
 #[pg_guard]
@@ -230,14 +227,16 @@ unsafe extern "C-unwind" fn plan_foreign_modify(
     let ctx_name = format!("Wrappers_modify_{}", ftable_id.to_u32());
     let ctx = create_wrappers_memctx(&ctx_name);
     let mut state: RedisFdwState = RedisFdwState::new(ctx);
-    let opts = get_foreign_table_options(ftable_id);
-    info!("Foreign table options for modify: {:?}", opts);
-    state.update_from_options(opts);
-    state.init_redis_connection_from_options();
-    state.set_table_type();
-    let p: *mut RedisFdwState = Box::leak(Box::new(state)) as *mut RedisFdwState;
-    let state: PgBox<RedisFdwState> = PgBox::<RedisFdwState>::from_pg(p as _);
-    serialize_to_list(state)
+    return PgMemoryContexts::For(state.tmp_ctx).switch_to(|_| {
+        let opts = get_foreign_table_options(ftable_id);
+        log!("Foreign table options for modify: {:?}", opts);
+        state.update_from_options(opts);
+        state.init_redis_connection_from_options();
+        state.set_table_type();
+        let p: *mut RedisFdwState = Box::leak(Box::new(state)) as *mut RedisFdwState;
+        let state: PgBox<RedisFdwState> = PgBox::<RedisFdwState>::from_pg(p as _);
+        serialize_to_list(state)
+    });
 }
 
 #[pg_guard]
@@ -252,7 +251,7 @@ unsafe extern "C-unwind" fn begin_foreign_modify(
     let mut state = deserialize_from_list::<RedisFdwState>(fdw_private as _);
      let subplan = (*outer_plan_state(&mut (*mtstate).ps)).plan;
     state.key_attno = pg_sys::ExecFindJunkAttributeInTlist((*subplan).targetlist, REDISMODY.as_ptr() as _);
-    info!("Key attribute number: {}", state.key_attno);
+    log!("Key attribute number: {}", state.key_attno);
     (*rinfo).ri_FdwState = state.into_pg() as *mut std::os::raw::c_void;
 }
 
@@ -294,9 +293,11 @@ unsafe extern "C-unwind" fn exec_foreign_update(
     _estate: *mut pgrx::pg_sys::EState,
     _rinfo: *mut pgrx::pg_sys::ResultRelInfo,
     _slot: *mut pgrx::pg_sys::TupleTableSlot,
-    _plan_slot: *mut pgrx::pg_sys::TupleTableSlot,
+    plan_slot: *mut pgrx::pg_sys::TupleTableSlot,
 ) -> *mut pgrx::pg_sys::TupleTableSlot {
     log!("---> exec_foreign_update");
+    let new_row = tuple_table_slot_to_row(plan_slot);
+    info!("New row for update: {:?}", new_row);
     unimplemented!("Update operations are not yet implemented for Redis FDW");
 }
 
@@ -340,9 +341,20 @@ unsafe extern "C-unwind" fn exec_foreign_delete(
 #[pg_guard]
 unsafe extern "C-unwind" fn end_foreign_modify(
     _estate: *mut pgrx::pg_sys::EState,
-    _rinfo: *mut pgrx::pg_sys::ResultRelInfo,
+    rinfo: *mut pgrx::pg_sys::ResultRelInfo,
 ) {
     log!("---> end_foreign_modify");
+     unsafe { 
+        let fdw_state = (*rinfo).ri_FdwState as *mut RedisFdwState;
+        if fdw_state.is_null() {
+            return;
+        }
+
+        let mut state: PgBox<RedisFdwState> = PgBox::<RedisFdwState>::from_pg(fdw_state as _);
+        delete_wrappers_memctx(state.tmp_ctx);
+        state.tmp_ctx = ptr::null::<MemoryContextData>() as _;
+        let _ =  Box::from_raw(fdw_state);
+    }
 }
 
 

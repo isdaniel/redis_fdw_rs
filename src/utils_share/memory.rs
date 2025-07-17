@@ -14,7 +14,7 @@ pub unsafe fn create_wrappers_memctx(name: &str) -> MemoryContext {
     )
 }
 
-pub unsafe fn ensure_root_wrappers_memctx() -> PgMemoryContexts {
+unsafe fn ensure_root_wrappers_memctx() -> PgMemoryContexts {
     find_memctx_under(ROOT_MEMCTX_NAME, PgMemoryContexts::CacheMemoryContext).unwrap_or_else(|| {
         let name = PgMemoryContexts::CacheMemoryContext.pstrdup(ROOT_MEMCTX_NAME);
         let ctx = pgrx::pg_sys::AllocSetContextCreateExtended(

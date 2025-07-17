@@ -29,10 +29,8 @@ mod tests {
         assert_eq!(c_string.to_str().unwrap(), test_string);
         
         // Test CString to string conversion
-        unsafe {
-            let back_to_string = string_from_cstr(c_string.as_ptr());
-            assert_eq!(back_to_string, test_string);
-        }
+        let back_to_string = string_from_cstr(c_string.as_ptr());
+        assert_eq!(back_to_string, test_string);
     }
 
     #[pg_test]
