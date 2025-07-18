@@ -48,7 +48,7 @@ impl RedisTableOperations for RedisListTable {
     }
     
     async fn update(&mut self, conn: &mut ConnectionManager, key_prefix: &str, old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
-        if let (Some(index_str), Some(new_value)) = (old_data.first(), new_data.get(1)) {
+        if let (Some(index_str), Some(new_value)) = (old_data.first(), new_data.first()) {
             if let Ok(index) = index_str.parse::<isize>() {
                 let _: () = conn.lset(key_prefix, index, new_value).await?;
                 if let Some(item) = self.data.get_mut(index as usize) {
