@@ -1,11 +1,11 @@
-use redis::Commands;
-
+use redis::AsyncCommands;
+use redis::aio::ConnectionManager;
 use crate::redis_fdw::tables::interface::RedisTableOperations;
 
-/// Redis Sorted Set table type
+/// Redis Sorted Set (ZSet) table type (async version)
 #[derive(Debug, Clone)]
 pub struct RedisZSetTable {
-    pub data: Vec<(String, f64)>, // (member, score)
+    pub data: Vec<(String, f64)>, // (member, score) pairs
 }
 
 impl RedisZSetTable {
@@ -14,10 +14,11 @@ impl RedisZSetTable {
     }
 }
 
+#[async_trait::async_trait]
 impl RedisTableOperations for RedisZSetTable {
-    fn load_data(&mut self, conn: &mut redis::Connection, key_prefix: &str) -> Result<(), redis::RedisError> {
-        let result: Vec<(String, f64)> = conn.zrange_withscores(key_prefix, 0, -1)?;
-        self.data = result;
+    async fn load_data(&mut self, conn: &mut ConnectionManager, key_prefix: &str) -> Result<(), redis::RedisError> {
+        let zset_data: Vec<(String, f64)> = conn.zrange_withscores(key_prefix, 0, -1).await?;
+        self.data = zset_data;
         Ok(())
     }
     
@@ -29,44 +30,42 @@ impl RedisTableOperations for RedisZSetTable {
         self.data.get(index).map(|(member, score)| vec![member.clone(), score.to_string()])
     }
     
-    fn insert(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
-        // Expect data in pairs: [member1, score1, member2, score2, ...]
-        let items: Vec<(f64, String)> = data
-            .chunks(2)
-            .filter_map(|chunk| {
-                if chunk.len() == 2 {
-                    if let Ok(score) = chunk[1].parse::<f64>() {
-                        Some((score, chunk[0].clone()))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-            .collect();
-        
-        for (score, member) in &items {
-            let _ : () = conn.zadd(key_prefix, member, *score)?;
-            self.data.push((member.clone(), *score));
+    async fn insert(&mut self, conn: &mut ConnectionManager, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
+        if data.len() >= 2 {
+            if let (Some(member), Ok(score)) = (data.first(), data[1].parse::<f64>()) {
+                let _: () = conn.zadd(key_prefix, member, score).await?;
+                
+                // Update local data - remove existing member if present, then add
+                self.data.retain(|(m, _)| m != member);
+                self.data.push((member.clone(), score));
+                self.data.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            }
         }
         Ok(())
     }
     
-    fn delete(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
-        for member in data {
-            let _: i32 = conn.zrem(key_prefix, member)?;
+    async fn delete(&mut self, conn: &mut ConnectionManager, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
+        if let Some(member) = data.first() {
+            let _: i32 = conn.zrem(key_prefix, member).await?;
             self.data.retain(|(m, _)| m != member);
         }
         Ok(())
     }
     
-    fn update(&mut self, conn: &mut redis::Connection, key_prefix: &str, old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
-        // For sorted sets, update means remove old members and add new ones
-        if !old_data.is_empty() {
-            self.delete(conn, key_prefix, old_data)?;
+    async fn update(&mut self, conn: &mut ConnectionManager, key_prefix: &str, _old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
+        if new_data.len() >= 2 {
+            if let (Some(member), Ok(score)) = (new_data.first(), new_data[1].parse::<f64>()) {
+                let _: () = conn.zadd(key_prefix, member, score).await?;
+                
+                // Update local data
+                if let Some(pos) = self.data.iter().position(|(m, _)| m == member) {
+                    self.data[pos].1 = score;
+                } else {
+                    self.data.push((member.clone(), score));
+                }
+                self.data.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            }
         }
-        self.insert(conn, key_prefix, new_data)?;
         Ok(())
     }
 }

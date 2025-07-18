@@ -1,7 +1,8 @@
-use redis::Commands;
-
+use redis::AsyncCommands;
+use redis::aio::ConnectionManager;
 use crate::redis_fdw::tables::interface::RedisTableOperations;
-/// Redis String table type
+
+/// Redis String table type (async version)
 #[derive(Debug, Clone)]
 pub struct RedisStringTable {
     pub data: Option<String>,
@@ -13,9 +14,10 @@ impl RedisStringTable {
     }
 }
 
+#[async_trait::async_trait]
 impl RedisTableOperations for RedisStringTable {
-    fn load_data(&mut self, conn: &mut redis::Connection, key_prefix: &str) -> Result<(), redis::RedisError> {
-        self.data = conn.get( key_prefix)?;
+    async fn load_data(&mut self, conn: &mut ConnectionManager, key_prefix: &str) -> Result<(), redis::RedisError> {
+        self.data = conn.get(key_prefix).await?;
         Ok(())
     }
     
@@ -31,23 +33,23 @@ impl RedisTableOperations for RedisStringTable {
         }
     }
     
-    fn insert(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
+    async fn insert(&mut self, conn: &mut ConnectionManager, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
         if let Some(value) = data.first() {
-            let _ : () = conn.set(key_prefix, value)?;
+            let _: () = conn.set(key_prefix, value).await?;
             self.data = Some(value.clone());
         }
         Ok(())
     }
     
-    fn delete(&mut self, conn: &mut redis::Connection, key_prefix: &str, _data: &[String]) -> Result<(), redis::RedisError> {
-        let _ : () = conn.del(key_prefix)?;
+    async fn delete(&mut self, conn: &mut ConnectionManager, key_prefix: &str, _data: &[String]) -> Result<(), redis::RedisError> {
+        let _: () = conn.del(key_prefix).await?;
         self.data = None;
         Ok(())
     }
     
-    fn update(&mut self, conn: &mut redis::Connection, key_prefix: &str, _old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
+    async fn update(&mut self, conn: &mut ConnectionManager, key_prefix: &str, _old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
         if let Some(value) = new_data.first() {
-            let _ : () = conn.set( key_prefix, value)?;
+            let _: () = conn.set(key_prefix, value).await?;
             self.data = Some(value.clone());
         }
         Ok(())
