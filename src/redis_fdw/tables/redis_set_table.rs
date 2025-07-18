@@ -1,8 +1,9 @@
-use redis::Commands;
-
+use redis::AsyncCommands;
+use redis::aio::ConnectionManager;
 use crate::redis_fdw::tables::interface::RedisTableOperations;
+use std::collections::HashSet;
 
-/// Redis Set table type
+/// Redis Set table type (async version)
 #[derive(Debug, Clone)]
 pub struct RedisSetTable {
     pub data: Vec<String>,
@@ -14,9 +15,11 @@ impl RedisSetTable {
     }
 }
 
+#[async_trait::async_trait]
 impl RedisTableOperations for RedisSetTable {
-    fn load_data(&mut self, conn: &mut redis::Connection, key_prefix: &str) -> Result<(), redis::RedisError> {
-        self.data = conn.smembers( key_prefix)?;
+    async fn load_data(&mut self, conn: &mut ConnectionManager, key_prefix: &str) -> Result<(), redis::RedisError> {
+        let set_data: HashSet<String> = conn.smembers(key_prefix).await?;
+        self.data = set_data.into_iter().collect();
         Ok(())
     }
     
@@ -25,31 +28,37 @@ impl RedisTableOperations for RedisSetTable {
     }
     
     fn get_row(&self, index: usize) -> Option<Vec<String>> {
-        self.data.get(index).map(|item| vec![item.clone()])
+        self.data.get(index).map(|v| vec![v.clone()])
     }
     
-    fn insert(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
-        for value in data {
-            let added: i32 = conn.sadd(key_prefix, value)?;
-            if added > 0 {
+    async fn insert(&mut self, conn: &mut ConnectionManager, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
+        if let Some(value) = data.first() {
+            let _: () = conn.sadd(key_prefix, value).await?;
+            if !self.data.contains(value) {
                 self.data.push(value.clone());
             }
         }
         Ok(())
     }
     
-    fn delete(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
-        for value in data {
-            let _: i32 = conn.srem( key_prefix, value)?;
+    async fn delete(&mut self, conn: &mut ConnectionManager, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
+        if let Some(value) = data.first() {
+            let _: i32 = conn.srem(key_prefix, value).await?;
             self.data.retain(|x| x != value);
         }
         Ok(())
     }
     
-    fn update(&mut self, conn: &mut redis::Connection, key_prefix: &str, old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
-        // For sets, update means remove old and add new
-        self.delete(conn, key_prefix, old_data)?;
-        self.insert(conn, key_prefix, new_data)?;
+    async fn update(&mut self, conn: &mut ConnectionManager, key_prefix: &str, old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
+        // For sets, update means remove old value and add new value
+        if let (Some(old_value), Some(new_value)) = (old_data.first(), new_data.first()) {
+            let _: i32 = conn.srem(key_prefix, old_value).await?;
+            let _: () = conn.sadd(key_prefix, new_value).await?;
+            
+            if let Some(pos) = self.data.iter().position(|x| x == old_value) {
+                self.data[pos] = new_value.clone();
+            }
+        }
         Ok(())
     }
 }
