@@ -32,7 +32,6 @@ pub extern "C" fn redis_fdw_handler() -> FdwRoutine {
         fdw_routine.ExecForeignDelete = Some(exec_foreign_delete);
         fdw_routine.ExecForeignUpdate = Some(exec_foreign_update);
         fdw_routine.EndForeignModify = Some(end_foreign_modify);
-
         //fdw_routine.IsForeignRelUpdatable =
 
         fdw_routine
@@ -128,7 +127,7 @@ extern "C-unwind" fn begin_foreign_scan(
         });
        
         // Connect to Redis and handle potential errors
-        log!("Connected to Redis with async connection manager");
+        log!("Connected to Redis");
         (*node).fdw_state = state.into_pg() as _;
     }
 }

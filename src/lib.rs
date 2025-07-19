@@ -1,4 +1,4 @@
-mod async_runtime;
+use pgrx::prelude::*;
 mod redis_fdw;
 mod utils_share;
 
@@ -9,8 +9,7 @@ mod utils_share;
 #[cfg(test)]
 pub mod pg_test {
     pub fn setup(_options: Vec<&str>) {
-        // Initialize the global Tokio runtime when tests start
-        let _ = crate::async_runtime::get_runtime();
+        // perform one-off initialization when the pg_test framework starts
     }
 
     #[must_use]
