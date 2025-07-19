@@ -56,18 +56,58 @@ echo "Creating Redis server..."
 execute_sql "CREATE SERVER redis_server FOREIGN DATA WRAPPER redis_wrapper OPTIONS (host_port '$REDIS_HOST:$REDIS_PORT');"
 
 # Create foreign tables
-echo "Creating foreign tables..."
-execute_sql "CREATE FOREIGN TABLE redis_hash_test (field TEXT, value TEXT) SERVER redis_server OPTIONS (database '0', table_type 'hash', table_key_prefix 'test:hash');"
-execute_sql "CREATE FOREIGN TABLE redis_list_test (element TEXT) SERVER redis_server OPTIONS (database '0', table_type 'list', table_key_prefix 'test:list');"
-execute_sql "CREATE FOREIGN TABLE redis_set_test (member TEXT) SERVER redis_server OPTIONS (database '0', table_type 'set', table_key_prefix 'test:set');"
-execute_sql "CREATE FOREIGN TABLE redis_zset_test (member TEXT, score FLOAT8) SERVER redis_server OPTIONS (database '0', table_type 'zset', table_key_prefix 'test:zset');"
-execute_sql "CREATE FOREIGN TABLE redis_string_test (value TEXT) SERVER redis_server OPTIONS (database '0', table_type 'string', table_key_prefix 'test:string');"
+echo "Creating foreign tables for load testing..."
+execute_sql "
+    -- Drop existing tables to ensure a clean state
+    DROP FOREIGN TABLE IF EXISTS redis_string;
+    DROP FOREIGN TABLE IF EXISTS redis_hash;
+    DROP FOREIGN TABLE IF EXISTS redis_list;
+    DROP FOREIGN TABLE IF EXISTS redis_set;
+    DROP FOREIGN TABLE IF EXISTS redis_zset;
+
+    -- Create Foreign Tables for pgbench tests
+    CREATE FOREIGN TABLE redis_string (key TEXT, value TEXT)
+        SERVER redis_server
+        OPTIONS (
+            database '0',
+            table_type 'string',
+            table_key_prefix 'pgbench:string:'
+        );
+
+    CREATE FOREIGN TABLE redis_hash (key TEXT, field TEXT, value TEXT)
+        SERVER redis_server
+        OPTIONS (
+            database '0',
+            table_type 'hash'
+        );
+
+    CREATE FOREIGN TABLE redis_list (key TEXT, element TEXT)
+        SERVER redis_server
+        OPTIONS (
+            database '0',
+            table_type 'list'
+        );
+
+    CREATE FOREIGN TABLE redis_set (key TEXT, member TEXT)
+        SERVER redis_server
+        OPTIONS (
+            database '0',
+            table_type 'set'
+        );
+
+    CREATE FOREIGN TABLE redis_zset (key TEXT, member TEXT, score FLOAT8)
+        SERVER redis_server
+        OPTIONS (
+            database '0',
+            table_type 'zset'
+        );
+"
 
 # Test the setup
 echo "Testing the setup..."
-execute_sql "INSERT INTO redis_hash_test VALUES ('test_key', 'test_value');"
-execute_sql "SELECT * FROM redis_hash_test WHERE field = 'test_key';"
-execute_sql "DELETE FROM redis_hash_test WHERE field = 'test_key';"
+execute_sql "INSERT INTO redis_string (key, value) VALUES ('test:string:init', 'hello world');"
+execute_sql "SELECT * FROM redis_string WHERE key = 'test:string:init';"
+execute_sql "DELETE FROM redis_string WHERE key = 'test:string:init';"
 
 echo ""
 echo "🎉 Setup complete!"
@@ -75,7 +115,7 @@ echo "✅ Redis FDW extension is ready for load testing"
 echo ""
 echo "Quick test commands:"
 echo "  # Run mixed operations test for 30 seconds with 10 clients"
-echo "  pgbench -h $PG_HOST -p $PG_PORT -U $PG_USER -d $PG_DATABASE -c 10 -j 4 -T 30 -f ./mixed_operations_test.sql"
+echo "  pgbench -h $PG_HOST -p $PG_PORT -U $PG_USER -d $PG_DATABASE -c 10 -j 4 -T 30 -f ./load_tests/mixed_operations_test.sql"
 echo ""
 echo "  # Run the full test suite"
 echo "  ./redis_fdw_load_test.sh"
