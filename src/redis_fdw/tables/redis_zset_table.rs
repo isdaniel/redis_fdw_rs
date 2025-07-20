@@ -3,7 +3,7 @@ use redis::Commands;
 use crate::redis_fdw::tables::interface::RedisTableOperations;
 
 /// Redis Sorted Set table type
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RedisZSetTable {
     pub data: Vec<(String, f64)>, // (member, score)
 }

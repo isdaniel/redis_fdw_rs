@@ -3,7 +3,7 @@ use redis::Commands;
 use crate::redis_fdw::tables::interface::RedisTableOperations;
 
 /// Redis Set table type
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RedisSetTable {
     pub data: Vec<String>,
 }

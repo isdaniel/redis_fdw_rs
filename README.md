@@ -5,6 +5,7 @@ A high-performance Redis Foreign Data Wrapper (FDW) for PostgreSQL written in Ru
 ## Features
 
 - **High-performance data access** from Redis to PostgreSQL
+- **WHERE clause pushdown optimization** for significantly improved query performance
 - **Redis data types support**: Hash, List, Set, ZSet, and String (with varying levels of implementation)
 - **Supported operations**: SELECT, INSERT, UPDATE, DELETE (with improved error handling)
 - **Connection management** and memory optimization
@@ -357,9 +358,28 @@ See [TESTING.md](TESTING.md) for detailed testing documentation.
 
 - **Memory Management**: The extension uses PostgreSQL's memory contexts for efficient memory allocation
 - **Connection Management**: Redis connections are established per query execution
-- **Data Loading**: All data for a table is loaded at scan initialization (not suitable for very large Redis keys)
-- **Filtering**: WHERE clauses are evaluated at PostgreSQL level, not pushed down to Redis
+- **WHERE Clause Pushdown**: Supported conditions are executed directly in Redis for optimal performance
+  - Hash tables: `field = 'value'` and `field IN (...)` use `HGET`/`HMGET`
+  - Set tables: `member = 'value'` uses `SISMEMBER` for direct membership testing
+  - String tables: `value = 'text'` avoids unnecessary data transfer
+- **Data Loading**: Optimized data loading based on query conditions (pushdown when possible, full scan when necessary)
+- **Filtering**: Non-pushable WHERE clauses are evaluated at PostgreSQL level after optimal Redis data retrieval
 - **Insert Performance**: Uses Redis batch operations (`HSET` for multiple hash fields, `RPUSH` for lists)
+
+### Query Performance Examples
+
+```sql
+-- Optimized: Uses HGET instead of HGETALL + filtering
+SELECT value FROM user_profiles WHERE field = 'email';
+
+-- Optimized: Uses HMGET for multiple fields
+SELECT * FROM user_profiles WHERE field IN ('name', 'email', 'phone');
+
+-- Optimized: Uses SISMEMBER for direct membership check
+SELECT EXISTS(SELECT 1 FROM user_roles WHERE member = 'admin');
+```
+
+For detailed information about WHERE clause pushdown optimization, see [WHERE_PUSHDOWN.md](WHERE_PUSHDOWN.md).
 
 ## Troubleshooting
 
@@ -405,11 +425,12 @@ Look for log messages starting with `---> redis_fdw` to trace execution.
 - ✅ Implementation of SELECT and INSERT operations for all Redis data types
 - ✅ DELETE operations for Hash, Set, ZSet, and String data types
 - ✅ Improved memory safety and validation
+- ✅ **WHERE clause pushdown optimization** for Hash, Set, and String table types
 
 ### Planned Features
 - 🚧 **UPDATE operations for all Redis table types** - Currently returns `unimplemented!` error
 - 🚧 Complete DELETE operations for List types
-- 🚧 WHERE clause pushdown to Redis for better performance
+- 🚧 Extended WHERE clause pushdown (ZSet score ranges, LIKE pattern optimization)
 - 🚧 Connection pooling and reuse
 - 🚧 Async operations support
 - 🚧 Redis Cluster support

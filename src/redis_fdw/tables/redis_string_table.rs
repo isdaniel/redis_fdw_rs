@@ -2,7 +2,7 @@ use redis::Commands;
 
 use crate::redis_fdw::tables::interface::RedisTableOperations;
 /// Redis String table type
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RedisStringTable {
     pub data: Option<String>,
 }

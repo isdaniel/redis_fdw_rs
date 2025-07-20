@@ -2,7 +2,7 @@ use crate::redis_fdw::tables::interface::RedisTableOperations;
 use redis::Commands;
 
 /// Redis List table type
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RedisListTable {
     pub data: Vec<String>,
 }

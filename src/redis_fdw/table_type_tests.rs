@@ -1,7 +1,7 @@
 /// Example tests for the new object-oriented Redis table types
 /// These tests demonstrate how each table type can be used independently
-
-#[cfg(test)]
+#[cfg(any(test, feature = "pg_test"))]
+#[pgrx::pg_schema] 
 mod tests {
     use crate::redis_fdw::{tables::{RedisTableOperations, RedisHashTable, RedisListTable}, state::*};
 

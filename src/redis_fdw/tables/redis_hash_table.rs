@@ -4,7 +4,7 @@ use redis::Commands;
 use crate::redis_fdw::tables::interface::RedisTableOperations;
 
 /// Redis Hash table type
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RedisHashTable {
     pub data: Vec<(String, String)>,
 }
