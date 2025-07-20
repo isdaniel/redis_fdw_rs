@@ -1,6 +1,6 @@
 use std::ptr;
 use pgrx::{ pg_sys::{Index, MemoryContextData, ModifyTable, PlannerInfo}, prelude::*, AllocatedByRust, PgBox, PgMemoryContexts, PgRelation};
-use crate::{redis_fdw::state::RedisFdwState, utils_share::{
+use crate::{redis_fdw::state::{RedisFdwState, init_global_redis_runtime}, utils_share::{
     memory::create_wrappers_memctx, row::Row, utils::*
 }};
 
@@ -11,6 +11,9 @@ pub type FdwRoutine<A = AllocatedByRust> = PgBox<pgrx::pg_sys::FdwRoutine, A>;
 #[pg_extern(create_or_replace)]
 pub extern "C" fn redis_fdw_handler() -> FdwRoutine {
     log!("---> redis_fdw_handler");
+    
+    // Initialize the global Redis runtime once when the extension is loaded
+    init_global_redis_runtime();
     unsafe {
         let mut fdw_routine = PgBox::<pgrx::pg_sys::FdwRoutine, AllocatedByRust>::alloc_node(pgrx::pg_sys::NodeTag::T_FdwRoutine);
 
