@@ -66,7 +66,7 @@ execute_sql "
     DROP FOREIGN TABLE IF EXISTS redis_zset;
 
     -- Create Foreign Tables for pgbench tests
-    CREATE FOREIGN TABLE redis_string (key TEXT, value TEXT)
+    CREATE FOREIGN TABLE redis_string (value TEXT)
         SERVER redis_server
         OPTIONS (
             database '0',
@@ -74,28 +74,28 @@ execute_sql "
             table_key_prefix 'pgbench:string:'
         );
 
-    CREATE FOREIGN TABLE redis_hash (key TEXT, field TEXT, value TEXT)
+    CREATE FOREIGN TABLE redis_hash (field TEXT, value TEXT)
         SERVER redis_server
         OPTIONS (
             database '0',
             table_type 'hash'
         );
 
-    CREATE FOREIGN TABLE redis_list (key TEXT, element TEXT)
+    CREATE FOREIGN TABLE redis_list (element TEXT)
         SERVER redis_server
         OPTIONS (
             database '0',
             table_type 'list'
         );
 
-    CREATE FOREIGN TABLE redis_set (key TEXT, member TEXT)
+    CREATE FOREIGN TABLE redis_set (member TEXT)
         SERVER redis_server
         OPTIONS (
             database '0',
             table_type 'set'
         );
 
-    CREATE FOREIGN TABLE redis_zset (key TEXT, member TEXT, score FLOAT8)
+    CREATE FOREIGN TABLE redis_zset (member TEXT, score FLOAT8)
         SERVER redis_server
         OPTIONS (
             database '0',
@@ -105,9 +105,9 @@ execute_sql "
 
 # Test the setup
 echo "Testing the setup..."
-execute_sql "INSERT INTO redis_string (key, value) VALUES ('test:string:init', 'hello world');"
-execute_sql "SELECT * FROM redis_string WHERE key = 'test:string:init';"
-execute_sql "DELETE FROM redis_string WHERE key = 'test:string:init';"
+execute_sql "INSERT INTO redis_string (value) VALUES ('test:string:init');"
+execute_sql "SELECT * FROM redis_string WHERE value = 'test:string:init';"
+execute_sql "DELETE FROM redis_string WHERE value = 'test:string:init';"
 
 echo ""
 echo "🎉 Setup complete!"

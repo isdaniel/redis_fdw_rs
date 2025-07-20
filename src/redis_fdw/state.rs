@@ -1,5 +1,8 @@
 use std::collections::HashMap;
-use pgrx::pg_sys::MemoryContext;
+use std::sync::OnceLock;
+use pgrx::{log, pg_sys::MemoryContext};
+use redis::aio::ConnectionManager;
+use tokio::{runtime::{Builder, Runtime}, time::{timeout, Duration}};
 use crate::redis_fdw::{
     tables::{
         RedisTableOperations, 
@@ -10,6 +13,29 @@ use crate::redis_fdw::{
         RedisZSetTable
     }
 };
+
+/// Global Redis runtime that's created only once
+static GLOBAL_REDIS_RUNTIME: OnceLock<Runtime> = OnceLock::new();
+
+/// Initialize the global Redis runtime (call this once during extension initialization)
+pub fn init_global_redis_runtime() {
+    GLOBAL_REDIS_RUNTIME.get_or_init(|| {
+        let worker_threads = num_cpus::get().min(4).max(16); // Between 4-16 threads
+        log!("Initializing global Redis runtime with {} worker threads", worker_threads);
+        
+        Builder::new_multi_thread()
+            .worker_threads(worker_threads)
+            .thread_name("redis-fdw-worker")
+            .enable_all()
+            .build()
+            .expect("Failed to create global Redis runtime")
+    });
+}
+
+#[inline]
+pub fn get_global_redis_runtime() -> &'static Runtime {
+    GLOBAL_REDIS_RUNTIME.get().expect("Global Redis runtime not initialized. Call init_global_redis_runtime() first.")
+}
 
 
 /// Enum representing different Redis table types with their implementations
@@ -35,13 +61,13 @@ impl RedisTableType {
         }
     }
     
-    pub fn load_data(&mut self, conn: &mut redis::Connection, key_prefix: &str) -> Result<(), redis::RedisError> {
+    pub async fn load_data(&mut self, conn: &mut ConnectionManager, key_prefix: &str) -> Result<(), redis::RedisError> {
         match self {
-            RedisTableType::String(table) => table.load_data(conn, key_prefix),
-            RedisTableType::Hash(table) => table.load_data(conn, key_prefix),
-            RedisTableType::List(table) => table.load_data(conn, key_prefix),
-            RedisTableType::Set(table) => table.load_data(conn, key_prefix),
-            RedisTableType::ZSet(table) => table.load_data(conn, key_prefix),
+            RedisTableType::String(table) => table.load_data(conn, key_prefix).await,
+            RedisTableType::Hash(table) => table.load_data(conn, key_prefix).await,
+            RedisTableType::List(table) => table.load_data(conn, key_prefix).await,
+            RedisTableType::Set(table) => table.load_data(conn, key_prefix).await,
+            RedisTableType::ZSet(table) => table.load_data(conn, key_prefix).await,
             RedisTableType::None => Ok(()),
         }
     }
@@ -68,35 +94,35 @@ impl RedisTableType {
         }
     }
     
-    pub fn insert(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
+    pub async fn insert(&mut self, conn: &mut ConnectionManager, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
         match self {
-            RedisTableType::String(table) => table.insert(conn, key_prefix, data),
-            RedisTableType::Hash(table) => table.insert(conn, key_prefix, data),
-            RedisTableType::List(table) => table.insert(conn, key_prefix, data),
-            RedisTableType::Set(table) => table.insert(conn, key_prefix, data),
-            RedisTableType::ZSet(table) => table.insert(conn, key_prefix, data),
+            RedisTableType::String(table) => table.insert(conn, key_prefix, data).await,
+            RedisTableType::Hash(table) => table.insert(conn, key_prefix, data).await,
+            RedisTableType::List(table) => table.insert(conn, key_prefix, data).await,
+            RedisTableType::Set(table) => table.insert(conn, key_prefix, data).await,
+            RedisTableType::ZSet(table) => table.insert(conn, key_prefix, data).await,
             RedisTableType::None => Ok(()),
         }
     }
     
-    pub fn delete(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
+    pub async fn delete(&mut self, conn: &mut ConnectionManager, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
         match self {
-            RedisTableType::String(table) => table.delete(conn, key_prefix, data),
-            RedisTableType::Hash(table) => table.delete(conn, key_prefix, data),
-            RedisTableType::List(table) => table.delete(conn, key_prefix, data),
-            RedisTableType::Set(table) => table.delete(conn, key_prefix, data),
-            RedisTableType::ZSet(table) => table.delete(conn, key_prefix, data),
+            RedisTableType::String(table) => table.delete(conn, key_prefix, data).await,
+            RedisTableType::Hash(table) => table.delete(conn, key_prefix, data).await,
+            RedisTableType::List(table) => table.delete(conn, key_prefix, data).await,
+            RedisTableType::Set(table) => table.delete(conn, key_prefix, data).await,
+            RedisTableType::ZSet(table) => table.delete(conn, key_prefix, data).await,
             RedisTableType::None => Ok(()),
         }
     }
     
-    pub fn update(&mut self, conn: &mut redis::Connection, key_prefix: &str, old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
+    pub async fn update(&mut self, conn: &mut ConnectionManager, key_prefix: &str, old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
         match self {
-            RedisTableType::String(table) => table.update(conn, key_prefix, old_data, new_data),
-            RedisTableType::Hash(table) => table.update(conn, key_prefix, old_data, new_data),
-            RedisTableType::List(table) => table.update(conn, key_prefix, old_data, new_data),
-            RedisTableType::Set(table) => table.update(conn, key_prefix, old_data, new_data),
-            RedisTableType::ZSet(table) => table.update(conn, key_prefix, old_data, new_data),
+            RedisTableType::String(table) => table.update(conn, key_prefix, old_data, new_data).await,
+            RedisTableType::Hash(table) => table.update(conn, key_prefix, old_data, new_data).await,
+            RedisTableType::List(table) => table.update(conn, key_prefix, old_data, new_data).await,
+            RedisTableType::Set(table) => table.update(conn, key_prefix, old_data, new_data).await,
+            RedisTableType::ZSet(table) => table.update(conn, key_prefix, old_data, new_data).await,
             RedisTableType::None => Ok(()),
         }
     }
@@ -105,14 +131,14 @@ impl RedisTableType {
 /// Read FDW state
 pub struct RedisFdwState {
     pub tmp_ctx: MemoryContext,
-    pub redis_connection: Option<redis::Connection>,
+    pub redis_connection: Option<ConnectionManager>,
     pub database : i64,
     pub host_port : String,
     pub table_type: RedisTableType,
     pub table_key_prefix: String,
     pub opts: HashMap<String, String>,
     pub row_count: u32,
-    pub key_attno : i16
+    pub key_attno : i16,
 }
 
 impl RedisFdwState {
@@ -126,7 +152,7 @@ impl RedisFdwState {
             host_port: String::default(),
             opts: HashMap::default(),
             row_count: 0,
-            key_attno : 0
+            key_attno : 0,
         }
     }
 }
@@ -140,8 +166,19 @@ impl RedisFdwState {
     /// A reference to the redis connection
     pub fn init_redis_connection_from_options(&mut self) {
         let addr_port = format!("redis://{}/{}" ,self.host_port, self.database);
+        log!("Creating Redis connection manager for {}", addr_port);
         let client = redis::Client::open(addr_port).expect("Failed to create Redis client");
-        self.redis_connection = Some(client.get_connection().expect("Failed to connect to Redis"));
+
+        let runtime = get_global_redis_runtime();
+        let conn_manager = runtime.block_on(async {
+            match timeout(Duration::from_secs(5), ConnectionManager::new(client)).await {
+                Ok(Ok(manager)) => manager,
+                Ok(Err(e)) => panic!("Redis connection error: {}", e),
+                Err(_) => panic!("Redis connection timed out after 5 seconds"),
+            }
+        });
+        
+        self.redis_connection = Some(conn_manager);
     }
     
     /// Updates the struct fields from a HashMap
@@ -172,9 +209,15 @@ impl RedisFdwState {
             
         self.table_type = RedisTableType::from_str(table_type);
         
-        // Load data from Redis
+        // Load data from Redis using the global runtime
         if let Some(conn) = self.redis_connection.as_mut() {
-            let _ = self.table_type.load_data(conn, &self.table_key_prefix);
+            let runtime = get_global_redis_runtime();
+            let result = runtime.block_on(async {
+                self.table_type.load_data(conn, &self.table_key_prefix).await
+            });
+            if let Err(e) = result {
+                pgrx::log!("Failed to load data from Redis: {:?}", e);
+            }
         }
     }
     
@@ -189,7 +232,10 @@ impl RedisFdwState {
     /// Insert data using the appropriate table type
     pub fn insert_data(&mut self, data: &[String]) -> Result<(), redis::RedisError> {
         if let Some(conn) = self.redis_connection.as_mut() {
-            self.table_type.insert(conn, &self.table_key_prefix, data)
+            let runtime = get_global_redis_runtime();
+            runtime.block_on(async {
+                self.table_type.insert(conn, &self.table_key_prefix, data).await
+            })
         } else {
             Err(redis::RedisError::from((redis::ErrorKind::IoError, "Redis connection not initialized")))
         }
@@ -198,7 +244,10 @@ impl RedisFdwState {
     /// Delete data using the appropriate table type
     pub fn delete_data(&mut self, data: &[String]) -> Result<(), redis::RedisError> {
         if let Some(conn) = self.redis_connection.as_mut() {
-            self.table_type.delete(conn, &self.table_key_prefix, data)
+            let runtime = get_global_redis_runtime();
+            runtime.block_on(async {
+                self.table_type.delete(conn, &self.table_key_prefix, data).await
+            })
         } else {
             Err(redis::RedisError::from((redis::ErrorKind::IoError, "Redis connection not initialized")))
         }
@@ -207,7 +256,10 @@ impl RedisFdwState {
     /// Update data using the appropriate table type
     pub fn update_data(&mut self, old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
         if let Some(conn) = self.redis_connection.as_mut() {
-            self.table_type.update(conn, &self.table_key_prefix, old_data, new_data)
+            let runtime = get_global_redis_runtime();
+            runtime.block_on(async {
+                self.table_type.update(conn, &self.table_key_prefix, old_data, new_data).await
+            })
         } else {
             Err(redis::RedisError::from((redis::ErrorKind::IoError, "Redis connection not initialized")))
         }
