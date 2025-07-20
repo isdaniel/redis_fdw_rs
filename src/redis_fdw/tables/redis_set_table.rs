@@ -1,5 +1,4 @@
-use redis::AsyncCommands;
-use async_trait::async_trait;
+use redis::Commands;
 
 use crate::redis_fdw::tables::interface::RedisTableOperations;
 
@@ -15,10 +14,9 @@ impl RedisSetTable {
     }
 }
 
-#[async_trait]
 impl RedisTableOperations for RedisSetTable {
-    async fn load_data(&mut self, conn: &mut redis::aio::ConnectionManager, key_prefix: &str) -> Result<(), redis::RedisError> {
-        self.data = conn.smembers(key_prefix).await?;
+    fn load_data(&mut self, conn: &mut redis::Connection, key_prefix: &str) -> Result<(), redis::RedisError> {
+        self.data = conn.smembers( key_prefix)?;
         Ok(())
     }
     
@@ -30,9 +28,9 @@ impl RedisTableOperations for RedisSetTable {
         self.data.get(index).map(|item| vec![item.clone()])
     }
     
-    async fn insert(&mut self, conn: &mut redis::aio::ConnectionManager, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
+    fn insert(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
         for value in data {
-            let added: i32 = conn.sadd(key_prefix, value).await?;
+            let added: i32 = conn.sadd(key_prefix, value)?;
             if added > 0 {
                 self.data.push(value.clone());
             }
@@ -40,18 +38,18 @@ impl RedisTableOperations for RedisSetTable {
         Ok(())
     }
     
-    async fn delete(&mut self, conn: &mut redis::aio::ConnectionManager, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
+    fn delete(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
         for value in data {
-            let _: i32 = conn.srem(key_prefix, value).await?;
+            let _: i32 = conn.srem( key_prefix, value)?;
             self.data.retain(|x| x != value);
         }
         Ok(())
     }
     
-    async fn update(&mut self, conn: &mut redis::aio::ConnectionManager, key_prefix: &str, old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
+    fn update(&mut self, conn: &mut redis::Connection, key_prefix: &str, old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
         // For sets, update means remove old and add new
-        self.delete(conn, key_prefix, old_data).await?;
-        self.insert(conn, key_prefix, new_data).await?;
+        self.delete(conn, key_prefix, old_data)?;
+        self.insert(conn, key_prefix, new_data)?;
         Ok(())
     }
 }
