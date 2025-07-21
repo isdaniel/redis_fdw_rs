@@ -1,9 +1,9 @@
-use std::collections::HashMap;
 use redis::Commands;
+use std::collections::HashMap;
 
 use crate::redis_fdw::{
+    pushdown::{ComparisonOperator, PushableCondition},
     tables::interface::RedisTableOperations,
-    pushdown::{PushableCondition, ComparisonOperator}
 };
 
 /// Redis Hash table type
@@ -19,7 +19,12 @@ impl RedisHashTable {
 }
 
 impl RedisTableOperations for RedisHashTable {
-    fn load_data(&mut self, conn: &mut redis::Connection, key_prefix: &str, conditions: Option<&[PushableCondition]>) -> Result<Option<Vec<String>>, redis::RedisError> {
+    fn load_data(
+        &mut self,
+        conn: &mut redis::Connection,
+        key_prefix: &str,
+        conditions: Option<&[PushableCondition]>,
+    ) -> Result<Option<Vec<String>>, redis::RedisError> {
         if let Some(conditions) = conditions {
             if !conditions.is_empty() {
                 // Apply hash-specific pushdown optimizations
@@ -31,7 +36,7 @@ impl RedisTableOperations for RedisHashTable {
                                 .arg(key_prefix)
                                 .arg(&condition.value)
                                 .query(conn)?;
-                            
+
                             return if let Some(v) = value {
                                 Ok(Some(vec![condition.value.clone(), v]))
                             } else {
@@ -45,7 +50,7 @@ impl RedisTableOperations for RedisHashTable {
                                 .arg(key_prefix)
                                 .arg(&fields)
                                 .query(conn)?;
-                            
+
                             let mut result = Vec::new();
                             for (i, value) in values.iter().enumerate() {
                                 if let Some(v) = value {
@@ -66,7 +71,7 @@ impl RedisTableOperations for RedisHashTable {
         self.data = hash_data.into_iter().collect();
         Ok(None) // Return None to indicate data was loaded into internal storage
     }
-    
+
     fn data_len(&self, filtered_data: Option<&[String]>) -> usize {
         if let Some(filtered_data) = filtered_data {
             filtered_data.len() / 2 // key-value pairs
@@ -74,7 +79,7 @@ impl RedisTableOperations for RedisHashTable {
             self.data.len()
         }
     }
-    
+
     fn get_row(&self, index: usize, filtered_data: Option<&[String]>) -> Option<Vec<String>> {
         if let Some(filtered_data) = filtered_data {
             // Hash data is stored as [key1, value1, key2, value2, ...]
@@ -88,11 +93,18 @@ impl RedisTableOperations for RedisHashTable {
                 None
             }
         } else {
-            self.data.get(index).map(|(k, v)| vec![k.clone(), v.clone()])
+            self.data
+                .get(index)
+                .map(|(k, v)| vec![k.clone(), v.clone()])
         }
     }
-    
-    fn insert(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
+
+    fn insert(
+        &mut self,
+        conn: &mut redis::Connection,
+        key_prefix: &str,
+        data: &[String],
+    ) -> Result<(), redis::RedisError> {
         let fields: Vec<(String, String)> = data
             .chunks(2)
             .filter_map(|chunk| {
@@ -103,28 +115,36 @@ impl RedisTableOperations for RedisHashTable {
                 }
             })
             .collect();
-        
+
         if !fields.is_empty() {
             let _: () = conn.hset_multiple(key_prefix, &fields)?;
             self.data.extend(fields);
         }
         Ok(())
     }
-    
-    fn delete(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
+
+    fn delete(
+        &mut self,
+        conn: &mut redis::Connection,
+        key_prefix: &str,
+        data: &[String],
+    ) -> Result<(), redis::RedisError> {
         if !data.is_empty() {
-            let _: () = redis::cmd("HDEL")
-                .arg(key_prefix)
-                .arg(data)
-                .query(conn)?;
-            
+            let _: () = redis::cmd("HDEL").arg(key_prefix).arg(data).query(conn)?;
+
             // Remove from local data
             self.data.retain(|(k, _)| !data.contains(k));
         }
         Ok(())
     }
-    
-    fn update(&mut self, conn: &mut redis::Connection, key_prefix: &str, _old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
+
+    fn update(
+        &mut self,
+        conn: &mut redis::Connection,
+        key_prefix: &str,
+        _old_data: &[String],
+        new_data: &[String],
+    ) -> Result<(), redis::RedisError> {
         // For hash update, treat it as insert (HSET overwrites)
         self.insert(conn, key_prefix, new_data)
     }

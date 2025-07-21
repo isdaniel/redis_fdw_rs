@@ -1,8 +1,8 @@
 use redis::Commands;
 
 use crate::redis_fdw::{
+    pushdown::{ComparisonOperator, PushableCondition},
     tables::interface::RedisTableOperations,
-    pushdown::{PushableCondition, ComparisonOperator}
 };
 
 /// Redis Sorted Set table type
@@ -18,7 +18,12 @@ impl RedisZSetTable {
 }
 
 impl RedisTableOperations for RedisZSetTable {
-    fn load_data(&mut self, conn: &mut redis::Connection, key_prefix: &str, _conditions: Option<&[PushableCondition]>) -> Result<Option<Vec<String>>, redis::RedisError> {
+    fn load_data(
+        &mut self,
+        conn: &mut redis::Connection,
+        key_prefix: &str,
+        _conditions: Option<&[PushableCondition]>,
+    ) -> Result<Option<Vec<String>>, redis::RedisError> {
         // ZSets could support score-based range queries in the future
         // For now, fall back to loading all data
         // Load all data into internal storage
@@ -26,7 +31,7 @@ impl RedisTableOperations for RedisZSetTable {
         self.data = result;
         Ok(None)
     }
-    
+
     fn data_len(&self, filtered_data: Option<&[String]>) -> usize {
         if let Some(filtered_data) = filtered_data {
             filtered_data.len() / 2 // member-score pairs
@@ -34,7 +39,7 @@ impl RedisTableOperations for RedisZSetTable {
             self.data.len()
         }
     }
-    
+
     fn get_row(&self, index: usize, filtered_data: Option<&[String]>) -> Option<Vec<String>> {
         if let Some(filtered_data) = filtered_data {
             // ZSet data is stored as [member1, score1, member2, score2, ...]
@@ -48,11 +53,18 @@ impl RedisTableOperations for RedisZSetTable {
                 None
             }
         } else {
-            self.data.get(index).map(|(member, score)| vec![member.clone(), score.to_string()])
+            self.data
+                .get(index)
+                .map(|(member, score)| vec![member.clone(), score.to_string()])
         }
     }
-    
-    fn insert(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
+
+    fn insert(
+        &mut self,
+        conn: &mut redis::Connection,
+        key_prefix: &str,
+        data: &[String],
+    ) -> Result<(), redis::RedisError> {
         // Expect data in pairs: [member1, score1, member2, score2, ...]
         let items: Vec<(f64, String)> = data
             .chunks(2)
@@ -68,23 +80,34 @@ impl RedisTableOperations for RedisZSetTable {
                 }
             })
             .collect();
-        
+
         for (score, member) in &items {
-            let _ : () = conn.zadd(key_prefix, member, *score)?;
+            let _: () = conn.zadd(key_prefix, member, *score)?;
             self.data.push((member.clone(), *score));
         }
         Ok(())
     }
-    
-    fn delete(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
+
+    fn delete(
+        &mut self,
+        conn: &mut redis::Connection,
+        key_prefix: &str,
+        data: &[String],
+    ) -> Result<(), redis::RedisError> {
         for member in data {
             let _: i32 = conn.zrem(key_prefix, member)?;
             self.data.retain(|(m, _)| m != member);
         }
         Ok(())
     }
-    
-    fn update(&mut self, conn: &mut redis::Connection, key_prefix: &str, old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
+
+    fn update(
+        &mut self,
+        conn: &mut redis::Connection,
+        key_prefix: &str,
+        old_data: &[String],
+        new_data: &[String],
+    ) -> Result<(), redis::RedisError> {
         // For sorted sets, update means remove old members and add new ones
         if !old_data.is_empty() {
             self.delete(conn, key_prefix, old_data)?;

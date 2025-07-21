@@ -1,9 +1,9 @@
 use pgrx::{
-    prelude::*,
-    pg_sys::{Oid, Datum},
     fcinfo,
+    pg_sys::{Datum, Oid},
+    prelude::*,
 };
-use std::{fmt, ffi::CStr};
+use std::{ffi::CStr, fmt};
 
 #[derive(Debug)]
 pub enum Cell {
@@ -204,9 +204,11 @@ impl fmt::Display for Cell {
             Cell::Numeric(v) => write!(f, "{}", v),
             Cell::String(v) => write!(f, "{}", v),
             Cell::Date(v) => unsafe {
-                let dt =
-                    fcinfo::direct_function_call_as_datum(pgrx::pg_sys::date_out, &[(*v).into_datum()])
-                        .expect("cell should be a valid date");
+                let dt = fcinfo::direct_function_call_as_datum(
+                    pgrx::pg_sys::date_out,
+                    &[(*v).into_datum()],
+                )
+                .expect("cell should be a valid date");
                 let dt_cstr = CStr::from_ptr(dt.cast_mut_ptr());
                 write!(
                     f,
@@ -215,9 +217,11 @@ impl fmt::Display for Cell {
                 )
             },
             Cell::Time(v) => unsafe {
-                let ts =
-                    fcinfo::direct_function_call_as_datum(pgrx::pg_sys::time_out, &[(*v).into_datum()])
-                        .expect("cell should be a valid time");
+                let ts = fcinfo::direct_function_call_as_datum(
+                    pgrx::pg_sys::time_out,
+                    &[(*v).into_datum()],
+                )
+                .expect("cell should be a valid time");
                 let ts_cstr = CStr::from_ptr(ts.cast_mut_ptr());
                 write!(
                     f,

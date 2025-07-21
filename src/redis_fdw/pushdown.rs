@@ -1,14 +1,13 @@
+use crate::{redis_fdw::state::RedisTableType, utils_share::cell::Cell};
 /// WHERE clause pushdown implementation for Redis FDW
 /// This module provides functionality to analyze WHERE clauses and push down
 /// supported conditions to Redis for better performance.
-
-use pgrx::{prelude::*, pg_sys};
-use crate::{redis_fdw::state::RedisTableType, utils_share::cell::Cell};
+use pgrx::{pg_sys, prelude::*};
 
 /// Represents a pushable condition from WHERE clause
 #[derive(Debug, Clone)]
 pub struct PushableCondition {
-    pub column_name: String, 
+    pub column_name: String,
     pub operator: ComparisonOperator,
     pub value: String,
 }
@@ -16,12 +15,12 @@ pub struct PushableCondition {
 /// Supported comparison operators for pushdown
 #[derive(Debug, Clone, PartialEq)]
 pub enum ComparisonOperator {
-    Equal,           // =
-    NotEqual,        // <>
-    Like,            // LIKE
-    NotLike,         // NOT LIKE
-    In,              // IN (...)
-    NotIn,           // NOT IN (...)
+    Equal,    // =
+    NotEqual, // <>
+    Like,     // LIKE
+    NotLike,  // NOT LIKE
+    In,       // IN (...)
+    NotIn,    // NOT IN (...)
 }
 
 /// Result of WHERE clause analysis
@@ -53,14 +52,16 @@ impl WhereClausePushdown {
 
         // Extract clauses from the list
         let clauses = Self::extract_clauses_from_list(scan_clauses);
-        
+
         for clause in clauses {
             if let Some(condition) = Self::analyze_expression(clause, table_type) {
                 analysis.pushable_conditions.push(condition);
                 analysis.can_optimize = true;
             } else {
                 // Store the unpushable clause for later evaluation
-                analysis.remaining_conditions.push(format!("unpushable_clause_{}", clause as u64));
+                analysis
+                    .remaining_conditions
+                    .push(format!("unpushable_clause_{}", clause as u64));
             }
         }
 
@@ -70,7 +71,7 @@ impl WhereClausePushdown {
     /// Extract individual clauses from PostgreSQL List
     unsafe fn extract_clauses_from_list(scan_clauses: *mut pg_sys::List) -> Vec<*mut pg_sys::Node> {
         let mut clauses = Vec::new();
-        
+
         if scan_clauses.is_null() {
             return clauses;
         }
@@ -99,9 +100,10 @@ impl WhereClausePushdown {
             pg_sys::NodeTag::T_OpExpr => {
                 Self::analyze_op_expr(node as *mut pg_sys::OpExpr, table_type)
             }
-            pg_sys::NodeTag::T_ScalarArrayOpExpr => {
-                Self::analyze_scalar_array_op_expr(node as *mut pg_sys::ScalarArrayOpExpr, table_type)
-            }
+            pg_sys::NodeTag::T_ScalarArrayOpExpr => Self::analyze_scalar_array_op_expr(
+                node as *mut pg_sys::ScalarArrayOpExpr,
+                table_type,
+            ),
             pg_sys::NodeTag::T_RestrictInfo => {
                 Self::analyze_restrict_info(node as *mut pg_sys::RestrictInfo, table_type)
             }
@@ -122,7 +124,7 @@ impl WhereClausePushdown {
         }
 
         let op_expr = &*op_expr;
-        
+
         // Must have exactly 2 arguments for binary operators
         if pg_sys::list_length(op_expr.args) != 2 {
             return None;
@@ -138,7 +140,7 @@ impl WhereClausePushdown {
         let operator = Self::get_operator_from_oid(op_expr.opno)?;
 
         // Check if this condition is suitable for the table type
-        if Self::is_condition_pushable( &operator, table_type) {
+        if Self::is_condition_pushable(&operator, table_type) {
             Some(PushableCondition {
                 column_name,
                 operator,
@@ -159,11 +161,11 @@ impl WhereClausePushdown {
         }
 
         let restrict_info_ref = &*restrict_info;
-        
+
         // RestrictInfo is a wrapper around the actual clause
         // The actual expression is in the 'clause' field
         let clause = restrict_info_ref.clause as *mut pg_sys::Node;
-        
+
         if clause.is_null() {
             return None;
         }
@@ -182,7 +184,7 @@ impl WhereClausePushdown {
         }
 
         let array_op_expr = &*array_op_expr;
-        
+
         // Must have exactly 2 arguments
         if pg_sys::list_length(array_op_expr.args) != 2 {
             return None;
@@ -205,7 +207,7 @@ impl WhereClausePushdown {
         if !Self::is_condition_pushable(&operator, table_type) {
             return None;
         }
-    
+
         // Try to extract array values using a simpler approach
         if let Some(array_values) = Self::extract_array_values(right_arg) {
             let value = array_values.join(",");
@@ -234,29 +236,33 @@ impl WhereClausePushdown {
             pg_sys::NodeTag::T_ArrayExpr => {
                 let array_expr = node as *mut pg_sys::ArrayExpr;
                 let array_expr_ref = &*array_expr;
-                
+
                 let mut result = Vec::new();
                 let list_length = pg_sys::list_length(array_expr_ref.elements);
-                
+
                 for i in 0..list_length {
-                    let elem_node = pg_sys::list_nth(array_expr_ref.elements, i as i32) as *mut pg_sys::Node;
+                    let elem_node =
+                        pg_sys::list_nth(array_expr_ref.elements, i as i32) as *mut pg_sys::Node;
                     if !elem_node.is_null() {
                         if let Some(value) = Self::extract_constant_value(elem_node) {
                             result.push(value);
                         } else {
                             // If we can't extract a value safely, abort
-                            log!("Could not extract array element {}, aborting safe extraction", i);
+                            log!(
+                                "Could not extract array element {}, aborting safe extraction",
+                                i
+                            );
                             return None;
                         }
                     }
                 }
-                
+
                 Some(result)
             }
             pg_sys::NodeTag::T_Const => {
                 let const_node = node as *mut pg_sys::Const;
                 let const_ref = &*const_node;
-                
+
                 if const_ref.constisnull {
                     return None;
                 }
@@ -264,7 +270,7 @@ impl WhereClausePushdown {
                 // Check if this is an array type
                 let array_datum = const_ref.constvalue;
                 let array_type = const_ref.consttype;
-                
+
                 // Get array element type
                 let element_type = pg_sys::get_element_type(array_type);
                 if element_type == pg_sys::InvalidOid {
@@ -280,11 +286,19 @@ impl WhereClausePushdown {
                 let mut elems: *mut pg_sys::Datum = std::ptr::null_mut();
                 let mut nulls: *mut bool = std::ptr::null_mut();
 
-                pg_sys::get_typlenbyvalalign(element_type, &mut typlen, &mut typbyval, &mut typalign);
+                pg_sys::get_typlenbyvalalign(
+                    element_type,
+                    &mut typlen,
+                    &mut typbyval,
+                    &mut typalign,
+                );
 
                 // Validate type information
                 if typlen == 0 && !typbyval {
-                    log!("Invalid type information for element type: {}", element_type);
+                    log!(
+                        "Invalid type information for element type: {}",
+                        element_type
+                    );
                     return None;
                 }
 
@@ -294,7 +308,7 @@ impl WhereClausePushdown {
                     log!("Failed to convert datum to ArrayType");
                     return None;
                 }
-                
+
                 pg_sys::deconstruct_array(
                     array_ptr,
                     element_type,
@@ -305,17 +319,20 @@ impl WhereClausePushdown {
                     &mut nulls,
                     &mut nelems,
                 );
-                
+
                 if nelems > 10000 || nelems <= 0 || elems.is_null() {
-                    log!(r#"Will not extract array values due to safety checks: arrry length ({})
+                    log!(
+                        r#"Will not extract array values due to safety checks: arrry length ({})
                     1. Array too large, limiting extraction for safety
                     2. Invalid element count, limiting extraction for safety
-                    3. Null elements present, limiting extraction for safety"#, nelems);
+                    3. Null elements present, limiting extraction for safety"#,
+                        nelems
+                    );
                     return None;
                 }
-                
+
                 let mut result = Vec::new();
-                
+
                 // Extract each element from the array with better error handling
                 for i in 0..nelems {
                     let elem_datum = *elems.offset(i as isize);
@@ -329,10 +346,15 @@ impl WhereClausePushdown {
                         result.push("NULL".to_string());
                     } else {
                         // Use safer conversion - remove panic handling for now
-                        if let Some(cell) = Cell::from_polymorphic_datum(elem_datum, is_null, element_type) {
+                        if let Some(cell) =
+                            Cell::from_polymorphic_datum(elem_datum, is_null, element_type)
+                        {
                             result.push(cell.to_string());
                         } else {
-                            log!("Could not convert element {} to cell, aborting extraction", i);
+                            log!(
+                                "Could not convert element {} to cell, aborting extraction",
+                                i
+                            );
                             // For safety, abort the entire extraction if any element fails
                             return None;
                         }
@@ -342,7 +364,10 @@ impl WhereClausePushdown {
                 Some(result)
             }
             _ => {
-                log!("Unsupported node type for safe array extraction: {:?}", (*node).type_);
+                log!(
+                    "Unsupported node type for safe array extraction: {:?}",
+                    (*node).type_
+                );
                 None
             }
         }
@@ -382,14 +407,14 @@ impl WhereClausePushdown {
             pg_sys::NodeTag::T_Var => {
                 let var = node as *mut pg_sys::Var;
                 let var_ref = &*var;
-                
+
                 // Get the attribute name from the relation
                 // This is a simplified version - in practice, you'd need to look up
                 // the actual column name from the tuple descriptor
                 match var_ref.varattno {
-                    1 => Some("key".to_string()),    // First column is typically key/field
-                    2 => Some("value".to_string()),  // Second column is typically value
-                    3 => Some("score".to_string()),  // Third column (for zset) is typically score
+                    1 => Some("key".to_string()),   // First column is typically key/field
+                    2 => Some("value".to_string()), // Second column is typically value
+                    3 => Some("score".to_string()), // Third column (for zset) is typically score
                     _ => Some(format!("col_{}", var_ref.varattno)),
                 }
             }
@@ -407,14 +432,19 @@ impl WhereClausePushdown {
             pg_sys::NodeTag::T_Const => {
                 let const_node = node as *mut pg_sys::Const;
                 let const_ref = &*const_node;
-                
+
                 if const_ref.constisnull {
                     return Some("NULL".to_string());
                 }
 
                 // Convert datum to string based on type
                 // This is simplified - in practice, you'd need proper type handling
-                Cell::from_polymorphic_datum(const_ref.constvalue, const_ref.constisnull, const_ref.consttype).map(|val| val.to_string())
+                Cell::from_polymorphic_datum(
+                    const_ref.constvalue,
+                    const_ref.constisnull,
+                    const_ref.consttype,
+                )
+                .map(|val| val.to_string())
             }
             _ => None,
         }
@@ -426,7 +456,7 @@ impl WhereClausePushdown {
         match oid_val {
             98 => Some(ComparisonOperator::Equal),     // text = text
             531 => Some(ComparisonOperator::NotEqual), // text <> text
-            664 => Some(ComparisonOperator::Like),     // text LIKE text  
+            664 => Some(ComparisonOperator::Like),     // text LIKE text
             665 => Some(ComparisonOperator::NotLike),  // text NOT LIKE text
             _ => {
                 // Look up operator name from system catalog

@@ -458,8 +458,6 @@ SELECT * FROM user_profiles WHERE field IN ('name', 'email', 'phone');
 SELECT EXISTS(SELECT 1 FROM user_roles WHERE member = 'admin');
 ```
 
-For detailed information about WHERE clause pushdown optimization, see [WHERE_PUSHDOWN.md](WHERE_PUSHDOWN.md).
-
 ## Troubleshooting
 
 ### Common Issues

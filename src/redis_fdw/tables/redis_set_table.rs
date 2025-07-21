@@ -1,8 +1,8 @@
 use redis::Commands;
 
 use crate::redis_fdw::{
+    pushdown::{ComparisonOperator, PushableCondition},
     tables::interface::RedisTableOperations,
-    pushdown::{PushableCondition, ComparisonOperator}
 };
 
 /// Redis Set table type
@@ -18,7 +18,12 @@ impl RedisSetTable {
 }
 
 impl RedisTableOperations for RedisSetTable {
-    fn load_data(&mut self, conn: &mut redis::Connection, key_prefix: &str, conditions: Option<&[PushableCondition]>) -> Result<Option<Vec<String>>, redis::RedisError> {
+    fn load_data(
+        &mut self,
+        conn: &mut redis::Connection,
+        key_prefix: &str,
+        conditions: Option<&[PushableCondition]>,
+    ) -> Result<Option<Vec<String>>, redis::RedisError> {
         if let Some(conditions) = conditions {
             if !conditions.is_empty() {
                 // For sets, we can check membership efficiently
@@ -30,7 +35,7 @@ impl RedisTableOperations for RedisSetTable {
                                 .arg(key_prefix)
                                 .arg(&condition.value)
                                 .query(conn)?;
-                            
+
                             return if exists {
                                 Ok(Some(vec![condition.value.clone()]))
                             } else {
@@ -41,13 +46,13 @@ impl RedisTableOperations for RedisSetTable {
                             // Check multiple members
                             let members: Vec<&str> = condition.value.split(',').collect();
                             let mut result = Vec::new();
-                            
+
                             for member in members {
                                 let exists: bool = redis::cmd("SISMEMBER")
                                     .arg(key_prefix)
                                     .arg(member)
                                     .query(conn)?;
-                                
+
                                 if exists {
                                     result.push(member.to_string());
                                 }
@@ -64,7 +69,7 @@ impl RedisTableOperations for RedisSetTable {
         self.data = conn.smembers(key_prefix)?;
         Ok(None)
     }
-    
+
     fn data_len(&self, filtered_data: Option<&[String]>) -> usize {
         if let Some(filtered_data) = filtered_data {
             filtered_data.len()
@@ -72,7 +77,7 @@ impl RedisTableOperations for RedisSetTable {
             self.data.len()
         }
     }
-    
+
     fn get_row(&self, index: usize, filtered_data: Option<&[String]>) -> Option<Vec<String>> {
         if let Some(filtered_data) = filtered_data {
             // Set data is stored as [member1, member2, ...]
@@ -85,8 +90,13 @@ impl RedisTableOperations for RedisSetTable {
             self.data.get(index).map(|item| vec![item.clone()])
         }
     }
-    
-    fn insert(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
+
+    fn insert(
+        &mut self,
+        conn: &mut redis::Connection,
+        key_prefix: &str,
+        data: &[String],
+    ) -> Result<(), redis::RedisError> {
         for value in data {
             let added: i32 = conn.sadd(key_prefix, value)?;
             if added > 0 {
@@ -95,16 +105,27 @@ impl RedisTableOperations for RedisSetTable {
         }
         Ok(())
     }
-    
-    fn delete(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
+
+    fn delete(
+        &mut self,
+        conn: &mut redis::Connection,
+        key_prefix: &str,
+        data: &[String],
+    ) -> Result<(), redis::RedisError> {
         for value in data {
-            let _: i32 = conn.srem( key_prefix, value)?;
+            let _: i32 = conn.srem(key_prefix, value)?;
             self.data.retain(|x| x != value);
         }
         Ok(())
     }
-    
-    fn update(&mut self, conn: &mut redis::Connection, key_prefix: &str, old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
+
+    fn update(
+        &mut self,
+        conn: &mut redis::Connection,
+        key_prefix: &str,
+        old_data: &[String],
+        new_data: &[String],
+    ) -> Result<(), redis::RedisError> {
         // For sets, update means remove old and add new
         self.delete(conn, key_prefix, old_data)?;
         self.insert(conn, key_prefix, new_data)?;

@@ -1,17 +1,12 @@
-use std::collections::HashMap;
-use pgrx::{pg_sys::MemoryContext, prelude::*};
 use crate::redis_fdw::{
+    pushdown::PushdownAnalysis,
     tables::{
-        RedisTableOperations, 
-        RedisHashTable, 
-        RedisListTable, 
-        RedisSetTable, 
-        RedisStringTable, 
-        RedisZSetTable
+        RedisHashTable, RedisListTable, RedisSetTable, RedisStringTable, RedisTableOperations,
+        RedisZSetTable,
     },
-    pushdown::PushdownAnalysis
 };
-
+use pgrx::{pg_sys::MemoryContext, prelude::*};
+use std::collections::HashMap;
 
 /// Enum representing different Redis table types with their implementations
 #[derive(Debug, Clone)]
@@ -35,8 +30,13 @@ impl RedisTableType {
             _ => RedisTableType::None,
         }
     }
-    
-    pub fn load_data(&mut self, conn: &mut redis::Connection, key_prefix: &str, conditions: Option<&[crate::redis_fdw::pushdown::PushableCondition]>) -> Result<Option<Vec<String>>, redis::RedisError> {
+
+    pub fn load_data(
+        &mut self,
+        conn: &mut redis::Connection,
+        key_prefix: &str,
+        conditions: Option<&[crate::redis_fdw::pushdown::PushableCondition]>,
+    ) -> Result<Option<Vec<String>>, redis::RedisError> {
         match self {
             RedisTableType::String(table) => table.load_data(conn, key_prefix, conditions),
             RedisTableType::Hash(table) => table.load_data(conn, key_prefix, conditions),
@@ -46,7 +46,7 @@ impl RedisTableType {
             RedisTableType::None => Ok(None),
         }
     }
-    
+
     pub fn data_len(&self, filtered_data: Option<&[String]>) -> usize {
         match self {
             RedisTableType::String(table) => table.data_len(filtered_data),
@@ -57,7 +57,7 @@ impl RedisTableType {
             RedisTableType::None => 0,
         }
     }
-    
+
     pub fn get_row(&self, index: usize, filtered_data: Option<&[String]>) -> Option<Vec<String>> {
         match self {
             RedisTableType::String(table) => table.get_row(index, filtered_data),
@@ -68,8 +68,13 @@ impl RedisTableType {
             RedisTableType::None => None,
         }
     }
-    
-    pub fn insert(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
+
+    pub fn insert(
+        &mut self,
+        conn: &mut redis::Connection,
+        key_prefix: &str,
+        data: &[String],
+    ) -> Result<(), redis::RedisError> {
         match self {
             RedisTableType::String(table) => table.insert(conn, key_prefix, data),
             RedisTableType::Hash(table) => table.insert(conn, key_prefix, data),
@@ -79,8 +84,13 @@ impl RedisTableType {
             RedisTableType::None => Ok(()),
         }
     }
-    
-    pub fn delete(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
+
+    pub fn delete(
+        &mut self,
+        conn: &mut redis::Connection,
+        key_prefix: &str,
+        data: &[String],
+    ) -> Result<(), redis::RedisError> {
         match self {
             RedisTableType::String(table) => table.delete(conn, key_prefix, data),
             RedisTableType::Hash(table) => table.delete(conn, key_prefix, data),
@@ -90,8 +100,14 @@ impl RedisTableType {
             RedisTableType::None => Ok(()),
         }
     }
-    
-    pub fn update(&mut self, conn: &mut redis::Connection, key_prefix: &str, old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
+
+    pub fn update(
+        &mut self,
+        conn: &mut redis::Connection,
+        key_prefix: &str,
+        old_data: &[String],
+        new_data: &[String],
+    ) -> Result<(), redis::RedisError> {
         match self {
             RedisTableType::String(table) => table.update(conn, key_prefix, old_data, new_data),
             RedisTableType::Hash(table) => table.update(conn, key_prefix, old_data, new_data),
@@ -103,7 +119,10 @@ impl RedisTableType {
     }
 
     /// Check if this table type supports a specific pushdown operator
-    pub fn supports_pushdown(&self, operator: &crate::redis_fdw::pushdown::ComparisonOperator) -> bool {
+    pub fn supports_pushdown(
+        &self,
+        operator: &crate::redis_fdw::pushdown::ComparisonOperator,
+    ) -> bool {
         match self {
             RedisTableType::String(table) => table.supports_pushdown(operator),
             RedisTableType::Hash(table) => table.supports_pushdown(operator),
@@ -119,13 +138,13 @@ impl RedisTableType {
 pub struct RedisFdwState {
     pub tmp_ctx: MemoryContext,
     pub redis_connection: Option<redis::Connection>,
-    pub database : i64,
-    pub host_port : String,
+    pub database: i64,
+    pub host_port: String,
     pub table_type: RedisTableType,
     pub table_key_prefix: String,
     pub opts: HashMap<String, String>,
     pub row_count: u32,
-    pub key_attno : i16,
+    pub key_attno: i16,
     pub pushdown_analysis: Option<PushdownAnalysis>,
     pub filtered_data: Option<Vec<String>>,
 }
@@ -141,7 +160,7 @@ impl RedisFdwState {
             host_port: String::default(),
             opts: HashMap::default(),
             row_count: 0,
-            key_attno : 0,
+            key_attno: 0,
             pushdown_analysis: None,
             filtered_data: None,
         }
@@ -149,18 +168,17 @@ impl RedisFdwState {
 }
 
 impl RedisFdwState {
-
     /// Check if redis connection is initialized
     /// # Panics
     /// Panics if redis_connection is None
     /// # Returns
     /// A reference to the redis connection
     pub fn init_redis_connection_from_options(&mut self) {
-        let addr_port = format!("redis://{}/{}" ,self.host_port, self.database);
+        let addr_port = format!("redis://{}/{}", self.host_port, self.database);
         let client = redis::Client::open(addr_port).expect("Failed to create Redis client");
         self.redis_connection = Some(client.get_connection().expect("Failed to connect to Redis"));
     }
-    
+
     /// Updates the struct fields from a HashMap
     pub fn update_from_options(&mut self, opts: HashMap<String, String>) {
         self.opts = opts;
@@ -183,12 +201,13 @@ impl RedisFdwState {
     }
 
     pub fn set_table_type(&mut self) {
-        let table_type = self.opts
+        let table_type = self
+            .opts
             .get("table_type")
             .expect("`table_type` option is required for redis_fdw");
-            
+
         self.table_type = RedisTableType::from_str(table_type);
-        
+
         // Load data from Redis (will be optimized if pushdown conditions exist)
         self.load_data_with_pushdown();
     }
@@ -205,7 +224,10 @@ impl RedisFdwState {
                         Some(&analysis.pushable_conditions),
                     ) {
                         Ok(Some(filtered_data)) => {
-                            log!("Pushdown optimization applied, loaded {} filtered items", filtered_data.len());
+                            log!(
+                                "Pushdown optimization applied, loaded {} filtered items",
+                                filtered_data.len()
+                            );
                             self.filtered_data = Some(filtered_data);
                             return;
                         }
@@ -219,19 +241,24 @@ impl RedisFdwState {
                     }
                 }
             }
-            
+
             // Fall back to loading all data without pushdown
-            let _ = self.table_type.load_data(conn, &self.table_key_prefix, None);
+            let _ = self
+                .table_type
+                .load_data(conn, &self.table_key_prefix, None);
         }
     }
 
     /// Set pushdown analysis from planner
     pub fn set_pushdown_analysis(&mut self, analysis: PushdownAnalysis) {
-        log!("Setting pushdown analysis: can_optimize={}, conditions={:?}", 
-             analysis.can_optimize, analysis.pushable_conditions);
+        log!(
+            "Setting pushdown analysis: can_optimize={}, conditions={:?}",
+            analysis.can_optimize,
+            analysis.pushable_conditions
+        );
         self.pushdown_analysis = Some(analysis);
     }
-    
+
     pub fn is_read_end(&self) -> bool {
         self.row_count >= self.data_len() as u32
     }
@@ -241,7 +268,7 @@ impl RedisFdwState {
         if let Some(ref filtered_data) = self.filtered_data {
             return self.table_type.data_len(Some(filtered_data));
         }
-        
+
         // Otherwise use table type's data without filtered data
         self.table_type.data_len(None)
     }
@@ -251,7 +278,10 @@ impl RedisFdwState {
         if let Some(conn) = self.redis_connection.as_mut() {
             self.table_type.insert(conn, &self.table_key_prefix, data)
         } else {
-            Err(redis::RedisError::from((redis::ErrorKind::IoError, "Redis connection not initialized")))
+            Err(redis::RedisError::from((
+                redis::ErrorKind::IoError,
+                "Redis connection not initialized",
+            )))
         }
     }
 
@@ -260,16 +290,27 @@ impl RedisFdwState {
         if let Some(conn) = self.redis_connection.as_mut() {
             self.table_type.delete(conn, &self.table_key_prefix, data)
         } else {
-            Err(redis::RedisError::from((redis::ErrorKind::IoError, "Redis connection not initialized")))
+            Err(redis::RedisError::from((
+                redis::ErrorKind::IoError,
+                "Redis connection not initialized",
+            )))
         }
     }
 
     /// Update data using the appropriate table type
-    pub fn update_data(&mut self, old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError> {
+    pub fn update_data(
+        &mut self,
+        old_data: &[String],
+        new_data: &[String],
+    ) -> Result<(), redis::RedisError> {
         if let Some(conn) = self.redis_connection.as_mut() {
-            self.table_type.update(conn, &self.table_key_prefix, old_data, new_data)
+            self.table_type
+                .update(conn, &self.table_key_prefix, old_data, new_data)
         } else {
-            Err(redis::RedisError::from((redis::ErrorKind::IoError, "Redis connection not initialized")))
+            Err(redis::RedisError::from((
+                redis::ErrorKind::IoError,
+                "Redis connection not initialized",
+            )))
         }
     }
 
@@ -279,10 +320,8 @@ impl RedisFdwState {
         if let Some(ref filtered_data) = self.filtered_data {
             return self.table_type.get_row(index, Some(filtered_data));
         }
-        
+
         // Otherwise use table type's data without filtered data
         self.table_type.get_row(index, None)
     }
 }
-
-

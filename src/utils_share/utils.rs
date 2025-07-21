@@ -1,12 +1,24 @@
-use std::{collections::HashMap, ffi::{c_void, CStr, CString}, num::NonZeroUsize};
-use pgrx::{list::{self, List}, memcx::{self, MemCx}, pg_sys::{self, defGetString, fmgr_info, getTypeInputInfo, list_concat, Datum, FmgrInfo, FormData_pg_attribute, InputFunctionCall, MemoryContext, Oid, TupleDescData}, FromDatum, IntoDatum, PgBox, PgTupleDesc};
+use pgrx::{
+    list::{self, List},
+    memcx::{self, MemCx},
+    pg_sys::{
+        self, defGetString, fmgr_info, getTypeInputInfo, list_concat, Datum, FmgrInfo,
+        FormData_pg_attribute, InputFunctionCall, MemoryContext, Oid, TupleDescData,
+    },
+    FromDatum, IntoDatum, PgBox, PgTupleDesc,
+};
+use std::{
+    collections::HashMap,
+    ffi::{c_void, CStr, CString},
+    num::NonZeroUsize,
+};
 
 #[cfg(feature = "pg14")]
 use pgrx::pg_sys::Value;
 
 use crate::utils_share::{cell::Cell, row::Row};
 
-#[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))] 
+#[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
 #[repr(C)]
 pub struct Value {
     pub type_: pgrx::pg_sys::NodeTag,
@@ -17,10 +29,11 @@ pub struct Value {
 pub unsafe fn pg_string_to_rust(val_value: *mut Value) -> String {
     CStr::from_ptr((*val_value).val.str_)
         .to_str()
-        .unwrap_or_default().to_string()
+        .unwrap_or_default()
+        .to_string()
 }
 
-#[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))] 
+#[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
 pub unsafe fn pg_string_to_rust(val_value: *mut Value) -> String {
     (*val_value).val.sval.to_string()
 }
@@ -54,7 +67,7 @@ unsafe fn get_options_from_fdw(relid: Oid) -> *mut pg_sys::List {
     let wrapper = pg_sys::GetForeignDataWrapper((*server).fdwid);
     // let mapping= pg_sys::GetUserMapping(pg_sys::GetUserId(), (*server).fdwid);
     let mut opts_list = std::ptr::null_mut();
-    
+
     opts_list = list_concat(opts_list, (*wrapper).options);
     opts_list = list_concat(opts_list, (*server).options);
     opts_list = list_concat(opts_list, (*table).options);
@@ -103,7 +116,6 @@ pub unsafe fn exec_clear_tuple(slot: *mut pgrx::pg_sys::TupleTableSlot) {
 /// # Returns
 /// A `Row` containing the data from the `TupleTableSlot`. The row will contain cells for each attribute in the tuple descriptor, excluding dropped attributes.
 pub unsafe fn tuple_table_slot_to_row(slot: *mut pgrx::pg_sys::TupleTableSlot) -> Row {
-
     let tup_desc = PgTupleDesc::from_pg_copy((*slot).tts_tupleDescriptor);
 
     let mut should_free = false;
@@ -129,7 +141,7 @@ pub unsafe fn tuple_table_slot_to_row(slot: *mut pgrx::pg_sys::TupleTableSlot) -
 /// This function is unsafe because it dereferences a raw pointer. Ensure that the pointer is valid and points to a null-terminated C string.
 /// # Arguments
 /// * `c_str`: A pointer to a null-terminated C string.
-/// 
+///
 /// # Returns
 /// A Rust `String` containing the contents of the C string. If the pointer is null, an empty string is returned.
 #[inline]
@@ -137,7 +149,12 @@ pub fn string_from_cstr(c_str: *const i8) -> String {
     if c_str.is_null() {
         return String::new();
     }
-    unsafe { CStr::from_ptr(c_str).to_string_lossy().trim_end_matches('\0').to_string() }
+    unsafe {
+        CStr::from_ptr(c_str)
+            .to_string_lossy()
+            .trim_end_matches('\0')
+            .to_string()
+    }
 }
 
 /// Convert a Rust string to a C string (CString)
@@ -176,7 +193,7 @@ pub fn string_to_cstr(s: &str) -> CString {
 /// function for the specified Oid is correctly defined and available in the PostgreSQL environment.
 /// It is the caller's responsibility to ensure that the Oid corresponds to a valid data type
 /// and that the input function is properly registered in the PostgreSQL system.
-pub unsafe fn get_datum(value_str: &str, typid: Oid) -> Datum {    
+pub unsafe fn get_datum(value_str: &str, typid: Oid) -> Datum {
     if value_str.is_empty() {
         return Datum::null();
     }
@@ -197,7 +214,6 @@ pub unsafe fn pg_list_to_rust_list<'a, T: list::Enlist>(
 ) -> list::List<'a, T> {
     list::List::<T>::downcast_ptr_in_memcx(list, mcx).expect("Failed to downcast list pointer")
 }
-
 
 pub unsafe fn serialize_to_list<T>(state: PgBox<T>) -> *mut pg_sys::List
 where
@@ -238,7 +254,6 @@ where
     })
 }
 
-
 pub unsafe fn delete_wrappers_memctx(ctx: MemoryContext) {
     if !ctx.is_null() {
         pg_sys::pfree((*ctx).name as _);
@@ -247,7 +262,8 @@ pub unsafe fn delete_wrappers_memctx(ctx: MemoryContext) {
 }
 
 pub fn cell_to_string(cell: Option<&Cell>) -> String {
-    cell.map(|c| c.to_string()).unwrap_or_else(|| "NULL".to_string())
+    cell.map(|c| c.to_string())
+        .unwrap_or_else(|| "NULL".to_string())
 }
 
 pub unsafe fn write_datum_to_slot(

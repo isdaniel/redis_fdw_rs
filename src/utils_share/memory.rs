@@ -1,4 +1,7 @@
-use pgrx::{pg_sys::{AsPgCStr, MemoryContext}, PgMemoryContexts};
+use pgrx::{
+    pg_sys::{AsPgCStr, MemoryContext},
+    PgMemoryContexts,
+};
 
 const ROOT_MEMCTX_NAME: &str = "WrappersRootMemCtx";
 
