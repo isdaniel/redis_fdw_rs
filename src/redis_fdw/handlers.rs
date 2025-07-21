@@ -1,6 +1,6 @@
 use std::ptr;
 use pgrx::{ pg_sys::{Index, MemoryContextData, ModifyTable, PlannerInfo}, prelude::*, AllocatedByRust, PgBox, PgMemoryContexts, PgRelation};
-use crate::{redis_fdw::state::RedisFdwState, utils_share::{
+use crate::{redis_fdw::{state::RedisFdwState, pushdown::WhereClausePushdown}, utils_share::{
     memory::create_wrappers_memctx, row::Row, utils::*
 }};
 
@@ -49,7 +49,17 @@ extern "C-unwind" fn get_foreign_rel_size(
         let ctx_name = format!("Wrappers_scan_{}", foreigntableid.to_u32());
         log!("Creating memory context: {}", ctx_name);
         let ctx = create_wrappers_memctx(&ctx_name);
-        let state = RedisFdwState::new(ctx);
+        let mut state = RedisFdwState::new(ctx);
+
+        // Initialize the state with table options for pushdown analysis
+        let options = get_foreign_table_options(foreigntableid);
+        log!("Foreign table options: {:?}", options);
+        state.update_from_options(options);
+        
+        // Set table type so pushdown analysis knows what optimizations are possible
+        if let Some(table_type_str) = state.opts.get("table_type") {
+            state.table_type = crate::redis_fdw::state::RedisTableType::from_str(table_type_str);
+        }
 
         (*baserel).fdw_private = Box::into_raw(Box::new(state)) as *mut RedisFdwState as *mut std::os::raw::c_void;
         (*baserel).rows = 1000.0;
@@ -93,6 +103,31 @@ unsafe extern "C-unwind" fn get_foreign_plan(
     outer_plan: *mut pgrx::pg_sys::Plan,
 ) -> *mut pgrx::pg_sys::ForeignScan {
     log!("---> get_foreign_plan");
+    
+    // Get the FDW state from baserel to analyze table type
+    let mut state = PgBox::<RedisFdwState>::from_pg((*baserel).fdw_private as _);
+    
+    PgMemoryContexts::For(state.tmp_ctx).switch_to(|_| {
+        // Analyze WHERE clauses for pushdown opportunities
+        let pushdown_analysis = WhereClausePushdown::analyze_scan_clauses(
+            scan_clauses,
+            &state.table_type,
+        );
+        info!("Pushdown analysis result: {:?}", pushdown_analysis);
+        if pushdown_analysis.can_optimize {
+            info!("WHERE clause pushdown enabled with {} pushable conditions", 
+                pushdown_analysis.pushable_conditions.len());
+        } else {
+            info!("No WHERE clause pushdown optimizations possible");
+        }
+        
+        // Store the analysis in the state
+        state.set_pushdown_analysis(pushdown_analysis);
+    });
+    
+    // Update the fdw_private with our enhanced state
+    (*baserel).fdw_private = state.into_pg() as *mut std::os::raw::c_void;
+    
     pgrx::pg_sys::make_foreignscan(
         tlist,
         pg_sys::extract_actual_clauses(scan_clauses, false),
