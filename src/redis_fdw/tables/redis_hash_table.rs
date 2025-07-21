@@ -26,11 +26,12 @@ impl RedisTableOperations for RedisHashTable {
                 for condition in conditions {
                     match condition.operator {
                         ComparisonOperator::Equal => {
+                            pgrx::info!("Applying pushdown for condition: {:?}", condition);
                             let value: Option<String> = redis::cmd("HGET")
                                 .arg(key_prefix)
                                 .arg(&condition.value)
                                 .query(conn)?;
-
+                            
                             return if let Some(v) = value {
                                 Ok(Some(vec![condition.value.clone(), v]))
                             } else {

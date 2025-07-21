@@ -107,21 +107,23 @@ unsafe extern "C-unwind" fn get_foreign_plan(
     // Get the FDW state from baserel to analyze table type
     let mut state = PgBox::<RedisFdwState>::from_pg((*baserel).fdw_private as _);
     
-    // Analyze WHERE clauses for pushdown opportunities
-    let pushdown_analysis = WhereClausePushdown::analyze_scan_clauses(
-        scan_clauses,
-        &state.table_type,
-    );
-    info!("Pushdown analysis result: {:?}", pushdown_analysis);
-    if pushdown_analysis.can_optimize {
-        info!("WHERE clause pushdown enabled with {} pushable conditions", 
-             pushdown_analysis.pushable_conditions.len());
-    } else {
-        info!("No WHERE clause pushdown optimizations possible");
-    }
-    
-    // Store the analysis in the state
-    state.set_pushdown_analysis(pushdown_analysis);
+    PgMemoryContexts::For(state.tmp_ctx).switch_to(|_| {
+        // Analyze WHERE clauses for pushdown opportunities
+        let pushdown_analysis = WhereClausePushdown::analyze_scan_clauses(
+            scan_clauses,
+            &state.table_type,
+        );
+        info!("Pushdown analysis result: {:?}", pushdown_analysis);
+        if pushdown_analysis.can_optimize {
+            info!("WHERE clause pushdown enabled with {} pushable conditions", 
+                pushdown_analysis.pushable_conditions.len());
+        } else {
+            info!("No WHERE clause pushdown optimizations possible");
+        }
+        
+        // Store the analysis in the state
+        state.set_pushdown_analysis(pushdown_analysis);
+    });
     
     // Update the fdw_private with our enhanced state
     (*baserel).fdw_private = state.into_pg() as *mut std::os::raw::c_void;
