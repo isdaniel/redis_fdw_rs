@@ -3,7 +3,7 @@
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 mod tests {
-    
+    use pgrx::pg_sys;
 
     use crate::redis_fdw::{
         state::RedisTableType,
@@ -336,7 +336,7 @@ mod tests {
         assert_eq!(list_table.get_row(6, None), None);
 
         // Test large list simulation
-        let large_list: Vec<String> = (0..1000).map(|i| format!("item_{i}")).collect();
+        let large_list: Vec<String> = (0..1000).map(|i| format!("item_{}", i)).collect();
         list_table.data = large_list;
         assert_eq!(list_table.data_len(None), 1000);
         assert_eq!(

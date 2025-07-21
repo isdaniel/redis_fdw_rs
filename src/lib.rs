@@ -1,3 +1,4 @@
+use pgrx::prelude::*;
 mod redis_fdw;
 mod utils_share;
 

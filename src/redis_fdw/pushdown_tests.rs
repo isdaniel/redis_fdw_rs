@@ -6,7 +6,7 @@
 #[pgrx::pg_schema]
 mod tests {
     use crate::redis_fdw::pushdown::{ComparisonOperator, PushableCondition, WhereClausePushdown};
-    
+    use pgrx::prelude::*;
     /// Test basic WHERE clause pushdown for hash tables
     #[pg_test]
     #[cfg(feature = "integration_tests")]
