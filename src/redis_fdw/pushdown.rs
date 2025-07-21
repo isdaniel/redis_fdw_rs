@@ -263,8 +263,6 @@ impl WhereClausePushdown {
 
                 // Check if this is an array type
                 let array_datum = const_ref.constvalue;
-                
-                // Use PostgreSQL's array handling functions
                 let array_type = const_ref.consttype;
                 
                 // Get array element type
@@ -274,32 +272,51 @@ impl WhereClausePushdown {
                     return None;
                 }
 
-                // Deconstruct the array
+                // Get proper type information for the element type
+                let mut typlen: i16 = 0;
+                let mut typbyval: bool = false;
+                let mut typalign: i8 = 0;
                 let mut nelems: i32 = 0;
                 let mut elems: *mut pg_sys::Datum = std::ptr::null_mut();
                 let mut nulls: *mut bool = std::ptr::null_mut();
 
-                // Convert Datum to ArrayType pointer
+                pg_sys::get_typlenbyvalalign(element_type, &mut typlen, &mut typbyval, &mut typalign);
+
+                // Validate type information
+                if typlen == 0 && !typbyval {
+                    log!("Invalid type information for element type: {}", element_type);
+                    return None;
+                }
+
+                // Convert Datum to ArrayType pointer - ensure proper casting
                 let array_ptr = array_datum.cast_mut_ptr::<pg_sys::ArrayType>();
+                if array_ptr.is_null() {
+                    log!("Failed to convert datum to ArrayType");
+                    return None;
+                }
                 
                 pg_sys::deconstruct_array(
                     array_ptr,
                     element_type,
-                    -1,  // typlen for variable length types
-                    false, // typbyval for non-by-value types  
-                    'd' as i8, // typalign - 'd' for double word alignment for most types
+                    typlen as i32,
+                    typbyval,
+                    typalign,
                     &mut elems,
                     &mut nulls,
                     &mut nelems,
                 );
-
-                if nelems <= 0 || elems.is_null() {
+                
+                if nelems > 10000 || nelems <= 0 || elems.is_null() {
+                    log!(r#"Will not extract array values due to safety checks: arrry length ({})
+                    1. Array too large, limiting extraction for safety
+                    2. Invalid element count, limiting extraction for safety
+                    3. Null elements present, limiting extraction for safety"#, nelems);
                     return None;
                 }
-                info!("Extracted {} elements from array", nelems);
+                
                 let mut result = Vec::new();
                 
-                // Extract each element from the array
+                // Extract each element from the array with better error handling
                 for i in 0..nelems {
                     let elem_datum = *elems.offset(i as isize);
                     let is_null = if nulls.is_null() {
@@ -310,10 +327,15 @@ impl WhereClausePushdown {
 
                     if is_null {
                         result.push("NULL".to_string());
-                        
-                    } else if let Some(cell) = Cell::from_polymorphic_datum(elem_datum, is_null, element_type) {
-                        //todo check
-                        result.push(cell.to_string());
+                    } else {
+                        // Use safer conversion - remove panic handling for now
+                        if let Some(cell) = Cell::from_polymorphic_datum(elem_datum, is_null, element_type) {
+                            result.push(cell.to_string());
+                        } else {
+                            log!("Could not convert element {} to cell, aborting extraction", i);
+                            // For safety, abort the entire extraction if any element fails
+                            return None;
+                        }
                     }
                 }
 
