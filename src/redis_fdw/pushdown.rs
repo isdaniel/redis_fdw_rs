@@ -294,14 +294,110 @@ impl WhereClausePushdown {
             return None;
         }
 
-        // This is a simplified implementation
-        // In practice, you'd need to properly handle array deconstruction
         match (*node).type_ {
             pg_sys::NodeTag::T_Const => {
-                // For now, just return a placeholder
-                Some(vec!["array_value".to_string()])
+                let const_node = node as *mut pg_sys::Const;
+                let const_ref = &*const_node;
+                
+                if const_ref.constisnull {
+                    return None;
+                }
+
+                // Check if this is an array type
+                let array_datum = const_ref.constvalue;
+                
+                // Use PostgreSQL's array handling functions
+                let array_type = const_ref.consttype;
+                
+                // Get array element type
+                let element_type = pg_sys::get_element_type(array_type);
+                if element_type == pg_sys::InvalidOid {
+                    log!("Not an array type: {}", array_type);
+                    return None;
+                }
+
+                // Deconstruct the array
+                let mut nelems: i32 = 0;
+                let mut elems: *mut pg_sys::Datum = std::ptr::null_mut();
+                let mut nulls: *mut bool = std::ptr::null_mut();
+
+                // Convert Datum to ArrayType pointer
+                let array_ptr = array_datum.cast_mut_ptr::<pg_sys::ArrayType>();
+                
+                pg_sys::deconstruct_array(
+                    array_ptr,
+                    element_type,
+                    -1,  // typlen for variable length types
+                    false, // typbyval for non-by-value types  
+                    'd' as i8, // typalign - 'd' for double word alignment for most types
+                    &mut elems,
+                    &mut nulls,
+                    &mut nelems,
+                );
+
+                if nelems <= 0 || elems.is_null() {
+                    return None;
+                }
+
+                let mut result = Vec::new();
+                
+                // Extract each element from the array
+                for i in 0..nelems {
+                    let elem_datum = *elems.offset(i as isize);
+                    let is_null = if nulls.is_null() {
+                        false
+                    } else {
+                        *nulls.offset(i as isize)
+                    };
+
+                    if is_null {
+                        result.push("NULL".to_string());
+                    } else {
+                        // Convert element datum to string based on element type
+                        if let Some(cell) = Cell::from_polymorphic_datum(elem_datum, is_null, element_type) {
+                            result.push(cell.to_string());
+                        } else {
+                            // Fallback for unknown types
+                            result.push(format!("unknown_value_{}", i));
+                        }
+                    }
+                }
+
+                // Free the allocated arrays
+                if !elems.is_null() {
+                    pg_sys::pfree(elems as *mut std::ffi::c_void);
+                }
+                if !nulls.is_null() {
+                    pg_sys::pfree(nulls as *mut std::ffi::c_void);
+                }
+
+                Some(result)
             }
-            _ => None,
+            pg_sys::NodeTag::T_ArrayExpr => {
+                // Handle ArrayExpr nodes (array constructors like ARRAY[1,2,3])
+                let array_expr = node as *mut pg_sys::ArrayExpr;
+                let array_expr_ref = &*array_expr;
+                
+                let mut result = Vec::new();
+                let list_length = pg_sys::list_length(array_expr_ref.elements);
+                
+                for i in 0..list_length {
+                    let elem_node = pg_sys::list_nth(array_expr_ref.elements, i as i32) as *mut pg_sys::Node;
+                    if !elem_node.is_null() {
+                        if let Some(value) = Self::extract_constant_value(elem_node) {
+                            result.push(value);
+                        } else {
+                            result.push(format!("unknown_elem_{}", i));
+                        }
+                    }
+                }
+                
+                Some(result)
+            }
+            _ => {
+                log!("Unsupported node type for array extraction: {:?}", (*node).type_);
+                None
+            }
         }
     }
 
@@ -335,5 +431,4 @@ impl WhereClausePushdown {
     ) -> bool {
         table_type.supports_pushdown(operator)
     }
-
 }

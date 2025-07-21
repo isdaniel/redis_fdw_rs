@@ -3,10 +3,12 @@
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema] 
 mod tests {
+    use pgrx::pg_sys;
+
     use crate::redis_fdw::{
         tables::{RedisTableOperations, RedisHashTable, RedisListTable, RedisSetTable, RedisStringTable, RedisZSetTable}, 
         state::RedisTableType
-    };
+    };   
 
     #[test]
     fn test_redis_string_table() {
@@ -539,4 +541,5 @@ mod tests {
         assert_eq!(string_table.data_len(Some(&string_filtered)), 1);
         assert_eq!(string_table.get_row(0, Some(&string_filtered)), Some(vec!["filtered_value".to_string()]));
     }
+
 }
