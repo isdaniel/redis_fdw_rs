@@ -1,6 +1,10 @@
 use redis::Commands;
 
-use crate::redis_fdw::tables::interface::RedisTableOperations;
+use crate::redis_fdw::{
+    tables::interface::RedisTableOperations,
+    pushdown::{PushableCondition, ComparisonOperator}
+};
+
 /// Redis String table type
 #[derive(Debug, Clone, Default)]
 pub struct RedisStringTable {
@@ -14,20 +18,53 @@ impl RedisStringTable {
 }
 
 impl RedisTableOperations for RedisStringTable {
-    fn load_data(&mut self, conn: &mut redis::Connection, key_prefix: &str) -> Result<(), redis::RedisError> {
-        self.data = conn.get( key_prefix)?;
-        Ok(())
+    fn load_data(&mut self, conn: &mut redis::Connection, key_prefix: &str, conditions: Option<&[PushableCondition]>) -> Result<Option<Vec<String>>, redis::RedisError> {
+        if let Some(conditions) = conditions {
+            if let Some(condition) = conditions.first() {
+                // String tables can only be checked for exact value match
+                let value: Option<String> = redis::cmd("GET")
+                    .arg(key_prefix)
+                    .query(conn)?;
+                
+                return if let Some(v) = value {
+                    if v == condition.value {
+                        Ok(Some(vec![v]))
+                    } else {
+                        Ok(Some(vec![]))
+                    }
+                } else {
+                    Ok(Some(vec![]))
+                };
+            }
+        }
+
+        // Load all data into internal storage
+        self.data = conn.get(key_prefix)?;
+        Ok(None)
     }
     
-    fn data_len(&self) -> usize {
-        if self.data.is_some() { 1 } else { 0 }
-    }
-    
-    fn get_row(&self, index: usize) -> Option<Vec<String>> {
-        if index == 0 && self.data.is_some() {
-            Some(vec![self.data.as_ref().unwrap().clone()])
+    fn data_len(&self, filtered_data: Option<&[String]>) -> usize {
+        if let Some(filtered_data) = filtered_data {
+            if filtered_data.is_empty() { 0 } else { 1 }
         } else {
-            None
+            if self.data.is_some() { 1 } else { 0 }
+        }
+    }
+    
+    fn get_row(&self, index: usize, filtered_data: Option<&[String]>) -> Option<Vec<String>> {
+        if let Some(filtered_data) = filtered_data {
+            // String data is stored as [value]
+            if index == 0 && !filtered_data.is_empty() {
+                Some(vec![filtered_data[0].clone()])
+            } else {
+                None
+            }
+        } else {
+            if index == 0 && self.data.is_some() {
+                Some(vec![self.data.as_ref().unwrap().clone()])
+            } else {
+                None
+            }
         }
     }
     
@@ -51,5 +88,9 @@ impl RedisTableOperations for RedisStringTable {
             self.data = Some(value.clone());
         }
         Ok(())
+    }
+
+    fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
+        matches!(operator, ComparisonOperator::Equal)
     }
 }

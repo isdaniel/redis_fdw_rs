@@ -10,7 +10,7 @@ A high-performance Redis Foreign Data Wrapper (FDW) for PostgreSQL written in Ru
 - **Supported operations**: SELECT, INSERT, UPDATE, DELETE (with improved error handling)
 - **Connection management** and memory optimization
 - **Built with Rust** for memory safety and performance
-- **Modular architecture** with organized table type implementations
+- **Unified trait interface** providing consistent behavior across all Redis table types
 - **Enhanced error handling** for robust foreign data operations
 - **Compatible with PostgreSQL 14-17**
 
@@ -267,7 +267,31 @@ INSERT INTO redis_list_table VALUES
 | ZSet       | ✅     | ✅     | 🚧     | ✅     | **Partial** (UPDATE in progress) |
 | String     | ✅     | ✅     | 🚧     | ✅     | **Partial** (UPDATE in progress) |
 
-## Recent Changes (v0.2.0)
+## Recent Changes (v0.3.0)
+
+### 🏗️ Major Object-Oriented Refactoring
+- **Complete architectural restructuring** with object-oriented design principles
+- **Unified trait interface**: All Redis table types now implement a consistent `RedisTableOperations` trait
+- **Method consolidation**: Eliminated duplicate methods by merging similar functionality:
+  - `load_data_with_pushdown` + `load_data` → **unified `load_data`** (with optional pushdown conditions)
+  - `get_row_from_filtered_data` + `get_row` → **unified `get_row`** (with optional filtered data)
+  - `filtered_data_len` + `data_len` → **unified `data_len`** (with optional filtered data)
+
+### Enhanced Code Organization
+- **Encapsulated table-specific logic**: Each Redis table type now manages its own optimization strategies
+- **Simplified state management**: The `state.rs` file now delegates to table implementations instead of containing type-specific logic
+- **Consistent interface**: All table operations follow the same pattern with optional parameters for flexibility
+- **Better maintainability**: Reduced code duplication and improved separation of concerns
+
+### Performance Optimizations
+- **Table-specific optimizations**: Each table type can implement its own optimization strategies:
+  - Hash tables: HGET/HMGET optimizations for field-specific queries
+  - Set tables: SISMEMBER for membership testing
+  - String tables: Direct value access without unnecessary transfers
+- **Unified pushdown logic**: Consolidated pushdown optimization handling across all table types
+- **Memory efficiency**: Improved memory allocation and data handling patterns
+
+## Previous Changes (v0.2.0)
 
 ### Code Restructuring
 - **Modular Architecture**: Reorganized Redis table implementations into a dedicated `tables/` module
@@ -305,16 +329,17 @@ src/
 ├── redis_fdw/
 │   ├── handlers.rs          # PostgreSQL FDW handler functions
 │   ├── mod.rs              # Main module definition
+│   ├── pushdown.rs         # WHERE clause pushdown logic and conditions
 │   ├── state.rs            # FDW state management
 │   ├── table_type_tests.rs # Unit tests for table types
 │   ├── tests.rs            # Integration tests
-│   └── tables/             # 📁 Redis table implementations
+│   └── tables/             # 📁 Redis table implementations (OOP architecture)
 │       ├── mod.rs          # Table module exports
-│       ├── interface.rs    # Common trait definitions
-│       ├── redis_hash_table.rs    # Hash table implementation
+│       ├── interface.rs    # 🆕 RedisTableOperations trait definition
+│       ├── redis_hash_table.rs    # Hash table implementation + optimizations
 │       ├── redis_list_table.rs    # List table implementation
-│       ├── redis_set_table.rs     # Set table implementation
-│       ├── redis_string_table.rs  # String table implementation
+│       ├── redis_set_table.rs     # Set table implementation + optimizations
+│       ├── redis_string_table.rs  # String table implementation + optimizations
 │       └── redis_zset_table.rs    # Sorted set implementation
 └── utils_share/            # Shared utilities
     ├── cell.rs             # Data cell types
@@ -322,6 +347,13 @@ src/
     ├── row.rs              # Row operations
     └── utils.rs            # General utilities
 ```
+
+### OOP Architecture Benefits
+- **Unified Interface**: All table types implement the same `RedisTableOperations` trait
+- **Encapsulation**: Each table type manages its own data structures and optimization logic
+- **Extensibility**: Easy to add new Redis data types by implementing the trait
+- **Maintainability**: Clear separation between table-specific logic and generic FDW operations
+- **Code Reuse**: Common patterns are shared through the trait interface
 
 ### Building from Source
 ```bash
@@ -353,6 +385,53 @@ cargo pgrx test pg16
 ```
 
 See [TESTING.md](TESTING.md) for detailed testing documentation.
+
+## Architecture Overview
+
+### Object-Oriented Design
+
+The Redis FDW now follows a clean object-oriented architecture with the following key components:
+
+#### `RedisTableOperations` Trait
+All Redis table types implement this unified interface providing:
+- **`load_data()`**: Unified data loading with optional pushdown conditions
+- **`data_len()`**: Length calculation with optional filtered data support
+- **`get_row()`**: Row retrieval with optional filtered data support
+- **`insert()`**, **`delete()`**, **`update()`**: CRUD operations
+- **`supports_pushdown()`**: Pushdown capability checking
+
+#### Table Type Implementations
+Each Redis data type has its own specialized implementation:
+- **`RedisHashTable`**: Optimized for HGET/HMGET operations
+- **`RedisListTable`**: Handles ordered element collections
+- **`RedisSetTable`**: Optimized for SISMEMBER operations
+- **`RedisStringTable`**: Direct value access optimization
+- **`RedisZsetTable`**: Scored set operations
+
+#### Unified Method Interface
+The refactoring consolidated similar methods:
+```rust
+// Before: Multiple similar methods
+load_data_with_pushdown() + load_data()
+get_row_from_filtered_data() + get_row()  
+filtered_data_len() + data_len()
+
+// After: Unified methods with optional parameters
+load_data(conditions: Option<&[PushableCondition]>)
+get_row(index: usize, filtered_data: Option<&[String]>)
+data_len(filtered_data: Option<&[String]>)
+```
+
+#### State Management Simplification
+The `RedisFdwState` now uses clean delegation:
+```rust
+// Simplified delegation pattern
+match &mut self.table_type {
+    RedisTableType::Hash(table) => table.load_data(conn, key_prefix, conditions),
+    RedisTableType::List(table) => table.load_data(conn, key_prefix, conditions),
+    // ... etc
+}
+```
 
 ## Performance Considerations
 
@@ -420,6 +499,10 @@ Look for log messages starting with `---> redis_fdw` to trace execution.
 ## Roadmap
 
 ### Recently Completed ✅
+- ✅ **Object-oriented architecture refactoring** with unified trait interface
+- ✅ **Method consolidation** eliminating duplicate functionality 
+- ✅ **Enhanced encapsulation** with table-specific optimization logic
+- ✅ **Simplified state management** using clean delegation patterns
 - ✅ Code restructuring and modular architecture
 - ✅ Enhanced error handling for DELETE operations
 - ✅ Implementation of SELECT and INSERT operations for all Redis data types

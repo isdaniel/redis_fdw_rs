@@ -2,14 +2,13 @@
 /// This module provides functionality to analyze WHERE clauses and push down
 /// supported conditions to Redis for better performance.
 
-use std::collections::HashMap;
 use pgrx::{prelude::*, pg_sys};
-use crate::redis_fdw::state::RedisTableType;
+use crate::{redis_fdw::state::RedisTableType, utils_share::cell::Cell};
 
 /// Represents a pushable condition from WHERE clause
 #[derive(Debug, Clone)]
 pub struct PushableCondition {
-    pub column_name: String,
+    pub column_name: String, 
     pub operator: ComparisonOperator,
     pub value: String,
 }
@@ -227,7 +226,6 @@ impl WhereClausePushdown {
             Self::extract_column_name(left_arg),
             Self::extract_constant_value(right_arg),
         ) {
-            info!("Extracted column: {}, value: {}", column, value);
             return Some((column, value));
         }
 
@@ -284,36 +282,7 @@ impl WhereClausePushdown {
 
                 // Convert datum to string based on type
                 // This is simplified - in practice, you'd need proper type handling
-                match const_ref.consttype {
-                    pg_sys::TEXTOID => {
-                        // Handle text values
-                        if let Some(text_val) = String::from_datum(const_ref.constvalue, false) {
-                            Some(text_val)
-                        } else {
-                            None
-                        }
-                    }
-                    pg_sys::INT4OID => {
-                        // Handle integer values
-                        if let Some(int_val) = i32::from_datum(const_ref.constvalue, false) {
-                            Some(int_val.to_string())
-                        } else {
-                            None
-                        }
-                    }
-                    pg_sys::FLOAT8OID => {
-                        // Handle float values
-                        if let Some(float_val) = f64::from_datum(const_ref.constvalue, false) {
-                            Some(float_val.to_string())
-                        } else {
-                            None
-                        }
-                    }
-                    _ => {
-                        // For other types, try to convert to string
-                        Some(format!("unknown_type_{}", const_ref.consttype))
-                    }
-                }
+                Cell::from_polymorphic_datum(const_ref.constvalue, const_ref.constisnull, const_ref.consttype).map(|val| val.to_string())
             }
             _ => None,
         }
@@ -364,245 +333,7 @@ impl WhereClausePushdown {
         operator: &ComparisonOperator,
         table_type: &RedisTableType,
     ) -> bool {
-        match table_type {
-            RedisTableType::Hash(_) => {
-                matches!(operator, ComparisonOperator::Equal | ComparisonOperator::In)
-            }
-            RedisTableType::List(_) => {
-                matches!(operator, ComparisonOperator::Equal | ComparisonOperator::Like)
-            }
-            RedisTableType::Set(_) => {
-                matches!(operator, ComparisonOperator::Equal | ComparisonOperator::In)
-            }
-            RedisTableType::ZSet(_) => {
-                matches!(operator, ComparisonOperator::Equal | ComparisonOperator::In)
-            }
-            RedisTableType::String(_) => {
-                matches!(operator, ComparisonOperator::Equal)
-            }
-            RedisTableType::None => false,
-        }
+        table_type.supports_pushdown(operator)
     }
 
-    /// Apply pushdown conditions to Redis query
-    pub fn apply_pushdown_to_redis(
-        conditions: &[PushableCondition],
-        table_type: &RedisTableType,
-        conn: &mut redis::Connection,
-        key_prefix: &str,
-    ) -> Result<Vec<String>, redis::RedisError> {
-        if conditions.is_empty() {
-            // No conditions to push down, load all data
-            return Self::load_all_data(table_type, conn, key_prefix);
-        }
-        
-        match table_type {
-            RedisTableType::Hash(_) => {
-                Self::apply_hash_pushdown(conditions, conn, key_prefix)
-            }
-            RedisTableType::List(_) => {
-                Self::apply_list_pushdown(conditions, conn, key_prefix)
-            }
-            RedisTableType::Set(_) => {
-                Self::apply_set_pushdown(conditions, conn, key_prefix)
-            }
-            RedisTableType::ZSet(_) => {
-                Self::apply_zset_pushdown(conditions, conn, key_prefix)
-            }
-            RedisTableType::String(_) => {
-                Self::apply_string_pushdown(conditions, conn, key_prefix)
-            }
-            RedisTableType::None => Ok(vec![]),
-        }
-    }
-
-    /// Load all data when no pushdown is possible
-    fn load_all_data(
-        table_type: &RedisTableType,
-        conn: &mut redis::Connection,
-        key_prefix: &str,
-    ) -> Result<Vec<String>, redis::RedisError> {
-        match table_type {
-            RedisTableType::Hash(_) => {
-                let hash_data: HashMap<String, String> = redis::cmd("HGETALL")
-                    .arg(key_prefix)
-                    .query(conn)?;
-                Ok(hash_data.into_iter()
-                    .flat_map(|(k, v)| vec![k, v])
-                    .collect())
-            }
-            RedisTableType::List(_) => {
-                let list_data: Vec<String> = redis::cmd("LRANGE")
-                    .arg(key_prefix)
-                    .arg(0)
-                    .arg(-1)
-                    .query(conn)?;
-                Ok(list_data)
-            }
-            RedisTableType::Set(_) => {
-                let set_data: Vec<String> = redis::cmd("SMEMBERS")
-                    .arg(key_prefix)
-                    .query(conn)?;
-                Ok(set_data)
-            }
-            RedisTableType::ZSet(_) => {
-                let zset_data: Vec<String> = redis::cmd("ZRANGE")
-                    .arg(key_prefix)
-                    .arg(0)
-                    .arg(-1)
-                    .arg("WITHSCORES")
-                    .query(conn)?;
-                Ok(zset_data)
-            }
-            RedisTableType::String(_) => {
-                let string_data: Option<String> = redis::cmd("GET")
-                    .arg(key_prefix)
-                    .query(conn)?;
-                Ok(string_data.map(|s| vec![s]).unwrap_or_default())
-            }
-            RedisTableType::None => Ok(vec![]),
-        }
-    }
-
-    /// Apply pushdown for hash tables
-    fn apply_hash_pushdown(
-        conditions: &[PushableCondition],
-        conn: &mut redis::Connection,
-        key_prefix: &str,
-    ) -> Result<Vec<String>, redis::RedisError> {
-        // For hash tables, we can optimize field-specific queries
-        for condition in conditions {
-            match condition.operator {
-                ComparisonOperator::Equal => {
-                    let value: Option<String> = redis::cmd("HGET")
-                        .arg(key_prefix)
-                        .arg(&condition.value)
-                        .query(conn)?;
-
-                    return if let Some(v) = value {
-                        Ok(vec![condition.value.clone(), v])
-                    } else {
-                        Ok(vec![])
-                    };
-                }
-                ComparisonOperator::In => {
-                    // HMGET for multiple fields
-                    let fields: Vec<&str> = condition.value.split(',').collect();
-                    let values: Vec<Option<String>> = redis::cmd("HMGET")
-                        .arg(key_prefix)
-                        .arg(&fields)
-                        .query(conn)?;
-                    
-                    let mut result = Vec::new();
-                    for (i, value) in values.iter().enumerate() {
-                        if let Some(v) = value {
-                            result.push(fields[i].to_string());
-                            result.push(v.clone());
-                        }
-                    }
-                    return Ok(result);
-                }
-                _ => {} // Fall back to full scan
-            }
-        }
-
-        // Fall back to loading all data
-        Self::load_all_data(&RedisTableType::Hash(Default::default()), conn, key_prefix)
-    }
-
-    /// Apply pushdown for list tables
-    fn apply_list_pushdown(
-        _conditions: &[PushableCondition],
-        conn: &mut redis::Connection,
-        key_prefix: &str,
-    ) -> Result<Vec<String>, redis::RedisError> {
-        // Lists don't have efficient filtering in Redis
-        // Fall back to loading all data
-        Self::load_all_data(&RedisTableType::List(Default::default()), conn, key_prefix)
-    }
-
-    /// Apply pushdown for set tables
-    fn apply_set_pushdown(
-        conditions: &[PushableCondition],
-        conn: &mut redis::Connection,
-        key_prefix: &str,
-    ) -> Result<Vec<String>, redis::RedisError> {
-        // For sets, we can check membership efficiently
-        for condition in conditions {
-            match condition.operator {
-                ComparisonOperator::Equal => {
-                    // SISMEMBER for specific member
-                    let exists: bool = redis::cmd("SISMEMBER")
-                        .arg(key_prefix)
-                        .arg(&condition.value)
-                        .query(conn)?;
-                    
-                    return if exists {
-                        Ok(vec![condition.value.clone()])
-                    } else {
-                        Ok(vec![])
-                    };
-                }
-                ComparisonOperator::In => {
-                    // Check multiple members
-                    let members: Vec<&str> = condition.value.split(',').collect();
-                    let mut result = Vec::new();
-                    
-                    for member in members {
-                        let exists: bool = redis::cmd("SISMEMBER")
-                            .arg(key_prefix)
-                            .arg(member)
-                            .query(conn)?;
-                        
-                        if exists {
-                            result.push(member.to_string());
-                        }
-                    }
-                    return Ok(result);
-                }
-                _ => {} // Fall back to full scan
-            }
-        }
-
-        // Fall back to loading all data
-        Self::load_all_data(&RedisTableType::Set(Default::default()), conn, key_prefix)
-    }
-
-    /// Apply pushdown for sorted set tables
-    fn apply_zset_pushdown(
-        _conditions: &[PushableCondition],
-        conn: &mut redis::Connection,
-        key_prefix: &str,
-    ) -> Result<Vec<String>, redis::RedisError> {
-        // ZSets could support score-based range queries
-        // For now, fall back to loading all data
-        Self::load_all_data(&RedisTableType::ZSet(Default::default()), conn, key_prefix)
-    }
-
-    /// Apply pushdown for string tables
-    fn apply_string_pushdown(
-        conditions: &[PushableCondition],
-        conn: &mut redis::Connection,
-        key_prefix: &str,
-    ) -> Result<Vec<String>, redis::RedisError> {
-        // String tables can only be checked for exact value match
-        for condition in conditions {
-            let value: Option<String> = redis::cmd("GET")
-                .arg(key_prefix)
-                .query(conn)?;
-            
-            return if let Some(v) = value {
-                if v == condition.value {
-                    Ok(vec![v])
-                } else {
-                    Ok(vec![])
-                }
-            } else {
-                Ok(vec![])
-            };
-        }
-
-        // Fall back to loading all data
-        Self::load_all_data(&RedisTableType::String(Default::default()), conn, key_prefix)
-    }
 }

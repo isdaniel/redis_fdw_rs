@@ -3,7 +3,7 @@
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema] 
 mod tests {
-    use crate::redis_fdw::{tables::{RedisTableOperations, RedisHashTable, RedisListTable}, state::*};
+    use crate::redis_fdw::{tables::{RedisTableOperations, RedisHashTable, RedisListTable}, state::RedisTableType};
 
     // #[test]
     // fn test_redis_string_table() {
@@ -27,7 +27,7 @@ mod tests {
         let mut hash_table = RedisHashTable::new();
         
         // Initially empty
-        assert_eq!(hash_table.data_len(), 0);
+        assert_eq!(hash_table.data_len(None), 0);
         
         // Add some data
         hash_table.data = vec![
@@ -37,11 +37,11 @@ mod tests {
         ];
         
         // Check data
-        assert_eq!(hash_table.data_len(), 3);
-        assert_eq!(hash_table.get_row(0), Some(vec!["name".to_string(), "John".to_string()]));
-        assert_eq!(hash_table.get_row(1), Some(vec!["age".to_string(), "30".to_string()]));
-        assert_eq!(hash_table.get_row(2), Some(vec!["city".to_string(), "New York".to_string()]));
-        assert_eq!(hash_table.get_row(3), None);
+        assert_eq!(hash_table.data_len(None), 3);
+        assert_eq!(hash_table.get_row(0, None), Some(vec!["name".to_string(), "John".to_string()]));
+        assert_eq!(hash_table.get_row(1, None), Some(vec!["age".to_string(), "30".to_string()]));
+        assert_eq!(hash_table.get_row(2, None), Some(vec!["city".to_string(), "New York".to_string()]));
+        assert_eq!(hash_table.get_row(3, None), None);
     }
 
     #[test]
@@ -49,7 +49,7 @@ mod tests {
         let mut list_table = RedisListTable::new();
         
         // Initially empty
-        assert_eq!(list_table.data_len(), 0);
+        assert_eq!(list_table.data_len(None), 0);
         
         // Add some data
         list_table.data = vec![
@@ -59,11 +59,11 @@ mod tests {
         ];
         
         // Check data
-        assert_eq!(list_table.data_len(), 3);
-        assert_eq!(list_table.get_row(0), Some(vec!["apple".to_string()]));
-        assert_eq!(list_table.get_row(1), Some(vec!["banana".to_string()]));
-        assert_eq!(list_table.get_row(2), Some(vec!["cherry".to_string()]));
-        assert_eq!(list_table.get_row(3), None);
+        assert_eq!(list_table.data_len(None), 3);
+        assert_eq!(list_table.get_row(0, None), Some(vec!["apple".to_string()]));
+        assert_eq!(list_table.get_row(1, None), Some(vec!["banana".to_string()]));
+        assert_eq!(list_table.get_row(2, None), Some(vec!["cherry".to_string()]));
+        assert_eq!(list_table.get_row(3, None), None);
     }
 
     // #[test]
@@ -146,17 +146,17 @@ mod tests {
         let zset_type = RedisTableType::from_str("zset");
         
         // All should start with zero length
-        assert_eq!(string_type.data_len(), 0);
-        assert_eq!(hash_type.data_len(), 0);
-        assert_eq!(list_type.data_len(), 0);
-        assert_eq!(set_type.data_len(), 0);
-        assert_eq!(zset_type.data_len(), 0);
+        assert_eq!(string_type.data_len(None), 0);
+        assert_eq!(hash_type.data_len(None), 0);
+        assert_eq!(list_type.data_len(None), 0);
+        assert_eq!(set_type.data_len(None), 0);
+        assert_eq!(zset_type.data_len(None), 0);
         
         // All should return None for get_row on empty data
-        assert_eq!(string_type.get_row(0), None);
-        assert_eq!(hash_type.get_row(0), None);
-        assert_eq!(list_type.get_row(0), None);
-        assert_eq!(set_type.get_row(0), None);
-        assert_eq!(zset_type.get_row(0), None);
+        assert_eq!(string_type.get_row(0, None), None);
+        assert_eq!(hash_type.get_row(0, None), None);
+        assert_eq!(list_type.get_row(0, None), None);
+        assert_eq!(set_type.get_row(0, None), None);
+        assert_eq!(zset_type.get_row(0, None), None);
     }
 }

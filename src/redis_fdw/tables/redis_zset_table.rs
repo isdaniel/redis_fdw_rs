@@ -1,6 +1,9 @@
 use redis::Commands;
 
-use crate::redis_fdw::tables::interface::RedisTableOperations;
+use crate::redis_fdw::{
+    tables::interface::RedisTableOperations,
+    pushdown::{PushableCondition, ComparisonOperator}
+};
 
 /// Redis Sorted Set table type
 #[derive(Debug, Clone, Default)]
@@ -15,18 +18,38 @@ impl RedisZSetTable {
 }
 
 impl RedisTableOperations for RedisZSetTable {
-    fn load_data(&mut self, conn: &mut redis::Connection, key_prefix: &str) -> Result<(), redis::RedisError> {
+    fn load_data(&mut self, conn: &mut redis::Connection, key_prefix: &str, _conditions: Option<&[PushableCondition]>) -> Result<Option<Vec<String>>, redis::RedisError> {
+        // ZSets could support score-based range queries in the future
+        // For now, fall back to loading all data
+        // Load all data into internal storage
         let result: Vec<(String, f64)> = conn.zrange_withscores(key_prefix, 0, -1)?;
         self.data = result;
-        Ok(())
+        Ok(None)
     }
     
-    fn data_len(&self) -> usize {
-        self.data.len()
+    fn data_len(&self, filtered_data: Option<&[String]>) -> usize {
+        if let Some(filtered_data) = filtered_data {
+            filtered_data.len() / 2 // member-score pairs
+        } else {
+            self.data.len()
+        }
     }
     
-    fn get_row(&self, index: usize) -> Option<Vec<String>> {
-        self.data.get(index).map(|(member, score)| vec![member.clone(), score.to_string()])
+    fn get_row(&self, index: usize, filtered_data: Option<&[String]>) -> Option<Vec<String>> {
+        if let Some(filtered_data) = filtered_data {
+            // ZSet data is stored as [member1, score1, member2, score2, ...]
+            let data_index = index * 2;
+            if data_index + 1 < filtered_data.len() {
+                Some(vec![
+                    filtered_data[data_index].clone(),
+                    filtered_data[data_index + 1].clone(),
+                ])
+            } else {
+                None
+            }
+        } else {
+            self.data.get(index).map(|(member, score)| vec![member.clone(), score.to_string()])
+        }
     }
     
     fn insert(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError> {
@@ -68,5 +91,9 @@ impl RedisTableOperations for RedisZSetTable {
         }
         self.insert(conn, key_prefix, new_data)?;
         Ok(())
+    }
+
+    fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
+        matches!(operator, ComparisonOperator::Equal | ComparisonOperator::In)
     }
 }

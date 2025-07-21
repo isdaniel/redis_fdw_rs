@@ -9,7 +9,7 @@ use crate::redis_fdw::{
         RedisStringTable, 
         RedisZSetTable
     },
-    pushdown::{PushdownAnalysis, WhereClausePushdown}
+    pushdown::PushdownAnalysis
 };
 
 
@@ -36,35 +36,35 @@ impl RedisTableType {
         }
     }
     
-    pub fn load_data(&mut self, conn: &mut redis::Connection, key_prefix: &str) -> Result<(), redis::RedisError> {
+    pub fn load_data(&mut self, conn: &mut redis::Connection, key_prefix: &str, conditions: Option<&[crate::redis_fdw::pushdown::PushableCondition]>) -> Result<Option<Vec<String>>, redis::RedisError> {
         match self {
-            RedisTableType::String(table) => table.load_data(conn, key_prefix),
-            RedisTableType::Hash(table) => table.load_data(conn, key_prefix),
-            RedisTableType::List(table) => table.load_data(conn, key_prefix),
-            RedisTableType::Set(table) => table.load_data(conn, key_prefix),
-            RedisTableType::ZSet(table) => table.load_data(conn, key_prefix),
-            RedisTableType::None => Ok(()),
+            RedisTableType::String(table) => table.load_data(conn, key_prefix, conditions),
+            RedisTableType::Hash(table) => table.load_data(conn, key_prefix, conditions),
+            RedisTableType::List(table) => table.load_data(conn, key_prefix, conditions),
+            RedisTableType::Set(table) => table.load_data(conn, key_prefix, conditions),
+            RedisTableType::ZSet(table) => table.load_data(conn, key_prefix, conditions),
+            RedisTableType::None => Ok(None),
         }
     }
     
-    pub fn data_len(&self) -> usize {
+    pub fn data_len(&self, filtered_data: Option<&[String]>) -> usize {
         match self {
-            RedisTableType::String(table) => table.data_len(),
-            RedisTableType::Hash(table) => table.data_len(),
-            RedisTableType::List(table) => table.data_len(),
-            RedisTableType::Set(table) => table.data_len(),
-            RedisTableType::ZSet(table) => table.data_len(),
+            RedisTableType::String(table) => table.data_len(filtered_data),
+            RedisTableType::Hash(table) => table.data_len(filtered_data),
+            RedisTableType::List(table) => table.data_len(filtered_data),
+            RedisTableType::Set(table) => table.data_len(filtered_data),
+            RedisTableType::ZSet(table) => table.data_len(filtered_data),
             RedisTableType::None => 0,
         }
     }
     
-    pub fn get_row(&self, index: usize) -> Option<Vec<String>> {
+    pub fn get_row(&self, index: usize, filtered_data: Option<&[String]>) -> Option<Vec<String>> {
         match self {
-            RedisTableType::String(table) => table.get_row(index),
-            RedisTableType::Hash(table) => table.get_row(index),
-            RedisTableType::List(table) => table.get_row(index),
-            RedisTableType::Set(table) => table.get_row(index),
-            RedisTableType::ZSet(table) => table.get_row(index),
+            RedisTableType::String(table) => table.get_row(index, filtered_data),
+            RedisTableType::Hash(table) => table.get_row(index, filtered_data),
+            RedisTableType::List(table) => table.get_row(index, filtered_data),
+            RedisTableType::Set(table) => table.get_row(index, filtered_data),
+            RedisTableType::ZSet(table) => table.get_row(index, filtered_data),
             RedisTableType::None => None,
         }
     }
@@ -99,6 +99,18 @@ impl RedisTableType {
             RedisTableType::Set(table) => table.update(conn, key_prefix, old_data, new_data),
             RedisTableType::ZSet(table) => table.update(conn, key_prefix, old_data, new_data),
             RedisTableType::None => Ok(()),
+        }
+    }
+
+    /// Check if this table type supports a specific pushdown operator
+    pub fn supports_pushdown(&self, operator: &crate::redis_fdw::pushdown::ComparisonOperator) -> bool {
+        match self {
+            RedisTableType::String(table) => table.supports_pushdown(operator),
+            RedisTableType::Hash(table) => table.supports_pushdown(operator),
+            RedisTableType::List(table) => table.supports_pushdown(operator),
+            RedisTableType::Set(table) => table.supports_pushdown(operator),
+            RedisTableType::ZSet(table) => table.supports_pushdown(operator),
+            RedisTableType::None => false,
         }
     }
 }
@@ -186,16 +198,19 @@ impl RedisFdwState {
         if let Some(conn) = self.redis_connection.as_mut() {
             if let Some(ref analysis) = self.pushdown_analysis {
                 if analysis.can_optimize {
-                    // Apply pushdown conditions
-                    match WhereClausePushdown::apply_pushdown_to_redis(
-                        &analysis.pushable_conditions,
-                        &self.table_type,
+                    // Apply pushdown conditions using the table type's unified method
+                    match self.table_type.load_data(
                         conn,
                         &self.table_key_prefix,
+                        Some(&analysis.pushable_conditions),
                     ) {
-                        Ok(filtered_data) => {
+                        Ok(Some(filtered_data)) => {
                             log!("Pushdown optimization applied, loaded {} filtered items", filtered_data.len());
                             self.filtered_data = Some(filtered_data);
+                            return;
+                        }
+                        Ok(None) => {
+                            log!("Data loaded into table internal storage");
                             return;
                         }
                         Err(e) => {
@@ -205,8 +220,8 @@ impl RedisFdwState {
                 }
             }
             
-            // Fall back to loading all data
-            let _ = self.table_type.load_data(conn, &self.table_key_prefix);
+            // Fall back to loading all data without pushdown
+            let _ = self.table_type.load_data(conn, &self.table_key_prefix, None);
         }
     }
 
@@ -224,15 +239,11 @@ impl RedisFdwState {
     pub fn data_len(&self) -> usize {
         // If we have filtered data from pushdown, use that
         if let Some(ref filtered_data) = self.filtered_data {
-            return match &self.table_type {
-                RedisTableType::Hash(_) => filtered_data.len() / 2, // key-value pairs
-                RedisTableType::ZSet(_) => filtered_data.len() / 2, // member-score pairs
-                _ => filtered_data.len(),
-            };
+            return self.table_type.data_len(Some(filtered_data));
         }
         
-        // Otherwise use table type's data
-        self.table_type.data_len()
+        // Otherwise use table type's data without filtered data
+        self.table_type.data_len(None)
     }
 
     /// Insert data using the appropriate table type
@@ -265,68 +276,12 @@ impl RedisFdwState {
     /// Get a row at the specified index
     pub fn get_row(&self, index: usize) -> Option<Vec<String>> {
         // If we have filtered data from pushdown, use that
-        
         if let Some(ref filtered_data) = self.filtered_data {
-            return self.get_row_from_filtered_data(filtered_data, index);
+            return self.table_type.get_row(index, Some(filtered_data));
         }
         
-        // Otherwise use table type's data
-        self.table_type.get_row(index)
-    }
-
-    /// Get a row from filtered data based on table type
-    fn get_row_from_filtered_data(&self, filtered_data: &[String], index: usize) -> Option<Vec<String>> {
-        match &self.table_type {
-            RedisTableType::Hash(_) => {
-                // Hash data is stored as [key1, value1, key2, value2, ...]
-                let data_index = index * 2;
-                if data_index + 1 < filtered_data.len() {
-                    Some(vec![
-                        filtered_data[data_index].clone(),
-                        filtered_data[data_index + 1].clone(),
-                    ])
-                } else {
-                    None
-                }
-            }
-            RedisTableType::List(_) => {
-                // List data is stored as [element1, element2, ...]
-                if index < filtered_data.len() {
-                    Some(vec![filtered_data[index].clone()])
-                } else {
-                    None
-                }
-            }
-            RedisTableType::Set(_) => {
-                // Set data is stored as [member1, member2, ...]
-                if index < filtered_data.len() {
-                    Some(vec![filtered_data[index].clone()])
-                } else {
-                    None
-                }
-            }
-            RedisTableType::ZSet(_) => {
-                // ZSet data is stored as [member1, score1, member2, score2, ...]
-                let data_index = index * 2;
-                if data_index + 1 < filtered_data.len() {
-                    Some(vec![
-                        filtered_data[data_index].clone(),
-                        filtered_data[data_index + 1].clone(),
-                    ])
-                } else {
-                    None
-                }
-            }
-            RedisTableType::String(_) => {
-                // String data is stored as [value]
-                if index == 0 && !filtered_data.is_empty() {
-                    Some(vec![filtered_data[0].clone()])
-                } else {
-                    None
-                }
-            }
-            RedisTableType::None => None,
-        }
+        // Otherwise use table type's data without filtered data
+        self.table_type.get_row(index, None)
     }
 }
 
