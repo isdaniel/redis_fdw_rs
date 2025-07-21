@@ -1,0 +1,19 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Attach to Postgres backend (PID)",
+            "type": "lldb",
+            "request": "attach",
+            "pid": "${input:backendPid}",
+            "sourceLanguages": ["rust"]
+        }
+    ],
+    "inputs": [
+        {
+            "id": "backendPid",
+            "type": "promptString",
+            "description": "Enter the Postgres backend PID to attach to"
+        }
+    ]
+}

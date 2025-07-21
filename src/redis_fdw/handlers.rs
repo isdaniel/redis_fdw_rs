@@ -112,12 +112,12 @@ unsafe extern "C-unwind" fn get_foreign_plan(
         scan_clauses,
         &state.table_type,
     );
-    
+    info!("Pushdown analysis result: {:?}", pushdown_analysis);
     if pushdown_analysis.can_optimize {
-        log!("WHERE clause pushdown enabled with {} pushable conditions", 
+        info!("WHERE clause pushdown enabled with {} pushable conditions", 
              pushdown_analysis.pushable_conditions.len());
     } else {
-        log!("No WHERE clause pushdown optimizations possible");
+        info!("No WHERE clause pushdown optimizations possible");
     }
     
     // Store the analysis in the state

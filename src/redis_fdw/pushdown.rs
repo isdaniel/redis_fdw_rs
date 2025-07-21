@@ -103,6 +103,9 @@ impl WhereClausePushdown {
             pg_sys::NodeTag::T_ScalarArrayOpExpr => {
                 Self::analyze_scalar_array_op_expr(node as *mut pg_sys::ScalarArrayOpExpr, table_type)
             }
+            pg_sys::NodeTag::T_RestrictInfo => {
+                Self::analyze_restrict_info(node as *mut pg_sys::RestrictInfo, table_type)
+            }
             _ => {
                 // Other expression types are not supported for pushdown yet
                 None
@@ -136,7 +139,7 @@ impl WhereClausePushdown {
         let operator = Self::get_operator_from_oid(op_expr.opno)?;
 
         // Check if this condition is suitable for the table type
-        if Self::is_condition_pushable(&column_name, &operator, table_type) {
+        if Self::is_condition_pushable( &operator, table_type) {
             Some(PushableCondition {
                 column_name,
                 operator,
@@ -145,6 +148,29 @@ impl WhereClausePushdown {
         } else {
             None
         }
+    }
+
+    /// Analyze restrict info nodes (wrapper around actual expressions)
+    unsafe fn analyze_restrict_info(
+        restrict_info: *mut pg_sys::RestrictInfo,
+        table_type: &RedisTableType,
+    ) -> Option<PushableCondition> {
+        if restrict_info.is_null() {
+            return None;
+        }
+
+        let restrict_info_ref = &*restrict_info;
+        
+        // RestrictInfo is a wrapper around the actual clause
+        // The actual expression is in the 'clause' field
+        let clause = restrict_info_ref.clause as *mut pg_sys::Node;
+        
+        if clause.is_null() {
+            return None;
+        }
+
+        // Recursively analyze the wrapped clause
+        Self::analyze_expression(clause, table_type)
     }
 
     /// Analyze scalar array operator expressions (IN, NOT IN)
@@ -180,7 +206,7 @@ impl WhereClausePushdown {
         // Join array values for storage
         let value = array_values.join(",");
 
-        if Self::is_condition_pushable(&column_name, &operator, table_type) {
+        if Self::is_condition_pushable(&operator, table_type) {
             Some(PushableCondition {
                 column_name,
                 operator,
@@ -201,6 +227,7 @@ impl WhereClausePushdown {
             Self::extract_column_name(left_arg),
             Self::extract_constant_value(right_arg),
         ) {
+            info!("Extracted column: {}, value: {}", column, value);
             return Some((column, value));
         }
 
@@ -311,8 +338,6 @@ impl WhereClausePushdown {
 
     /// Determine operator type from PostgreSQL operator OID
     pub unsafe fn get_operator_from_oid(op_oid: pg_sys::Oid) -> Option<ComparisonOperator> {
-        // These are common operator OIDs - you might need to look them up
-        // from pg_operator system catalog for more comprehensive support
         let oid_val = op_oid.to_u32();
         match oid_val {
             98 => Some(ComparisonOperator::Equal),     // text = text
@@ -336,34 +361,23 @@ impl WhereClausePushdown {
 
     /// Check if a condition can be pushed down for the given table type
     pub fn is_condition_pushable(
-        column_name: &str,
         operator: &ComparisonOperator,
         table_type: &RedisTableType,
     ) -> bool {
         match table_type {
             RedisTableType::Hash(_) => {
-                // Hash tables support key/field-based operations
-                matches!(column_name, "key" | "field" | "value") &&
                 matches!(operator, ComparisonOperator::Equal | ComparisonOperator::In)
             }
             RedisTableType::List(_) => {
-                // List tables support value-based operations
-                column_name == "element" &&
                 matches!(operator, ComparisonOperator::Equal | ComparisonOperator::Like)
             }
             RedisTableType::Set(_) => {
-                // Set tables support member-based operations
-                column_name == "member" &&
                 matches!(operator, ComparisonOperator::Equal | ComparisonOperator::In)
             }
             RedisTableType::ZSet(_) => {
-                // ZSet tables support member and score-based operations
-                matches!(column_name, "member" | "score") &&
                 matches!(operator, ComparisonOperator::Equal | ComparisonOperator::In)
             }
             RedisTableType::String(_) => {
-                // String tables support value-based operations
-                column_name == "value" &&
                 matches!(operator, ComparisonOperator::Equal)
             }
             RedisTableType::None => false,
@@ -381,7 +395,7 @@ impl WhereClausePushdown {
             // No conditions to push down, load all data
             return Self::load_all_data(table_type, conn, key_prefix);
         }
-
+        
         match table_type {
             RedisTableType::Hash(_) => {
                 Self::apply_hash_pushdown(conditions, conn, key_prefix)
@@ -458,40 +472,37 @@ impl WhereClausePushdown {
     ) -> Result<Vec<String>, redis::RedisError> {
         // For hash tables, we can optimize field-specific queries
         for condition in conditions {
-            if condition.column_name == "key" || condition.column_name == "field" {
-                match condition.operator {
-                    ComparisonOperator::Equal => {
-                        // HGET for specific field
-                        let value: Option<String> = redis::cmd("HGET")
-                            .arg(key_prefix)
-                            .arg(&condition.value)
-                            .query(conn)?;
-                        
-                        return if let Some(v) = value {
-                            Ok(vec![condition.value.clone(), v])
-                        } else {
-                            Ok(vec![])
-                        };
-                    }
-                    ComparisonOperator::In => {
-                        // HMGET for multiple fields
-                        let fields: Vec<&str> = condition.value.split(',').collect();
-                        let values: Vec<Option<String>> = redis::cmd("HMGET")
-                            .arg(key_prefix)
-                            .arg(&fields)
-                            .query(conn)?;
-                        
-                        let mut result = Vec::new();
-                        for (i, value) in values.iter().enumerate() {
-                            if let Some(v) = value {
-                                result.push(fields[i].to_string());
-                                result.push(v.clone());
-                            }
-                        }
-                        return Ok(result);
-                    }
-                    _ => {} // Fall back to full scan
+            match condition.operator {
+                ComparisonOperator::Equal => {
+                    let value: Option<String> = redis::cmd("HGET")
+                        .arg(key_prefix)
+                        .arg(&condition.value)
+                        .query(conn)?;
+
+                    return if let Some(v) = value {
+                        Ok(vec![condition.value.clone(), v])
+                    } else {
+                        Ok(vec![])
+                    };
                 }
+                ComparisonOperator::In => {
+                    // HMGET for multiple fields
+                    let fields: Vec<&str> = condition.value.split(',').collect();
+                    let values: Vec<Option<String>> = redis::cmd("HMGET")
+                        .arg(key_prefix)
+                        .arg(&fields)
+                        .query(conn)?;
+                    
+                    let mut result = Vec::new();
+                    for (i, value) in values.iter().enumerate() {
+                        if let Some(v) = value {
+                            result.push(fields[i].to_string());
+                            result.push(v.clone());
+                        }
+                    }
+                    return Ok(result);
+                }
+                _ => {} // Fall back to full scan
             }
         }
 
@@ -518,40 +529,38 @@ impl WhereClausePushdown {
     ) -> Result<Vec<String>, redis::RedisError> {
         // For sets, we can check membership efficiently
         for condition in conditions {
-            if condition.column_name == "member" {
-                match condition.operator {
-                    ComparisonOperator::Equal => {
-                        // SISMEMBER for specific member
+            match condition.operator {
+                ComparisonOperator::Equal => {
+                    // SISMEMBER for specific member
+                    let exists: bool = redis::cmd("SISMEMBER")
+                        .arg(key_prefix)
+                        .arg(&condition.value)
+                        .query(conn)?;
+                    
+                    return if exists {
+                        Ok(vec![condition.value.clone()])
+                    } else {
+                        Ok(vec![])
+                    };
+                }
+                ComparisonOperator::In => {
+                    // Check multiple members
+                    let members: Vec<&str> = condition.value.split(',').collect();
+                    let mut result = Vec::new();
+                    
+                    for member in members {
                         let exists: bool = redis::cmd("SISMEMBER")
                             .arg(key_prefix)
-                            .arg(&condition.value)
+                            .arg(member)
                             .query(conn)?;
                         
-                        return if exists {
-                            Ok(vec![condition.value.clone()])
-                        } else {
-                            Ok(vec![])
-                        };
-                    }
-                    ComparisonOperator::In => {
-                        // Check multiple members
-                        let members: Vec<&str> = condition.value.split(',').collect();
-                        let mut result = Vec::new();
-                        
-                        for member in members {
-                            let exists: bool = redis::cmd("SISMEMBER")
-                                .arg(key_prefix)
-                                .arg(member)
-                                .query(conn)?;
-                            
-                            if exists {
-                                result.push(member.to_string());
-                            }
+                        if exists {
+                            result.push(member.to_string());
                         }
-                        return Ok(result);
                     }
-                    _ => {} // Fall back to full scan
+                    return Ok(result);
                 }
+                _ => {} // Fall back to full scan
             }
         }
 
@@ -578,21 +587,19 @@ impl WhereClausePushdown {
     ) -> Result<Vec<String>, redis::RedisError> {
         // String tables can only be checked for exact value match
         for condition in conditions {
-            if condition.column_name == "value" && condition.operator == ComparisonOperator::Equal {
-                let value: Option<String> = redis::cmd("GET")
-                    .arg(key_prefix)
-                    .query(conn)?;
-                
-                return if let Some(v) = value {
-                    if v == condition.value {
-                        Ok(vec![v])
-                    } else {
-                        Ok(vec![])
-                    }
+            let value: Option<String> = redis::cmd("GET")
+                .arg(key_prefix)
+                .query(conn)?;
+            
+            return if let Some(v) = value {
+                if v == condition.value {
+                    Ok(vec![v])
                 } else {
                     Ok(vec![])
-                };
-            }
+                }
+            } else {
+                Ok(vec![])
+            };
         }
 
         // Fall back to loading all data

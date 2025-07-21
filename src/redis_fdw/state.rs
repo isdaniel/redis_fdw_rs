@@ -218,7 +218,7 @@ impl RedisFdwState {
     }
     
     pub fn is_read_end(&self) -> bool {
-        self.row_count >= self.table_type.data_len() as u32
+        self.row_count >= self.data_len() as u32
     }
 
     pub fn data_len(&self) -> usize {
@@ -265,6 +265,7 @@ impl RedisFdwState {
     /// Get a row at the specified index
     pub fn get_row(&self, index: usize) -> Option<Vec<String>> {
         // If we have filtered data from pushdown, use that
+        
         if let Some(ref filtered_data) = self.filtered_data {
             return self.get_row_from_filtered_data(filtered_data, index);
         }

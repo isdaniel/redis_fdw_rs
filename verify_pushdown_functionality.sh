@@ -85,23 +85,18 @@ impl WhereClausePushdown {
     ) -> bool {
         match table_type {
             RedisTableType::Hash(_) => {
-                matches!(column_name, "key" | "field" | "value") &&
                 matches!(operator, ComparisonOperator::Equal | ComparisonOperator::In)
             }
             RedisTableType::Set(_) => {
-                column_name == "member" &&
                 matches!(operator, ComparisonOperator::Equal | ComparisonOperator::In)
             }
             RedisTableType::String(_) => {
-                column_name == "value" &&
                 matches!(operator, ComparisonOperator::Equal)
             }
             RedisTableType::List(_) => {
-                column_name == "element" &&
                 matches!(operator, ComparisonOperator::Equal | ComparisonOperator::Like)
             }
             RedisTableType::ZSet(_) => {
-                matches!(column_name, "member" | "score") &&
                 matches!(operator, ComparisonOperator::Equal | ComparisonOperator::In)
             }
             RedisTableType::None => false,
