@@ -78,7 +78,7 @@ impl WhereClausePushdown {
 
         let list_length = pg_sys::list_length(scan_clauses);
         for i in 0..list_length {
-            let node = pg_sys::list_nth(scan_clauses, i as i32) as *mut pg_sys::Node;
+            let node = pg_sys::list_nth(scan_clauses, i) as *mut pg_sys::Node;
             if !node.is_null() {
                 clauses.push(node);
             }
@@ -242,7 +242,7 @@ impl WhereClausePushdown {
 
                 for i in 0..list_length {
                     let elem_node =
-                        pg_sys::list_nth(array_expr_ref.elements, i as i32) as *mut pg_sys::Node;
+                        pg_sys::list_nth(array_expr_ref.elements, i) as *mut pg_sys::Node;
                     if !elem_node.is_null() {
                         if let Some(value) = Self::extract_constant_value(elem_node) {
                             result.push(value);

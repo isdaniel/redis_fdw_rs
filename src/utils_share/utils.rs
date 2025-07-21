@@ -204,8 +204,8 @@ pub unsafe fn get_datum(value_str: &str, typid: Oid) -> Datum {
     let mut finfo = FmgrInfo::default();
     getTypeInputInfo(typid, &mut typeinput, &mut typeioparam);
     fmgr_info(typeinput, &mut finfo);
-    let res = InputFunctionCall(&mut finfo, c_value.as_ptr().cast_mut(), typeioparam, -1);
-    res
+    
+    InputFunctionCall(&mut finfo, c_value.as_ptr().cast_mut(), typeioparam, -1)
 }
 
 pub unsafe fn pg_list_to_rust_list<'a, T: list::Enlist>(
@@ -332,6 +332,6 @@ pub unsafe fn exec_get_junk_attribute(
     }
 
     // Get the value and null flag
-    *is_null = *slot.tts_isnull.offset((attno_usize - 1) as isize);
-    *slot.tts_values.offset((attno_usize - 1) as isize)
+    *is_null = *slot.tts_isnull.add(attno_usize - 1);
+    *slot.tts_values.add(attno_usize - 1)
 }

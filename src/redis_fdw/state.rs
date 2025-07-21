@@ -192,7 +192,7 @@ impl RedisFdwState {
         if let Some(db_str) = self.opts.get("database") {
             self.database = db_str
                 .parse::<i64>()
-                .unwrap_or_else(|_| panic!("Invalid `database` value: {}", db_str));
+                .unwrap_or_else(|_| panic!("Invalid `database` value: {db_str}"));
         }
 
         if let Some(prefix) = self.opts.get("table_key_prefix") {

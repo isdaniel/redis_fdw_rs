@@ -53,12 +53,10 @@ impl RedisTableOperations for RedisStringTable {
             } else {
                 1
             }
+        } else if self.data.is_some() {
+            1
         } else {
-            if self.data.is_some() {
-                1
-            } else {
-                0
-            }
+            0
         }
     }
 
@@ -70,12 +68,10 @@ impl RedisTableOperations for RedisStringTable {
             } else {
                 None
             }
+        } else if index == 0 && self.data.is_some() {
+            Some(vec![self.data.as_ref().unwrap().clone()])
         } else {
-            if index == 0 && self.data.is_some() {
-                Some(vec![self.data.as_ref().unwrap().clone()])
-            } else {
-                None
-            }
+            None
         }
     }
 

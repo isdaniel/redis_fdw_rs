@@ -262,7 +262,7 @@ unsafe extern "C-unwind" fn plan_foreign_modify(
     let ctx_name = format!("Wrappers_modify_{}", ftable_id.to_u32());
     let ctx = create_wrappers_memctx(&ctx_name);
     let mut state: RedisFdwState = RedisFdwState::new(ctx);
-    return PgMemoryContexts::For(state.tmp_ctx).switch_to(|_| {
+    PgMemoryContexts::For(state.tmp_ctx).switch_to(|_| {
         let opts = get_foreign_table_options(ftable_id);
         log!("Foreign table options for modify: {:?}", opts);
         state.update_from_options(opts);
@@ -271,7 +271,7 @@ unsafe extern "C-unwind" fn plan_foreign_modify(
         let p: *mut RedisFdwState = Box::leak(Box::new(state)) as *mut RedisFdwState;
         let state: PgBox<RedisFdwState> = PgBox::<RedisFdwState>::from_pg(p as _);
         serialize_to_list(state)
-    });
+    })
 }
 
 #[pg_guard]

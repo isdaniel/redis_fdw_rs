@@ -194,15 +194,15 @@ impl Clone for Cell {
 impl fmt::Display for Cell {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Cell::Bool(v) => write!(f, "{}", v),
-            Cell::I8(v) => write!(f, "{}", v),
-            Cell::I16(v) => write!(f, "{}", v),
-            Cell::F32(v) => write!(f, "{}", v),
-            Cell::I32(v) => write!(f, "{}", v),
-            Cell::F64(v) => write!(f, "{}", v),
-            Cell::I64(v) => write!(f, "{}", v),
-            Cell::Numeric(v) => write!(f, "{}", v),
-            Cell::String(v) => write!(f, "{}", v),
+            Cell::Bool(v) => write!(f, "{v}"),
+            Cell::I8(v) => write!(f, "{v}"),
+            Cell::I16(v) => write!(f, "{v}"),
+            Cell::F32(v) => write!(f, "{v}"),
+            Cell::I32(v) => write!(f, "{v}"),
+            Cell::F64(v) => write!(f, "{v}"),
+            Cell::I64(v) => write!(f, "{v}"),
+            Cell::Numeric(v) => write!(f, "{v}"),
+            Cell::String(v) => write!(f, "{v}"),
             Cell::Date(v) => unsafe {
                 let dt = fcinfo::direct_function_call_as_datum(
                     pgrx::pg_sys::date_out,
@@ -259,7 +259,7 @@ impl fmt::Display for Cell {
                         .expect("timestamptz should be a valid string")
                 )
             },
-            Cell::Interval(v) => write!(f, "{}", v),
+            Cell::Interval(v) => write!(f, "{v}"),
             Cell::BoolArray(v) => write_array(v, f),
             Cell::I16Array(v) => write_array(v, f),
             Cell::I32Array(v) => write_array(v, f),
@@ -278,12 +278,12 @@ fn write_array<T: std::fmt::Display>(
     let res = array
         .iter()
         .map(|e| match e {
-            Some(val) => format!("{}", val),
+            Some(val) => format!("{val}"),
             None => "null".to_owned(),
         })
         .collect::<Vec<String>>()
         .join(",");
-    write!(f, "[{}]", res)
+    write!(f, "[{res}]")
 }
 
 // pub fn parse_cell(val: &str) -> Cell {

@@ -533,7 +533,7 @@ mod tests {
         ];
 
         for table in &tables {
-            Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", table)).unwrap();
+            Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {table};")).unwrap();
         }
 
         // Clean up server and FDW
