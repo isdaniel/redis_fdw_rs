@@ -2,7 +2,8 @@
 #[pgrx::pg_schema]
 mod tests {
     use crate::redis_fdw::{
-        state::{RedisFdwState, RedisTableType},
+        state::RedisFdwState,
+        types::RedisTableType,
         tables::{RedisHashTable, RedisListTable},
     };
     use pgrx::prelude::*;
@@ -87,7 +88,7 @@ mod tests {
 
     #[pg_test]
     fn test_redis_table_type_data_len() {
-        use crate::redis_fdw::data_set::{DataSet, DataContainer};
+        use crate::redis_fdw::types::{DataSet, DataContainer};
         
         // Test data_len for different table types
         let mut state = RedisFdwState::new(ptr::null_mut());
@@ -124,7 +125,7 @@ mod tests {
 
     #[pg_test]
     fn test_redis_fdw_state_is_read_end() {
-        use crate::redis_fdw::data_set::{DataSet, DataContainer};
+        use crate::redis_fdw::types::{DataSet, DataContainer};
         
         let mut state = RedisFdwState::new(ptr::null_mut());
 

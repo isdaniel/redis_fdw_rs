@@ -378,25 +378,29 @@ INSERT INTO redis_list_table VALUES
 ```
 src/
 ├── redis_fdw/
-│   ├── handlers.rs          # PostgreSQL FDW handler functions
-│   ├── mod.rs              # Main module definition
-│   ├── pushdown.rs         # WHERE clause pushdown logic and conditions
-│   ├── state.rs            # FDW state management
-│   ├── table_type_tests.rs # Unit tests for table types
-│   ├── tests.rs            # Integration tests
-│   └── tables/             # 📁 Redis table implementations (OOP architecture)
-│       ├── mod.rs          # Table module exports
-│       ├── interface.rs    # 🆕 RedisTableOperations trait definition
-│       ├── redis_hash_table.rs    # Hash table implementation + optimizations
-│       ├── redis_list_table.rs    # List table implementation
-│       ├── redis_set_table.rs     # Set table implementation + optimizations
-│       ├── redis_string_table.rs  # String table implementation + optimizations
-│       └── redis_zset_table.rs    # Sorted set implementation
-└── utils_share/            # Shared utilities
-    ├── cell.rs             # Data cell types
-    ├── memory.rs           # Memory management
-    ├── row.rs              # Row operations
-    └── utils.rs            # General utilities
+│   ├── mod.rs                   # Updated module declarations
+│   ├── handlers.rs              # PostgreSQL FDW handler functions (updated imports)
+│   ├── pushdown.rs             # WHERE clause pushdown logic (types moved out)
+│   ├── pushdown_types.rs       # 🆕 Pushdown condition types and analysis structures
+│   ├── state.rs                # FDW state management (RedisTableType moved out)
+│   ├── types.rs                # 🆕 Core Redis FDW data types and enums
+│   ├── connection.rs           # 🆕 Redis connection management types
+│   ├── table_type_tests.rs     # Unit tests for table types (updated imports)
+│   ├── tests.rs                # Integration tests (updated imports)
+│   ├── pushdown_tests.rs       # Pushdown tests (updated imports)
+│   └── tables/                 # Redis table implementations (OOP architecture)
+│       ├── mod.rs              # Table module exports
+│       ├── interface.rs        # RedisTableOperations trait (RedisConnectionType moved out)
+│       ├── redis_hash_table.rs # Hash table implementation (updated imports)
+│       ├── redis_list_table.rs # List table implementation (updated imports)
+│       ├── redis_set_table.rs  # Set table implementation (updated imports)
+│       ├── redis_string_table.rs # String table implementation (updated imports)
+│       └── redis_zset_table.rs # Sorted set implementation (updated imports)
+└── utils_share/                # Shared utilities (unchanged)
+    ├── cell.rs                 # Data cell types
+    ├── memory.rs              # Memory management
+    ├── row.rs                 # Row operations
+    └── utils.rs               # General utilities
 ```
 
 ### OOP Architecture Benefits

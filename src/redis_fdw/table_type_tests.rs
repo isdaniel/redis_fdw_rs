@@ -6,12 +6,11 @@ mod tests {
     use pgrx::pg_sys;
 
     use crate::redis_fdw::{
-        state::RedisTableType,
+        types::{RedisTableType, DataSet, DataContainer},
         tables::{
             RedisHashTable, RedisListTable, RedisSetTable, RedisStringTable, RedisTableOperations,
             RedisZSetTable,
         },
-        data_set::{DataSet, DataContainer},
     };
 
     #[test]
