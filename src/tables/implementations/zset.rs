@@ -1,8 +1,9 @@
-
-use crate::redis_fdw::{
-    pushdown_types::{ComparisonOperator, PushableCondition},
-    tables::interface::RedisTableOperations,
-    types::{DataSet, DataContainer, LoadDataResult},
+use crate::{
+    query::pushdown_types::{ComparisonOperator, PushableCondition},
+    tables::{
+        interface::RedisTableOperations,
+        types::{DataContainer, DataSet, LoadDataResult},
+    },
 };
 
 /// Redis Sorted Set table type
@@ -13,7 +14,7 @@ pub struct RedisZSetTable {
 
 impl RedisZSetTable {
     pub fn new() -> Self {
-        Self { 
+        Self {
             dataset: DataSet::Empty,
         }
     }
@@ -49,14 +50,11 @@ impl RedisTableOperations for RedisZSetTable {
                 // ZSet filtered data is stored as [member1, score1, member2, score2, ...]
                 let data_index = index * 2;
                 if data_index + 1 < data.len() {
-                    Some(vec![
-                        data[data_index].clone(),
-                        data[data_index + 1].clone(),
-                    ])
+                    Some(vec![data[data_index].clone(), data[data_index + 1].clone()])
                 } else {
                     None
                 }
-            },
+            }
             _ => self.dataset.get_row(index),
         }
     }
@@ -92,8 +90,12 @@ impl RedisTableOperations for RedisZSetTable {
             .collect();
 
         for (score, member) in &items {
-            let _: () = redis::cmd("ZADD").arg(key_prefix).arg(*score).arg(member).query(conn)?;
-            
+            let _: () = redis::cmd("ZADD")
+                .arg(key_prefix)
+                .arg(*score)
+                .arg(member)
+                .query(conn)?;
+
             // Update internal data
             if let DataSet::Complete(DataContainer::ZSet(ref mut zset_data)) = &mut self.dataset {
                 // Remove existing member if it exists and add new one
@@ -116,7 +118,7 @@ impl RedisTableOperations for RedisZSetTable {
     ) -> Result<(), redis::RedisError> {
         for member in data {
             let _: i32 = redis::cmd("ZREM").arg(key_prefix).arg(member).query(conn)?;
-            
+
             // Remove from local data
             if let DataSet::Complete(DataContainer::ZSet(ref mut zset_data)) = &mut self.dataset {
                 zset_data.retain(|(m, _)| m != member);

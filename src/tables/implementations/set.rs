@@ -1,8 +1,9 @@
-
-use crate::redis_fdw::{
-    pushdown_types::{ComparisonOperator, PushableCondition},
-    tables::interface::RedisTableOperations,
-    types::{DataSet, DataContainer, LoadDataResult},
+use crate::{
+    query::pushdown_types::{ComparisonOperator, PushableCondition},
+    tables::{
+        interface::RedisTableOperations,
+        types::{DataContainer, DataSet, LoadDataResult},
+    },
 };
 
 /// Redis Set table type
@@ -13,7 +14,7 @@ pub struct RedisSetTable {
 
 impl RedisSetTable {
     pub fn new() -> Self {
-        Self { 
+        Self {
             dataset: DataSet::Empty,
         }
     }
@@ -110,7 +111,7 @@ impl RedisTableOperations for RedisSetTable {
     ) -> Result<(), redis::RedisError> {
         for value in data {
             let _: i32 = redis::cmd("SREM").arg(key_prefix).arg(value).query(conn)?;
-            
+
             // Remove from local data
             if let DataSet::Complete(DataContainer::Set(ref mut set_data)) = &mut self.dataset {
                 set_data.retain(|x| x != value);
@@ -133,9 +134,6 @@ impl RedisTableOperations for RedisSetTable {
     }
 
     fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
-        matches!(
-            operator,
-            ComparisonOperator::Equal | ComparisonOperator::In
-        )
+        matches!(operator, ComparisonOperator::Equal | ComparisonOperator::In)
     }
 }

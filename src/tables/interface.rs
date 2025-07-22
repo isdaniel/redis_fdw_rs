@@ -1,6 +1,6 @@
-use crate::redis_fdw::{
-    pushdown_types::{ComparisonOperator, PushableCondition},
-    types::{LoadDataResult, DataSet},
+use crate::{
+    query::pushdown_types::{ComparisonOperator, PushableCondition},
+    tables::types::{DataSet, LoadDataResult},
 };
 
 /// Trait defining common operations for Redis table types
