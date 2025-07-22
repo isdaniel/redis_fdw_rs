@@ -1,5 +1,9 @@
 use crate::{
-    redis_fdw::{pushdown::WhereClausePushdown, state::RedisFdwState},
+    redis_fdw::{
+        pushdown::WhereClausePushdown, 
+        types::RedisTableType,
+        state::RedisFdwState
+    },
     utils_share::{memory::create_wrappers_memctx, row::Row, utils::*},
 };
 use pgrx::{
@@ -64,7 +68,7 @@ extern "C-unwind" fn get_foreign_rel_size(
 
         // Set table type so pushdown analysis knows what optimizations are possible
         if let Some(table_type_str) = state.opts.get("table_type") {
-            state.table_type = crate::redis_fdw::state::RedisTableType::from_str(table_type_str);
+            state.table_type = RedisTableType::from_str(table_type_str);
         }
 
         (*baserel).fdw_private =

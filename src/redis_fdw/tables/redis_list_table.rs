@@ -1,7 +1,7 @@
 use crate::redis_fdw::{
-    pushdown::{ComparisonOperator, PushableCondition},
+    pushdown_types::{ComparisonOperator, PushableCondition},
     tables::interface::RedisTableOperations,
-    data_set::{DataSet, DataContainer, LoadDataResult},
+    types::{DataSet, DataContainer, LoadDataResult},
 };
 
 /// Redis List table type

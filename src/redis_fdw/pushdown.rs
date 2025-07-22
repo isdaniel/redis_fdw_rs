@@ -1,35 +1,15 @@
-use crate::{redis_fdw::state::RedisTableType, utils_share::cell::Cell};
 /// WHERE clause pushdown implementation for Redis FDW
 /// This module provides functionality to analyze WHERE clauses and push down
 /// supported conditions to Redis for better performance.
+
+use crate::{
+    redis_fdw::{
+        types::RedisTableType, 
+        pushdown_types::{PushableCondition, ComparisonOperator, PushdownAnalysis}
+    }, 
+    utils_share::cell::Cell
+};
 use pgrx::{pg_sys, prelude::*};
-
-/// Represents a pushable condition from WHERE clause
-#[derive(Debug, Clone)]
-pub struct PushableCondition {
-    pub column_name: String,
-    pub operator: ComparisonOperator,
-    pub value: String,
-}
-
-/// Supported comparison operators for pushdown
-#[derive(Debug, Clone, PartialEq)]
-pub enum ComparisonOperator {
-    Equal,    // =
-    NotEqual, // <>
-    Like,     // LIKE
-    NotLike,  // NOT LIKE
-    In,       // IN (...)
-    NotIn,    // NOT IN (...)
-}
-
-/// Result of WHERE clause analysis
-#[derive(Debug, Clone)]
-pub struct PushdownAnalysis {
-    pub pushable_conditions: Vec<PushableCondition>,
-    pub remaining_conditions: Vec<String>, // Conditions that can't be pushed down
-    pub can_optimize: bool,
-}
 
 /// Analyzes WHERE clauses and determines what can be pushed down to Redis
 pub struct WhereClausePushdown;
