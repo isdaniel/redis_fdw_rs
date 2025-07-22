@@ -1,6 +1,9 @@
 use redis::cluster::ClusterConnection;
 
-use crate::redis_fdw::pushdown::{ComparisonOperator, PushableCondition};
+use crate::redis_fdw::{
+    pushdown::{ComparisonOperator, PushableCondition},
+    data_set::{LoadDataResult, DataSet},
+};
 
 /// Trait defining common operations for Redis table types
 pub trait RedisTableOperations {
@@ -11,15 +14,20 @@ pub trait RedisTableOperations {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         conditions: Option<&[PushableCondition]>,
-    ) -> Result<Option<Vec<String>>, redis::RedisError>;
+    ) -> Result<LoadDataResult, redis::RedisError>;
+
+    /// Get the current dataset for this table
+    fn get_dataset(&self) -> &DataSet;
 
     /// Get the number of rows/elements in this table type
-    /// If filtered_data is provided, calculates length from filtered data
-    fn data_len(&self, filtered_data: Option<&[String]>) -> usize;
+    fn data_len(&self) -> usize {
+        self.get_dataset().len()
+    }
 
     /// Get a row at the specified index for iteration
-    /// If filtered_data is provided, gets row from filtered data instead of internal data
-    fn get_row(&self, index: usize, filtered_data: Option<&[String]>) -> Option<Vec<String>>;
+    fn get_row(&self, index: usize) -> Option<Vec<String>> {
+        self.get_dataset().get_row(index)
+    }
 
     /// Insert data into Redis
     fn insert(

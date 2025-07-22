@@ -1,17 +1,20 @@
 use crate::redis_fdw::{
     pushdown::{ComparisonOperator, PushableCondition},
     tables::interface::RedisTableOperations,
+    data_set::{DataSet, DataContainer, LoadDataResult},
 };
 
 /// Redis String table type
 #[derive(Debug, Clone, Default)]
 pub struct RedisStringTable {
-    pub data: Option<String>,
+    pub dataset: DataSet,
 }
 
 impl RedisStringTable {
     pub fn new() -> Self {
-        Self { data: None }
+        Self { 
+            dataset: DataSet::Empty,
+        }
     }
 }
 
@@ -21,7 +24,7 @@ impl RedisTableOperations for RedisStringTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         conditions: Option<&[PushableCondition]>,
-    ) -> Result<Option<Vec<String>>, redis::RedisError> {
+    ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(conditions) = conditions {
             if let Some(condition) = conditions.first() {
                 // String tables can only be checked for exact value match
@@ -29,48 +32,27 @@ impl RedisTableOperations for RedisStringTable {
 
                 return if let Some(v) = value {
                     if v == condition.value {
-                        Ok(Some(vec![v]))
+                        self.dataset = DataSet::Filtered(vec![v.clone()]);
+                        Ok(LoadDataResult::PushdownApplied(vec![v]))
                     } else {
-                        Ok(Some(vec![]))
+                        self.dataset = DataSet::Empty;
+                        Ok(LoadDataResult::Empty)
                     }
                 } else {
-                    Ok(Some(vec![]))
+                    self.dataset = DataSet::Empty;
+                    Ok(LoadDataResult::Empty)
                 };
             }
         }
 
         // Load all data into internal storage
-        self.data = redis::cmd("GET").arg(key_prefix).query(conn)?;
-        Ok(None)
+        let value: Option<String> = redis::cmd("GET").arg(key_prefix).query(conn)?;
+        self.dataset = DataSet::Complete(DataContainer::String(value));
+        Ok(LoadDataResult::LoadedToInternal)
     }
 
-    fn data_len(&self, filtered_data: Option<&[String]>) -> usize {
-        if let Some(filtered_data) = filtered_data {
-            if filtered_data.is_empty() {
-                0
-            } else {
-                1
-            }
-        } else if self.data.is_some() {
-            1
-        } else {
-            0
-        }
-    }
-
-    fn get_row(&self, index: usize, filtered_data: Option<&[String]>) -> Option<Vec<String>> {
-        if let Some(filtered_data) = filtered_data {
-            // String data is stored as [value]
-            if index == 0 && !filtered_data.is_empty() {
-                Some(vec![filtered_data[0].clone()])
-            } else {
-                None
-            }
-        } else if index == 0 && self.data.is_some() {
-            Some(vec![self.data.as_ref().unwrap().clone()])
-        } else {
-            None
-        }
+    fn get_dataset(&self) -> &DataSet {
+        &self.dataset
     }
 
     fn insert(
@@ -81,7 +63,7 @@ impl RedisTableOperations for RedisStringTable {
     ) -> Result<(), redis::RedisError> {
         if let Some(value) = data.first() {
             let _: () = redis::cmd("SET").arg(key_prefix).arg(value).query(conn)?;
-            self.data = Some(value.clone());
+            self.dataset = DataSet::Complete(DataContainer::String(Some(value.clone())));
         }
         Ok(())
     }
@@ -93,7 +75,7 @@ impl RedisTableOperations for RedisStringTable {
         _data: &[String],
     ) -> Result<(), redis::RedisError> {
         let _: () = redis::cmd("DEL").arg(key_prefix).query(conn)?;
-        self.data = None;
+        self.dataset = DataSet::Complete(DataContainer::String(None));
         Ok(())
     }
 
@@ -106,7 +88,7 @@ impl RedisTableOperations for RedisStringTable {
     ) -> Result<(), redis::RedisError> {
         if let Some(value) = new_data.first() {
             let _: () = redis::cmd("SET").arg(key_prefix).arg(value).query(conn)?;
-            self.data = Some(value.clone());
+            self.dataset = DataSet::Complete(DataContainer::String(Some(value.clone())));
         }
         Ok(())
     }

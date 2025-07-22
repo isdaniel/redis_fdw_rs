@@ -2,17 +2,20 @@
 use crate::redis_fdw::{
     pushdown::{ComparisonOperator, PushableCondition},
     tables::interface::RedisTableOperations,
+    data_set::{DataSet, DataContainer, LoadDataResult},
 };
 
 /// Redis Set table type
 #[derive(Debug, Clone, Default)]
 pub struct RedisSetTable {
-    pub data: Vec<String>,
+    pub dataset: DataSet,
 }
 
 impl RedisSetTable {
     pub fn new() -> Self {
-        Self { data: Vec::new() }
+        Self { 
+            dataset: DataSet::Empty,
+        }
     }
 }
 
@@ -22,7 +25,7 @@ impl RedisTableOperations for RedisSetTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         conditions: Option<&[PushableCondition]>,
-    ) -> Result<Option<Vec<String>>, redis::RedisError> {
+    ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(conditions) = conditions {
             if !conditions.is_empty() {
                 // For sets, we can check membership efficiently
@@ -36,9 +39,12 @@ impl RedisTableOperations for RedisSetTable {
                                 .query(conn)?;
 
                             return if exists {
-                                Ok(Some(vec![condition.value.clone()]))
+                                let filtered_data = vec![condition.value.clone()];
+                                self.dataset = DataSet::Filtered(filtered_data.clone());
+                                Ok(LoadDataResult::PushdownApplied(filtered_data))
                             } else {
-                                Ok(Some(vec![]))
+                                self.dataset = DataSet::Empty;
+                                Ok(LoadDataResult::Empty)
                             };
                         }
                         ComparisonOperator::In => {
@@ -56,7 +62,8 @@ impl RedisTableOperations for RedisSetTable {
                                     result.push(member.to_string());
                                 }
                             }
-                            return Ok(Some(result));
+                            self.dataset = DataSet::Filtered(result.clone());
+                            return Ok(LoadDataResult::PushdownApplied(result));
                         }
                         _ => {} // Fall back to full scan
                     }
@@ -65,29 +72,13 @@ impl RedisTableOperations for RedisSetTable {
         }
 
         // Load all data into internal storage
-        self.data = redis::cmd("SMEMBERS").arg(key_prefix).query(conn)?;
-        Ok(None)
+        let data: Vec<String> = redis::cmd("SMEMBERS").arg(key_prefix).query(conn)?;
+        self.dataset = DataSet::Complete(DataContainer::Set(data));
+        Ok(LoadDataResult::LoadedToInternal)
     }
 
-    fn data_len(&self, filtered_data: Option<&[String]>) -> usize {
-        if let Some(filtered_data) = filtered_data {
-            filtered_data.len()
-        } else {
-            self.data.len()
-        }
-    }
-
-    fn get_row(&self, index: usize, filtered_data: Option<&[String]>) -> Option<Vec<String>> {
-        if let Some(filtered_data) = filtered_data {
-            // Set data is stored as [member1, member2, ...]
-            if index < filtered_data.len() {
-                Some(vec![filtered_data[index].clone()])
-            } else {
-                None
-            }
-        } else {
-            self.data.get(index).map(|item| vec![item.clone()])
-        }
+    fn get_dataset(&self) -> &DataSet {
+        &self.dataset
     }
 
     fn insert(
@@ -99,7 +90,13 @@ impl RedisTableOperations for RedisSetTable {
         for value in data {
             let added: i32 = redis::cmd("SADD").arg(key_prefix).arg(value).query(conn)?;
             if added > 0 {
-                self.data.push(value.clone());
+                // Update internal data
+                if let DataSet::Complete(DataContainer::Set(ref mut set_data)) = &mut self.dataset {
+                    set_data.push(value.clone());
+                } else {
+                    // Create new set data if not present
+                    self.dataset = DataSet::Complete(DataContainer::Set(vec![value.clone()]));
+                }
             }
         }
         Ok(())
@@ -113,7 +110,11 @@ impl RedisTableOperations for RedisSetTable {
     ) -> Result<(), redis::RedisError> {
         for value in data {
             let _: i32 = redis::cmd("SREM").arg(key_prefix).arg(value).query(conn)?;
-            self.data.retain(|x| x != value);
+            
+            // Remove from local data
+            if let DataSet::Complete(DataContainer::Set(ref mut set_data)) = &mut self.dataset {
+                set_data.retain(|x| x != value);
+            }
         }
         Ok(())
     }
@@ -132,6 +133,9 @@ impl RedisTableOperations for RedisSetTable {
     }
 
     fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
-        matches!(operator, ComparisonOperator::Equal | ComparisonOperator::In)
+        matches!(
+            operator,
+            ComparisonOperator::Equal | ComparisonOperator::In
+        )
     }
 }

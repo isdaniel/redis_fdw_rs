@@ -87,6 +87,8 @@ mod tests {
 
     #[pg_test]
     fn test_redis_table_type_data_len() {
+        use crate::redis_fdw::data_set::{DataSet, DataContainer};
+        
         // Test data_len for different table types
         let mut state = RedisFdwState::new(ptr::null_mut());
 
@@ -95,20 +97,20 @@ mod tests {
 
         // Test Hash type with data
         let mut hash_table = RedisHashTable::new();
-        hash_table.data = vec![
+        hash_table.dataset = DataSet::Complete(DataContainer::Hash(vec![
             ("key1".to_string(), "value1".to_string()),
             ("key2".to_string(), "value2".to_string()),
-        ];
+        ]));
         state.table_type = RedisTableType::Hash(hash_table);
         assert_eq!(state.data_len(), 2);
 
         // Test List type with data
         let mut list_table = RedisListTable::new();
-        list_table.data = vec![
+        list_table.dataset = DataSet::Complete(DataContainer::List(vec![
             "item1".to_string(),
             "item2".to_string(),
             "item3".to_string(),
-        ];
+        ]));
         state.table_type = RedisTableType::List(list_table);
         assert_eq!(state.data_len(), 3);
 
@@ -122,6 +124,8 @@ mod tests {
 
     #[pg_test]
     fn test_redis_fdw_state_is_read_end() {
+        use crate::redis_fdw::data_set::{DataSet, DataContainer};
+        
         let mut state = RedisFdwState::new(ptr::null_mut());
 
         // Test with no data
@@ -129,10 +133,10 @@ mod tests {
 
         // Test with hash data
         let mut hash_table = RedisHashTable::new();
-        hash_table.data = vec![
+        hash_table.dataset = DataSet::Complete(DataContainer::Hash(vec![
             ("key1".to_string(), "value1".to_string()),
             ("key2".to_string(), "value2".to_string()),
-        ];
+        ]));
         state.table_type = RedisTableType::Hash(hash_table);
         state.row_count = 0;
         assert!(!state.is_read_end());
