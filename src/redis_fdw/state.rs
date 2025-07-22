@@ -1,11 +1,11 @@
 use crate::redis_fdw::{
     pushdown::PushdownAnalysis,
     tables::{
-        RedisHashTable, RedisListTable, RedisSetTable, RedisStringTable, RedisTableOperations,
-        RedisZSetTable,
+        interface::RedisConnectionType, RedisHashTable, RedisListTable, RedisSetTable, RedisStringTable, RedisTableOperations, RedisZSetTable
     },
 };
 use pgrx::{pg_sys::MemoryContext, prelude::*};
+use redis::cluster::ClusterClient;
 use std::collections::HashMap;
 
 /// Enum representing different Redis table types with their implementations
@@ -33,7 +33,7 @@ impl RedisTableType {
 
     pub fn load_data(
         &mut self,
-        conn: &mut redis::Connection,
+        conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         conditions: Option<&[crate::redis_fdw::pushdown::PushableCondition]>,
     ) -> Result<Option<Vec<String>>, redis::RedisError> {
@@ -71,7 +71,7 @@ impl RedisTableType {
 
     pub fn insert(
         &mut self,
-        conn: &mut redis::Connection,
+        conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         data: &[String],
     ) -> Result<(), redis::RedisError> {
@@ -87,7 +87,7 @@ impl RedisTableType {
 
     pub fn delete(
         &mut self,
-        conn: &mut redis::Connection,
+        conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         data: &[String],
     ) -> Result<(), redis::RedisError> {
@@ -103,7 +103,7 @@ impl RedisTableType {
 
     pub fn update(
         &mut self,
-        conn: &mut redis::Connection,
+        conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         old_data: &[String],
         new_data: &[String],
@@ -137,7 +137,7 @@ impl RedisTableType {
 /// Read FDW state
 pub struct RedisFdwState {
     pub tmp_ctx: MemoryContext,
-    pub redis_connection: Option<redis::Connection>,
+    pub redis_connection: Option<RedisConnectionType>,
     pub database: i64,
     pub host_port: String,
     pub table_type: RedisTableType,
@@ -168,15 +168,39 @@ impl RedisFdwState {
 }
 
 impl RedisFdwState {
-    /// Check if redis connection is initialized
+    /// Check if redis connection is initialized and create appropriate connection type
+    /// Supports both single-node and cluster connections
     /// # Panics
-    /// Panics if redis_connection is None
-    /// # Returns
-    /// A reference to the redis connection
+    /// Panics if connection fails
     pub fn init_redis_connection_from_options(&mut self) {
-        let addr_port = format!("redis://{}/{}", self.host_port, self.database);
-        let client = redis::Client::open(addr_port).expect("Failed to create Redis client");
-        self.redis_connection = Some(client.get_connection().expect("Failed to connect to Redis"));
+        // Check if host_port contains multiple nodes (cluster mode)
+        if self.host_port.contains(',') {
+            // Cluster mode: parse multiple node addresses
+            let nodes: Vec<String> = self.host_port
+                .split(',')
+                .map(|node| {
+                    let trimmed = node.trim();
+                    // Add redis:// prefix if not present and format with database
+                    if trimmed.starts_with("redis://") {
+                        format!("{}/{}", trimmed, self.database)
+                    } else {
+                        format!("redis://{}/{}", trimmed, self.database)
+                    }
+                })
+                .collect();
+            
+            log!("Connecting to Redis cluster with nodes: {:?}", nodes);
+            let cluster_client = ClusterClient::new(nodes).expect("Failed to create Redis cluster client");
+            let cluster_connection = cluster_client.get_connection().expect("Failed to connect to Redis cluster");
+            self.redis_connection = Some(RedisConnectionType::Cluster(cluster_connection));
+        } else {
+            // Single node mode
+            let addr_port = format!("redis://{}/{}", self.host_port, self.database);
+            log!("Connecting to single Redis node: {}", addr_port);
+            let client = redis::Client::open(addr_port).expect("Failed to create Redis client");
+            let connection = client.get_connection().expect("Failed to connect to Redis");
+            self.redis_connection = Some(RedisConnectionType::Single(connection));
+        }
     }
 
     /// Updates the struct fields from a HashMap
@@ -209,17 +233,18 @@ impl RedisFdwState {
         self.table_type = RedisTableType::from_str(table_type);
 
         // Load data from Redis (will be optimized if pushdown conditions exist)
-        self.load_data_with_pushdown();
+        self.load_data();
     }
 
     /// Load data from Redis, applying pushdown optimizations if available
-    fn load_data_with_pushdown(&mut self) {
+    fn load_data(&mut self) {
         if let Some(conn) = self.redis_connection.as_mut() {
+            let conn_like = conn.as_connection_like_mut();
             if let Some(ref analysis) = self.pushdown_analysis {
                 if analysis.can_optimize {
                     // Apply pushdown conditions using the table type's unified method
                     match self.table_type.load_data(
-                        conn,
+                        conn_like,
                         &self.table_key_prefix,
                         Some(&analysis.pushable_conditions),
                     ) {
@@ -245,7 +270,7 @@ impl RedisFdwState {
             // Fall back to loading all data without pushdown
             let _ = self
                 .table_type
-                .load_data(conn, &self.table_key_prefix, None);
+                .load_data(conn_like, &self.table_key_prefix, None);
         }
     }
 
@@ -276,7 +301,8 @@ impl RedisFdwState {
     /// Insert data using the appropriate table type
     pub fn insert_data(&mut self, data: &[String]) -> Result<(), redis::RedisError> {
         if let Some(conn) = self.redis_connection.as_mut() {
-            self.table_type.insert(conn, &self.table_key_prefix, data)
+            let conn_like = conn.as_connection_like_mut();
+            self.table_type.insert(conn_like, &self.table_key_prefix, data)
         } else {
             Err(redis::RedisError::from((
                 redis::ErrorKind::IoError,
@@ -288,7 +314,8 @@ impl RedisFdwState {
     /// Delete data using the appropriate table type
     pub fn delete_data(&mut self, data: &[String]) -> Result<(), redis::RedisError> {
         if let Some(conn) = self.redis_connection.as_mut() {
-            self.table_type.delete(conn, &self.table_key_prefix, data)
+            let conn_like = conn.as_connection_like_mut();
+            self.table_type.delete(conn_like, &self.table_key_prefix, data)
         } else {
             Err(redis::RedisError::from((
                 redis::ErrorKind::IoError,
@@ -304,8 +331,9 @@ impl RedisFdwState {
         new_data: &[String],
     ) -> Result<(), redis::RedisError> {
         if let Some(conn) = self.redis_connection.as_mut() {
+            let conn_like = conn.as_connection_like_mut();
             self.table_type
-                .update(conn, &self.table_key_prefix, old_data, new_data)
+                .update(conn_like, &self.table_key_prefix, old_data, new_data)
         } else {
             Err(redis::RedisError::from((
                 redis::ErrorKind::IoError,

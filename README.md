@@ -5,6 +5,7 @@ A high-performance Redis Foreign Data Wrapper (FDW) for PostgreSQL written in Ru
 ## Features
 
 - **High-performance data access** from Redis to PostgreSQL
+- **Redis Cluster support** with automatic failover and sharding across multiple nodes
 - **WHERE clause pushdown optimization** for significantly improved query performance
 - **Redis data types support**: Hash, List, Set, ZSet, and String (with varying levels of implementation)
 - **Supported operations**: SELECT, INSERT, UPDATE, DELETE (with improved error handling)
@@ -91,6 +92,7 @@ HANDLER redis_fdw_handler;
 
 ### 2. Create Server
 ```sql
+-- Single Redis node server
 CREATE SERVER redis_server 
 FOREIGN DATA WRAPPER redis_wrapper
 OPTIONS (
@@ -98,7 +100,56 @@ OPTIONS (
 );
 ```
 
-### 3. Create User Mapping (Optional)
+### 3. Redis Cluster Support
+
+Redis FDW supports both single-node and cluster deployments. To connect to a Redis cluster, specify multiple nodes in the `host_port` option using comma-separated addresses:
+
+```sql
+-- Redis Cluster server (automatic failover and sharding)
+CREATE SERVER redis_cluster_server 
+FOREIGN DATA WRAPPER redis_wrapper
+OPTIONS (
+    host_port '127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002'
+);
+
+-- You can mix IP addresses and hostnames
+CREATE SERVER redis_cluster_prod 
+FOREIGN DATA WRAPPER redis_wrapper
+OPTIONS (
+    host_port 'redis-node1.example.com:7000,redis-node2.example.com:7001,redis-node3.example.com:7002'
+);
+
+-- Minimal cluster setup (only one node needed for discovery)
+CREATE SERVER redis_cluster_minimal 
+FOREIGN DATA WRAPPER redis_wrapper
+OPTIONS (
+    host_port '10.0.0.100:7000'
+);
+```
+
+**Cluster Benefits:**
+- **Automatic failover**: If nodes fail, operations continue on healthy nodes
+- **Sharding**: Data is automatically distributed across cluster nodes
+- **Discovery**: Only one cluster node address is needed - the client discovers all nodes
+- **High availability**: Read/write operations continue during node failures
+
+**Cluster Usage Example:**
+```sql
+-- Create a foreign table using cluster connection
+CREATE FOREIGN TABLE user_sessions (field TEXT, value TEXT) 
+SERVER redis_cluster_server
+OPTIONS (
+    database '0',
+    table_type 'hash',
+    table_key_prefix 'session:active'
+);
+
+-- Operations work identically to single-node setup
+INSERT INTO user_sessions VALUES ('user123', 'session_token_abc');
+SELECT * FROM user_sessions WHERE field = 'user123';
+```
+
+### 4. Create User Mapping (Optional)
 ```sql
 CREATE USER MAPPING FOR PUBLIC 
 SERVER redis_server 
@@ -497,6 +548,7 @@ Look for log messages starting with `---> redis_fdw` to trace execution.
 ## Roadmap
 
 ### Recently Completed ✅
+- ✅ **Redis Cluster support** with automatic failover and sharding
 - ✅ **Object-oriented architecture refactoring** with unified trait interface
 - ✅ **Method consolidation** eliminating duplicate functionality 
 - ✅ **Enhanced encapsulation** with table-specific optimization logic
@@ -514,7 +566,6 @@ Look for log messages starting with `---> redis_fdw` to trace execution.
 - 🚧 Extended WHERE clause pushdown (ZSet score ranges, LIKE pattern optimization)
 - 🚧 Connection pooling and reuse
 - 🚧 Async operations support
-- 🚧 Redis Cluster support
 - 🚧 Streaming support for large data sets
 - 🚧 Advanced Redis operations (SCAN, pattern matching)
 - 🚧 Transaction support and rollback capabilities

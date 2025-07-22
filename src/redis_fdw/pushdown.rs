@@ -438,7 +438,6 @@ impl WhereClausePushdown {
                 }
 
                 // Convert datum to string based on type
-                // This is simplified - in practice, you'd need proper type handling
                 Cell::from_polymorphic_datum(
                     const_ref.constvalue,
                     const_ref.constisnull,
