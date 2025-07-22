@@ -2,17 +2,20 @@
 use crate::redis_fdw::{
     pushdown::{ComparisonOperator, PushableCondition},
     tables::interface::RedisTableOperations,
+    data_set::{DataSet, DataContainer, LoadDataResult},
 };
 
 /// Redis Sorted Set table type
 #[derive(Debug, Clone, Default)]
 pub struct RedisZSetTable {
-    pub data: Vec<(String, f64)>, // (member, score)
+    pub dataset: DataSet,
 }
 
 impl RedisZSetTable {
     pub fn new() -> Self {
-        Self { data: Vec::new() }
+        Self { 
+            dataset: DataSet::Empty,
+        }
     }
 }
 
@@ -22,39 +25,47 @@ impl RedisTableOperations for RedisZSetTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         _conditions: Option<&[PushableCondition]>,
-    ) -> Result<Option<Vec<String>>, redis::RedisError> {
+    ) -> Result<LoadDataResult, redis::RedisError> {
         // ZSets could support score-based range queries in the future
         // For now, fall back to loading all data
-        // Load all data into internal storage
-        let result: Vec<(String, f64)> = redis::cmd("ZRANGE").arg(key_prefix).arg(0).arg(-1).arg("WITHSCORES").query(conn)?;
-        self.data = result;
-        Ok(None)
+        let result: Vec<(String, f64)> = redis::cmd("ZRANGE")
+            .arg(key_prefix)
+            .arg(0)
+            .arg(-1)
+            .arg("WITHSCORES")
+            .query(conn)?;
+        self.dataset = DataSet::Complete(DataContainer::ZSet(result));
+        Ok(LoadDataResult::LoadedToInternal)
     }
 
-    fn data_len(&self, filtered_data: Option<&[String]>) -> usize {
-        if let Some(filtered_data) = filtered_data {
-            filtered_data.len() / 2 // member-score pairs
-        } else {
-            self.data.len()
+    fn get_dataset(&self) -> &DataSet {
+        &self.dataset
+    }
+
+    /// Override the default get_row implementation to handle zset-specific filtered data format
+    fn get_row(&self, index: usize) -> Option<Vec<String>> {
+        match &self.dataset {
+            DataSet::Filtered(data) => {
+                // ZSet filtered data is stored as [member1, score1, member2, score2, ...]
+                let data_index = index * 2;
+                if data_index + 1 < data.len() {
+                    Some(vec![
+                        data[data_index].clone(),
+                        data[data_index + 1].clone(),
+                    ])
+                } else {
+                    None
+                }
+            },
+            _ => self.dataset.get_row(index),
         }
     }
 
-    fn get_row(&self, index: usize, filtered_data: Option<&[String]>) -> Option<Vec<String>> {
-        if let Some(filtered_data) = filtered_data {
-            // ZSet data is stored as [member1, score1, member2, score2, ...]
-            let data_index = index * 2;
-            if data_index + 1 < filtered_data.len() {
-                Some(vec![
-                    filtered_data[data_index].clone(),
-                    filtered_data[data_index + 1].clone(),
-                ])
-            } else {
-                None
-            }
-        } else {
-            self.data
-                .get(index)
-                .map(|(member, score)| vec![member.clone(), score.to_string()])
+    /// Override data_len to handle zset-specific filtered data format
+    fn data_len(&self) -> usize {
+        match &self.dataset {
+            DataSet::Filtered(data) => data.len() / 2, // member-score pairs
+            _ => self.dataset.len(),
         }
     }
 
@@ -82,7 +93,17 @@ impl RedisTableOperations for RedisZSetTable {
 
         for (score, member) in &items {
             let _: () = redis::cmd("ZADD").arg(key_prefix).arg(*score).arg(member).query(conn)?;
-            self.data.push((member.clone(), *score));
+            
+            // Update internal data
+            if let DataSet::Complete(DataContainer::ZSet(ref mut zset_data)) = &mut self.dataset {
+                // Remove existing member if it exists and add new one
+                zset_data.retain(|(m, _)| m != member);
+                zset_data.push((member.clone(), *score));
+            } else {
+                // Create new zset data if not present
+                let new_data = vec![(member.clone(), *score)];
+                self.dataset = DataSet::Complete(DataContainer::ZSet(new_data));
+            }
         }
         Ok(())
     }
@@ -95,7 +116,11 @@ impl RedisTableOperations for RedisZSetTable {
     ) -> Result<(), redis::RedisError> {
         for member in data {
             let _: i32 = redis::cmd("ZREM").arg(key_prefix).arg(member).query(conn)?;
-            self.data.retain(|(m, _)| m != member);
+            
+            // Remove from local data
+            if let DataSet::Complete(DataContainer::ZSet(ref mut zset_data)) = &mut self.dataset {
+                zset_data.retain(|(m, _)| m != member);
+            }
         }
         Ok(())
     }

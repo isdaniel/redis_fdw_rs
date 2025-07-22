@@ -3,17 +3,20 @@ use std::collections::HashMap;
 use crate::redis_fdw::{
     pushdown::{ComparisonOperator, PushableCondition},
     tables::interface::RedisTableOperations,
+    data_set::{DataSet, DataContainer, LoadDataResult},
 };
 
 /// Redis Hash table type
 #[derive(Debug, Clone, Default)]
 pub struct RedisHashTable {
-    pub data: Vec<(String, String)>,
+    pub dataset: DataSet,
 }
 
 impl RedisHashTable {
     pub fn new() -> Self {
-        Self { data: Vec::new() }
+        Self { 
+            dataset: DataSet::Empty,
+        }
     }
 }
 
@@ -23,7 +26,7 @@ impl RedisTableOperations for RedisHashTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         conditions: Option<&[PushableCondition]>,
-    ) -> Result<Option<Vec<String>>, redis::RedisError> {
+    ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(conditions) = conditions {
             if !conditions.is_empty() {
                 // Apply hash-specific pushdown optimizations
@@ -37,9 +40,12 @@ impl RedisTableOperations for RedisHashTable {
                                 .query(conn)?;
 
                             return if let Some(v) = value {
-                                Ok(Some(vec![condition.value.clone(), v]))
+                                let filtered_data = vec![condition.value.clone(), v];
+                                self.dataset = DataSet::Filtered(filtered_data.clone());
+                                Ok(LoadDataResult::PushdownApplied(filtered_data))
                             } else {
-                                Ok(Some(vec![]))
+                                self.dataset = DataSet::Empty;
+                                Ok(LoadDataResult::Empty)
                             };
                         }
                         ComparisonOperator::In => {
@@ -57,7 +63,8 @@ impl RedisTableOperations for RedisHashTable {
                                     result.push(v.clone());
                                 }
                             }
-                            return Ok(Some(result));
+                            self.dataset = DataSet::Filtered(result.clone());
+                            return Ok(LoadDataResult::PushdownApplied(result));
                         }
                         _ => {} // Fall back to full scan
                     }
@@ -67,34 +74,39 @@ impl RedisTableOperations for RedisHashTable {
 
         // Load all data (either no conditions or pushdown not applicable)
         let hash_data: HashMap<String, String> = redis::cmd("HGETALL").arg(key_prefix).query(conn)?;
-        self.data = hash_data.into_iter().collect();
-        Ok(None) // Return None to indicate data was loaded into internal storage
+        let data_vec: Vec<(String, String)> = hash_data.into_iter().collect();
+        self.dataset = DataSet::Complete(DataContainer::Hash(data_vec));
+        Ok(LoadDataResult::LoadedToInternal)
     }
 
-    fn data_len(&self, filtered_data: Option<&[String]>) -> usize {
-        if let Some(filtered_data) = filtered_data {
-            filtered_data.len() / 2 // key-value pairs
-        } else {
-            self.data.len()
+    fn get_dataset(&self) -> &DataSet {
+        &self.dataset
+    }
+
+    /// Override the default get_row implementation to handle hash-specific filtered data format
+    fn get_row(&self, index: usize) -> Option<Vec<String>> {
+        match &self.dataset {
+            DataSet::Filtered(data) => {
+                // Hash filtered data is stored as [key1, value1, key2, value2, ...]
+                let data_index = index * 2;
+                if data_index + 1 < data.len() {
+                    Some(vec![
+                        data[data_index].clone(),
+                        data[data_index + 1].clone(),
+                    ])
+                } else {
+                    None
+                }
+            },
+            _ => self.dataset.get_row(index),
         }
     }
 
-    fn get_row(&self, index: usize, filtered_data: Option<&[String]>) -> Option<Vec<String>> {
-        if let Some(filtered_data) = filtered_data {
-            // Hash data is stored as [key1, value1, key2, value2, ...]
-            let data_index = index * 2;
-            if data_index + 1 < filtered_data.len() {
-                Some(vec![
-                    filtered_data[data_index].clone(),
-                    filtered_data[data_index + 1].clone(),
-                ])
-            } else {
-                None
-            }
-        } else {
-            self.data
-                .get(index)
-                .map(|(k, v)| vec![k.clone(), v.clone()])
+    /// Override data_len to handle hash-specific filtered data format
+    fn data_len(&self) -> usize {
+        match &self.dataset {
+            DataSet::Filtered(data) => data.len() / 2, // key-value pairs
+            _ => self.dataset.len(),
         }
     }
 
@@ -117,7 +129,14 @@ impl RedisTableOperations for RedisHashTable {
 
         if !fields.is_empty() {
             let _: () = redis::cmd("HSET").arg(key_prefix).arg(&fields).query(conn)?;
-            self.data.extend(fields);
+            
+            // Update internal data
+            if let DataSet::Complete(DataContainer::Hash(ref mut hash_data)) = &mut self.dataset {
+                hash_data.extend(fields);
+            } else {
+                // Create new hash data if not present
+                self.dataset = DataSet::Complete(DataContainer::Hash(fields));
+            }
         }
         Ok(())
     }
@@ -132,7 +151,9 @@ impl RedisTableOperations for RedisHashTable {
             let _: () = redis::cmd("HDEL").arg(key_prefix).arg(data).query(conn)?;
 
             // Remove from local data
-            self.data.retain(|(k, _)| !data.contains(k));
+            if let DataSet::Complete(DataContainer::Hash(ref mut hash_data)) = &mut self.dataset {
+                hash_data.retain(|(k, _)| !data.contains(k));
+            }
         }
         Ok(())
     }
