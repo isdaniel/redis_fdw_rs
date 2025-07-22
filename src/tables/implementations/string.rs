@@ -1,7 +1,9 @@
-use crate::redis_fdw::{
-    pushdown_types::{ComparisonOperator, PushableCondition},
-    tables::interface::RedisTableOperations,
-    types::{DataSet, DataContainer, LoadDataResult},
+use crate::{
+    query::pushdown_types::{ComparisonOperator, PushableCondition},
+    tables::{
+        interface::RedisTableOperations,
+        types::{DataContainer, DataSet, LoadDataResult},
+    },
 };
 
 /// Redis String table type
@@ -12,7 +14,7 @@ pub struct RedisStringTable {
 
 impl RedisStringTable {
     pub fn new() -> Self {
-        Self { 
+        Self {
             dataset: DataSet::Empty,
         }
     }

@@ -16,7 +16,7 @@ use std::{
 #[cfg(feature = "pg14")]
 use pgrx::pg_sys::Value;
 
-use crate::utils_share::{cell::Cell, row::Row};
+use crate::utils::{cell::Cell, row::Row};
 
 #[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
 #[repr(C)]
@@ -204,7 +204,7 @@ pub unsafe fn get_datum(value_str: &str, typid: Oid) -> Datum {
     let mut finfo = FmgrInfo::default();
     getTypeInputInfo(typid, &mut typeinput, &mut typeioparam);
     fmgr_info(typeinput, &mut finfo);
-    
+
     InputFunctionCall(&mut finfo, c_value.as_ptr().cast_mut(), typeioparam, -1)
 }
 

@@ -1,13 +1,10 @@
 /// WHERE clause pushdown implementation for Redis FDW
 /// This module provides functionality to analyze WHERE clauses and push down
 /// supported conditions to Redis for better performance.
-
 use crate::{
-    redis_fdw::{
-        types::RedisTableType, 
-        pushdown_types::{PushableCondition, ComparisonOperator, PushdownAnalysis}
-    }, 
-    utils_share::cell::Cell
+    query::pushdown_types::{ComparisonOperator, PushableCondition, PushdownAnalysis},
+    tables::types::RedisTableType,
+    utils::cell::Cell,
 };
 use pgrx::{pg_sys, prelude::*};
 

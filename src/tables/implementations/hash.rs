@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
-use crate::redis_fdw::{
-    pushdown_types::{ComparisonOperator, PushableCondition},
-    tables::interface::RedisTableOperations,
-    types::{DataSet, DataContainer, LoadDataResult},
+use crate::{
+    query::pushdown_types::{ComparisonOperator, PushableCondition},
+    tables::{
+        interface::RedisTableOperations,
+        types::{DataContainer, DataSet, LoadDataResult},
+    },
 };
 
 /// Redis Hash table type
@@ -14,7 +16,7 @@ pub struct RedisHashTable {
 
 impl RedisHashTable {
     pub fn new() -> Self {
-        Self { 
+        Self {
             dataset: DataSet::Empty,
         }
     }
@@ -73,7 +75,8 @@ impl RedisTableOperations for RedisHashTable {
         }
 
         // Load all data (either no conditions or pushdown not applicable)
-        let hash_data: HashMap<String, String> = redis::cmd("HGETALL").arg(key_prefix).query(conn)?;
+        let hash_data: HashMap<String, String> =
+            redis::cmd("HGETALL").arg(key_prefix).query(conn)?;
         let data_vec: Vec<(String, String)> = hash_data.into_iter().collect();
         self.dataset = DataSet::Complete(DataContainer::Hash(data_vec));
         Ok(LoadDataResult::LoadedToInternal)
@@ -90,14 +93,11 @@ impl RedisTableOperations for RedisHashTable {
                 // Hash filtered data is stored as [key1, value1, key2, value2, ...]
                 let data_index = index * 2;
                 if data_index + 1 < data.len() {
-                    Some(vec![
-                        data[data_index].clone(),
-                        data[data_index + 1].clone(),
-                    ])
+                    Some(vec![data[data_index].clone(), data[data_index + 1].clone()])
                 } else {
                     None
                 }
-            },
+            }
             _ => self.dataset.get_row(index),
         }
     }
@@ -128,8 +128,11 @@ impl RedisTableOperations for RedisHashTable {
             .collect();
 
         if !fields.is_empty() {
-            let _: () = redis::cmd("HSET").arg(key_prefix).arg(&fields).query(conn)?;
-            
+            let _: () = redis::cmd("HSET")
+                .arg(key_prefix)
+                .arg(&fields)
+                .query(conn)?;
+
             // Update internal data
             if let DataSet::Complete(DataContainer::Hash(ref mut hash_data)) = &mut self.dataset {
                 hash_data.extend(fields);

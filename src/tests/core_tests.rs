@@ -1,10 +1,10 @@
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 mod tests {
-    use crate::redis_fdw::{
-        state::RedisFdwState,
-        types::RedisTableType,
-        tables::{RedisHashTable, RedisListTable},
+    use crate::{
+        core::state::RedisFdwState,
+        tables::implementations::{RedisHashTable, RedisListTable},
+        tables::types::RedisTableType,
     };
     use pgrx::prelude::*;
     use std::ptr;
@@ -88,8 +88,8 @@ mod tests {
 
     #[pg_test]
     fn test_redis_table_type_data_len() {
-        use crate::redis_fdw::types::{DataSet, DataContainer};
-        
+        use crate::tables::types::{DataContainer, DataSet};
+
         // Test data_len for different table types
         let mut state = RedisFdwState::new(ptr::null_mut());
 
@@ -125,8 +125,8 @@ mod tests {
 
     #[pg_test]
     fn test_redis_fdw_state_is_read_end() {
-        use crate::redis_fdw::types::{DataSet, DataContainer};
-        
+        use crate::tables::types::{DataContainer, DataSet};
+
         let mut state = RedisFdwState::new(ptr::null_mut());
 
         // Test with no data
@@ -734,7 +734,7 @@ mod tests {
 
     #[pg_test]
     fn test_redis_cluster_connection_parsing() {
-        use crate::redis_fdw::state::RedisFdwState;
+        use crate::core::state::RedisFdwState;
         use std::collections::HashMap;
 
         // Test cluster node parsing
@@ -761,7 +761,10 @@ mod tests {
         fdw_state.update_from_options(cluster_opts);
 
         // Test that cluster nodes parsing works
-        assert_eq!(fdw_state.host_port, "127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002");
+        assert_eq!(
+            fdw_state.host_port,
+            "127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002"
+        );
         assert_eq!(fdw_state.database, 0);
 
         info!("Redis cluster connection parsing test completed successfully");

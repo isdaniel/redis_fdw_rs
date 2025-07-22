@@ -377,30 +377,39 @@ INSERT INTO redis_list_table VALUES
 ### Project Structure
 ```
 src/
-├── redis_fdw/
-│   ├── mod.rs                   # Updated module declarations
-│   ├── handlers.rs              # PostgreSQL FDW handler functions (updated imports)
-│   ├── pushdown.rs             # WHERE clause pushdown logic (types moved out)
-│   ├── pushdown_types.rs       # 🆕 Pushdown condition types and analysis structures
-│   ├── state.rs                # FDW state management (RedisTableType moved out)
-│   ├── types.rs                # 🆕 Core Redis FDW data types and enums
-│   ├── connection.rs           # 🆕 Redis connection management types
-│   ├── table_type_tests.rs     # Unit tests for table types (updated imports)
-│   ├── tests.rs                # Integration tests (updated imports)
-│   ├── pushdown_tests.rs       # Pushdown tests (updated imports)
-│   └── tables/                 # Redis table implementations (OOP architecture)
-│       ├── mod.rs              # Table module exports
-│       ├── interface.rs        # RedisTableOperations trait (RedisConnectionType moved out)
-│       ├── redis_hash_table.rs # Hash table implementation (updated imports)
-│       ├── redis_list_table.rs # List table implementation (updated imports)
-│       ├── redis_set_table.rs  # Set table implementation (updated imports)
-│       ├── redis_string_table.rs # String table implementation (updated imports)
-│       └── redis_zset_table.rs # Sorted set implementation (updated imports)
-└── utils_share/                # Shared utilities (unchanged)
-    ├── cell.rs                 # Data cell types
-    ├── memory.rs              # Memory management
-    ├── row.rs                 # Row operations
-    └── utils.rs               # General utilities
+├── lib.rs                    # Clean entry point with organized imports
+├── core/                     # Core FDW functionality  
+│   ├── mod.rs               # Module organization and re-exports
+│   ├── connection.rs        # Redis connection management
+│   ├── handlers.rs          # PostgreSQL FDW handlers  
+│   └── state.rs            # FDW state management
+├── query/                   # Query processing & optimization
+│   ├── mod.rs              # Query module organization
+│   ├── pushdown.rs         # WHERE clause pushdown logic
+│   └── pushdown_types.rs   # Pushdown type definitions
+├── tables/                  # Table implementations
+│   ├── mod.rs              # Tables module organization
+│   ├── interface.rs        # RedisTableOperations trait
+│   ├── types.rs           # Table type definitions (RedisTableType enum)
+│   └── implementations/    # Actual Redis table implementations
+│       ├── mod.rs         # Implementations organization
+│       ├── hash.rs        # Redis Hash table (was redis_hash_table.rs)
+│       ├── list.rs        # Redis List table (was redis_list_table.rs)
+│       ├── set.rs         # Redis Set table (was redis_set_table.rs)
+│       ├── string.rs      # Redis String table (was redis_string_table.rs)
+│       └── zset.rs        # Redis ZSet table (was redis_zset_table.rs)
+├── utils/                  # Utility functions (renamed from utils_share)
+│   ├── mod.rs             # Utils module organization
+│   ├── cell.rs            # Cell data type handling
+│   ├── memory.rs          # Memory context management
+│   ├── row.rs             # Row data structures
+│   └── utils.rs           # General utilities
+└── tests/                 # Organized test suite
+    ├── mod.rs            # Test module organization
+    ├── core_tests.rs     # Core functionality tests
+    ├── table_tests.rs    # Table implementation tests
+    ├── pushdown_tests.rs # Query pushdown tests
+    └── utils_tests.rs    # Utility function tests
 ```
 
 ### OOP Architecture Benefits

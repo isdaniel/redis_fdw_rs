@@ -1,6 +1,23 @@
 use pgrx::prelude::*;
-mod redis_fdw;
-mod utils_share;
+
+// Core FDW functionality
+mod core;
+
+// Query processing and optimization
+mod query;
+
+// Table type implementations
+mod tables;
+
+// Utility functions and helpers
+mod utils;
+
+// All tests organized by functionality
+#[cfg(any(test, feature = "pg_test"))]
+mod tests;
+
+// Re-export the main FDW handler function for PostgreSQL
+pub use core::handlers::redis_fdw_handler;
 
 ::pgrx::pg_module_magic!(name, version);
 

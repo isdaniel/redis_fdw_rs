@@ -5,7 +5,7 @@
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 mod tests {
-    use crate::redis_fdw::{
+    use crate::query::{
         pushdown::WhereClausePushdown,
         pushdown_types::{ComparisonOperator, PushableCondition},
     };
@@ -474,7 +474,7 @@ mod tests {
 
     #[test]
     fn test_condition_pushability() {
-        use crate::redis_fdw::types::RedisTableType;
+        use crate::tables::types::RedisTableType;
 
         // Test different table types and operators
         let hash_type = RedisTableType::from_str("hash");

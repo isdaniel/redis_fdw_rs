@@ -1,10 +1,8 @@
 use crate::{
-    redis_fdw::{
-        pushdown::WhereClausePushdown, 
-        types::RedisTableType,
-        state::RedisFdwState
-    },
-    utils_share::{memory::create_wrappers_memctx, row::Row, utils::*},
+    core::state::RedisFdwState,
+    query::pushdown::WhereClausePushdown,
+    tables::types::RedisTableType,
+    utils::{memory::create_wrappers_memctx, row::Row, utils::*},
 };
 use pgrx::{
     pg_sys::{Index, MemoryContextData, ModifyTable, PlannerInfo},

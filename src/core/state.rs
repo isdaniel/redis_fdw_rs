@@ -1,7 +1,7 @@
-use crate::redis_fdw::{
-    types::{LoadDataResult, RedisTableType}, 
-    pushdown_types::{PushdownAnalysis, PushableCondition}, 
-    connection::RedisConnectionType,
+use crate::{
+    core::connection::RedisConnectionType,
+    query::pushdown_types::{PushableCondition, PushdownAnalysis},
+    tables::types::{LoadDataResult, RedisTableType},
 };
 use pgrx::{pg_sys::MemoryContext, prelude::*};
 use redis::cluster::ClusterClient;
@@ -47,7 +47,8 @@ impl RedisFdwState {
         // Check if host_port contains multiple nodes (cluster mode)
         if self.host_port.contains(',') {
             // Cluster mode: parse multiple node addresses
-            let nodes: Vec<String> = self.host_port
+            let nodes: Vec<String> = self
+                .host_port
                 .split(',')
                 .map(|node| {
                     let trimmed = node.trim();
@@ -59,10 +60,13 @@ impl RedisFdwState {
                     }
                 })
                 .collect();
-            
+
             log!("Connecting to Redis cluster with nodes: {:?}", nodes);
-            let cluster_client = ClusterClient::new(nodes).expect("Failed to create Redis cluster client");
-            let cluster_connection = cluster_client.get_connection().expect("Failed to connect to Redis cluster");
+            let cluster_client =
+                ClusterClient::new(nodes).expect("Failed to create Redis cluster client");
+            let cluster_connection = cluster_client
+                .get_connection()
+                .expect("Failed to connect to Redis cluster");
             self.redis_connection = Some(RedisConnectionType::Cluster(cluster_connection));
         } else {
             // Single node mode
@@ -171,7 +175,8 @@ impl RedisFdwState {
     pub fn insert_data(&mut self, data: &[String]) -> Result<(), redis::RedisError> {
         if let Some(conn) = self.redis_connection.as_mut() {
             let conn_like = conn.as_connection_like_mut();
-            self.table_type.insert(conn_like, &self.table_key_prefix, data)
+            self.table_type
+                .insert(conn_like, &self.table_key_prefix, data)
         } else {
             Err(redis::RedisError::from((
                 redis::ErrorKind::IoError,
@@ -184,7 +189,8 @@ impl RedisFdwState {
     pub fn delete_data(&mut self, data: &[String]) -> Result<(), redis::RedisError> {
         if let Some(conn) = self.redis_connection.as_mut() {
             let conn_like = conn.as_connection_like_mut();
-            self.table_type.delete(conn_like, &self.table_key_prefix, data)
+            self.table_type
+                .delete(conn_like, &self.table_key_prefix, data)
         } else {
             Err(redis::RedisError::from((
                 redis::ErrorKind::IoError,

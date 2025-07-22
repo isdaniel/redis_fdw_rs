@@ -1,7 +1,9 @@
-use crate::redis_fdw::{
-    pushdown_types::{ComparisonOperator, PushableCondition},
-    tables::interface::RedisTableOperations,
-    types::{DataSet, DataContainer, LoadDataResult},
+use crate::{
+    query::pushdown_types::{ComparisonOperator, PushableCondition},
+    tables::{
+        interface::RedisTableOperations,
+        types::{DataContainer, DataSet, LoadDataResult},
+    },
 };
 
 /// Redis List table type
@@ -12,7 +14,7 @@ pub struct RedisListTable {
 
 impl RedisListTable {
     pub fn new() -> Self {
-        Self { 
+        Self {
             dataset: DataSet::Empty,
         }
     }
@@ -27,7 +29,11 @@ impl RedisTableOperations for RedisListTable {
     ) -> Result<LoadDataResult, redis::RedisError> {
         // Lists don't have efficient filtering in Redis
         // Fall back to loading all data
-        let data: Vec<String> = redis::cmd("LRANGE").arg(key_prefix).arg(0).arg(-1).query(conn)?;
+        let data: Vec<String> = redis::cmd("LRANGE")
+            .arg(key_prefix)
+            .arg(0)
+            .arg(-1)
+            .query(conn)?;
         self.dataset = DataSet::Complete(DataContainer::List(data));
         Ok(LoadDataResult::LoadedToInternal)
     }
@@ -44,7 +50,7 @@ impl RedisTableOperations for RedisListTable {
     ) -> Result<(), redis::RedisError> {
         for value in data {
             let _: i32 = redis::cmd("RPUSH").arg(key_prefix).arg(value).query(conn)?;
-            
+
             // Update internal data
             if let DataSet::Complete(DataContainer::List(ref mut list_data)) = &mut self.dataset {
                 list_data.push(value.clone());
@@ -65,8 +71,12 @@ impl RedisTableOperations for RedisListTable {
         for value in data {
             // LREM removes all occurrences of value from the list
             // Using count = 0 to remove all occurrences
-            let _: i32 = redis::cmd("LREM").arg(key_prefix).arg(0).arg(value).query(conn)?;
-            
+            let _: i32 = redis::cmd("LREM")
+                .arg(key_prefix)
+                .arg(0)
+                .arg(value)
+                .query(conn)?;
+
             // Remove from local data cache
             if let DataSet::Complete(DataContainer::List(ref mut list_data)) = &mut self.dataset {
                 list_data.retain(|x| x != value);

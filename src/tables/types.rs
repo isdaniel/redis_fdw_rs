@@ -1,11 +1,13 @@
 /// Redis FDW data types and enums
 /// This module contains the core data type definitions used throughout the Redis FDW
-
-use crate::redis_fdw::{
-    pushdown_types::{ComparisonOperator, PushableCondition},
+use crate::{
+    query::pushdown_types::{ComparisonOperator, PushableCondition},
     tables::{
-        RedisHashTable, RedisListTable, RedisSetTable, RedisStringTable, RedisZSetTable, RedisTableOperations
-    }
+        implementations::{
+            RedisHashTable, RedisListTable, RedisSetTable, RedisStringTable, RedisZSetTable,
+        },
+        interface::RedisTableOperations,
+    },
 };
 
 /// Enum representing different Redis table types with their implementations
@@ -119,10 +121,7 @@ impl RedisTableType {
     }
 
     /// Check if this table type supports a specific pushdown operator
-    pub fn supports_pushdown(
-        &self,
-        operator: &ComparisonOperator,
-    ) -> bool {
+    pub fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
         match self {
             RedisTableType::String(table) => table.supports_pushdown(operator),
             RedisTableType::Hash(table) => table.supports_pushdown(operator),
@@ -181,7 +180,7 @@ impl DataSet {
                 // Filtered data length depends on the data structure
                 // This will be properly handled by the specific table type's get_row implementation
                 data.len()
-            },
+            }
             DataSet::Complete(container) => container.len(),
         }
     }
@@ -195,7 +194,7 @@ impl DataSet {
             DataSet::Filtered(data) => {
                 // Generic implementation - each element is a row
                 data.get(index).map(|item| vec![item.clone()])
-            },
+            }
             DataSet::Complete(container) => container.get_row(index),
         }
     }
@@ -205,7 +204,13 @@ impl DataContainer {
     /// Get the number of rows in this container
     pub fn len(&self) -> usize {
         match self {
-            DataContainer::String(opt) => if opt.is_some() { 1 } else { 0 },
+            DataContainer::String(opt) => {
+                if opt.is_some() {
+                    1
+                } else {
+                    0
+                }
+            }
             DataContainer::Hash(pairs) => pairs.len(),
             DataContainer::List(items) => items.len(),
             DataContainer::Set(items) => items.len(),
@@ -222,19 +227,13 @@ impl DataContainer {
                 } else {
                     None
                 }
-            },
-            DataContainer::Hash(pairs) => {
-                pairs.get(index).map(|(k, v)| vec![k.clone(), v.clone()])
-            },
-            DataContainer::List(items) => {
-                items.get(index).map(|item| vec![item.clone()])
-            },
-            DataContainer::Set(items) => {
-                items.get(index).map(|item| vec![item.clone()])
-            },
-            DataContainer::ZSet(items) => {
-                items.get(index).map(|(member, score)| vec![member.clone(), score.to_string()])
-            },
+            }
+            DataContainer::Hash(pairs) => pairs.get(index).map(|(k, v)| vec![k.clone(), v.clone()]),
+            DataContainer::List(items) => items.get(index).map(|item| vec![item.clone()]),
+            DataContainer::Set(items) => items.get(index).map(|item| vec![item.clone()]),
+            DataContainer::ZSet(items) => items
+                .get(index)
+                .map(|(member, score)| vec![member.clone(), score.to_string()]),
         }
     }
 }

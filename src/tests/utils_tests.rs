@@ -1,7 +1,7 @@
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 mod tests {
-    use crate::utils_share::{
+    use crate::utils::{
         cell::Cell,
         row::Row,
         utils::{cell_to_string, string_from_cstr, string_to_cstr},
