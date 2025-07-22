@@ -726,4 +726,97 @@ mod tests {
 
         info!("Comprehensive Redis operations smoke test completed successfully");
     }
+
+    #[pg_test]
+    fn test_redis_cluster_connection_parsing() {
+        use crate::redis_fdw::state::RedisFdwState;
+        use std::collections::HashMap;
+
+        // Test cluster node parsing
+        let tmp_ctx = unsafe { pgrx::pg_sys::CurrentMemoryContext };
+        let mut fdw_state = RedisFdwState::new(tmp_ctx);
+
+        // Test single node (should create Single connection type)
+        let mut single_opts = HashMap::new();
+        single_opts.insert("host_port".to_string(), "127.0.0.1:6379".to_string());
+        single_opts.insert("database".to_string(), "0".to_string());
+        fdw_state.update_from_options(single_opts);
+
+        // Test that single node parsing works
+        assert_eq!(fdw_state.host_port, "127.0.0.1:6379");
+        assert_eq!(fdw_state.database, 0);
+
+        // Test cluster nodes (multiple comma-separated addresses)
+        let mut cluster_opts = HashMap::new();
+        cluster_opts.insert(
+            "host_port".to_string(),
+            "127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002".to_string(),
+        );
+        cluster_opts.insert("database".to_string(), "0".to_string());
+        fdw_state.update_from_options(cluster_opts);
+
+        // Test that cluster nodes parsing works
+        assert_eq!(fdw_state.host_port, "127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002");
+        assert_eq!(fdw_state.database, 0);
+
+        info!("Redis cluster connection parsing test completed successfully");
+    }
+
+    #[pg_test]
+    fn test_redis_cluster_server_creation() {
+        // Test that cluster server can be created with multiple nodes
+        Spi::run("CREATE FOREIGN DATA WRAPPER test_cluster_wrapper HANDLER redis_fdw_handler;")
+            .unwrap();
+
+        // Test single node server
+        let result = std::panic::catch_unwind(|| {
+            Spi::run(
+                "
+                CREATE SERVER test_single_server 
+                FOREIGN DATA WRAPPER test_cluster_wrapper
+                OPTIONS (host_port '127.0.0.1:6379');
+            ",
+            )
+            .unwrap();
+        });
+        assert!(result.is_ok());
+
+        // Test cluster server with multiple nodes
+        let result = std::panic::catch_unwind(|| {
+            Spi::run(
+                "
+                CREATE SERVER test_cluster_server 
+                FOREIGN DATA WRAPPER test_cluster_wrapper
+                OPTIONS (host_port '127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002');
+            ",
+            )
+            .unwrap();
+        });
+        assert!(result.is_ok());
+
+        // Test creating foreign tables on cluster server
+        let result = std::panic::catch_unwind(|| {
+            Spi::run(
+                "
+                CREATE FOREIGN TABLE test_cluster_hash (field TEXT, value TEXT) 
+                SERVER test_cluster_server
+                OPTIONS (
+                    database '0',
+                    table_type 'hash',
+                    table_key_prefix 'cluster:test'
+                );
+            ",
+            )
+            .unwrap();
+        });
+        assert!(result.is_ok());
+
+        // Clean up
+        Spi::run("DROP FOREIGN TABLE IF EXISTS test_cluster_hash;").unwrap();
+        Spi::run("DROP SERVER test_cluster_server CASCADE;").unwrap();
+        Spi::run("DROP SERVER test_single_server CASCADE;").unwrap();
+        Spi::run("DROP FOREIGN DATA WRAPPER test_cluster_wrapper CASCADE;").unwrap();
+
+        info!("Redis cluster server creation test completed successfully");
+    }
 }

@@ -21,7 +21,7 @@ integration_tests = []
 
 [dependencies]
 pgrx = "=0.15.0"
-redis = "0.32.4"
+redis = { version = "0.32.4", features = ["cluster"] }
 
 [dev-dependencies]
 pgrx-tests = "=0.15.0"

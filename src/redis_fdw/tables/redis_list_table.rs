@@ -2,7 +2,6 @@ use crate::redis_fdw::{
     pushdown::{ComparisonOperator, PushableCondition},
     tables::interface::RedisTableOperations,
 };
-use redis::Commands;
 
 /// Redis List table type
 #[derive(Debug, Clone, Default)]
@@ -19,14 +18,14 @@ impl RedisListTable {
 impl RedisTableOperations for RedisListTable {
     fn load_data(
         &mut self,
-        conn: &mut redis::Connection,
+        conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         _conditions: Option<&[PushableCondition]>,
     ) -> Result<Option<Vec<String>>, redis::RedisError> {
         // Lists don't have efficient filtering in Redis
         // Fall back to loading all data
         // Load all data into internal storage
-        self.data = conn.lrange(key_prefix, 0, -1)?;
+        self.data = redis::cmd("LRANGE").arg(key_prefix).arg(0).arg(-1).query(conn)?;
         Ok(None)
     }
 
@@ -53,12 +52,12 @@ impl RedisTableOperations for RedisListTable {
 
     fn insert(
         &mut self,
-        conn: &mut redis::Connection,
+        conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         data: &[String],
     ) -> Result<(), redis::RedisError> {
         for value in data {
-            let _: i32 = conn.rpush(key_prefix, value)?;
+            let _: i32 = redis::cmd("RPUSH").arg(key_prefix).arg(value).query(conn)?;
             self.data.push(value.clone());
         }
         Ok(())
@@ -66,14 +65,14 @@ impl RedisTableOperations for RedisListTable {
 
     fn delete(
         &mut self,
-        conn: &mut redis::Connection,
+        conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         data: &[String],
     ) -> Result<(), redis::RedisError> {
         for value in data {
             // LREM removes all occurrences of value from the list
             // Using count = 0 to remove all occurrences
-            let _: i32 = conn.lrem(key_prefix, 0, value)?;
+            let _: i32 = redis::cmd("LREM").arg(key_prefix).arg(0).arg(value).query(conn)?;
             // Remove from local data cache
             self.data.retain(|x| x != value);
         }
@@ -82,7 +81,7 @@ impl RedisTableOperations for RedisListTable {
 
     fn update(
         &mut self,
-        conn: &mut redis::Connection,
+        conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         old_data: &[String],
         new_data: &[String],

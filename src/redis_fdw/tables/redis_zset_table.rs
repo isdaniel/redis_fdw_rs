@@ -1,4 +1,3 @@
-use redis::Commands;
 
 use crate::redis_fdw::{
     pushdown::{ComparisonOperator, PushableCondition},
@@ -20,14 +19,14 @@ impl RedisZSetTable {
 impl RedisTableOperations for RedisZSetTable {
     fn load_data(
         &mut self,
-        conn: &mut redis::Connection,
+        conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         _conditions: Option<&[PushableCondition]>,
     ) -> Result<Option<Vec<String>>, redis::RedisError> {
         // ZSets could support score-based range queries in the future
         // For now, fall back to loading all data
         // Load all data into internal storage
-        let result: Vec<(String, f64)> = conn.zrange_withscores(key_prefix, 0, -1)?;
+        let result: Vec<(String, f64)> = redis::cmd("ZRANGE").arg(key_prefix).arg(0).arg(-1).arg("WITHSCORES").query(conn)?;
         self.data = result;
         Ok(None)
     }
@@ -61,7 +60,7 @@ impl RedisTableOperations for RedisZSetTable {
 
     fn insert(
         &mut self,
-        conn: &mut redis::Connection,
+        conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         data: &[String],
     ) -> Result<(), redis::RedisError> {
@@ -82,7 +81,7 @@ impl RedisTableOperations for RedisZSetTable {
             .collect();
 
         for (score, member) in &items {
-            let _: () = conn.zadd(key_prefix, member, *score)?;
+            let _: () = redis::cmd("ZADD").arg(key_prefix).arg(*score).arg(member).query(conn)?;
             self.data.push((member.clone(), *score));
         }
         Ok(())
@@ -90,12 +89,12 @@ impl RedisTableOperations for RedisZSetTable {
 
     fn delete(
         &mut self,
-        conn: &mut redis::Connection,
+        conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         data: &[String],
     ) -> Result<(), redis::RedisError> {
         for member in data {
-            let _: i32 = conn.zrem(key_prefix, member)?;
+            let _: i32 = redis::cmd("ZREM").arg(key_prefix).arg(member).query(conn)?;
             self.data.retain(|(m, _)| m != member);
         }
         Ok(())
@@ -103,7 +102,7 @@ impl RedisTableOperations for RedisZSetTable {
 
     fn update(
         &mut self,
-        conn: &mut redis::Connection,
+        conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         old_data: &[String],
         new_data: &[String],

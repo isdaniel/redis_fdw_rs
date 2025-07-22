@@ -1,4 +1,3 @@
-use redis::Commands;
 use std::collections::HashMap;
 
 use crate::redis_fdw::{
@@ -21,7 +20,7 @@ impl RedisHashTable {
 impl RedisTableOperations for RedisHashTable {
     fn load_data(
         &mut self,
-        conn: &mut redis::Connection,
+        conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         conditions: Option<&[PushableCondition]>,
     ) -> Result<Option<Vec<String>>, redis::RedisError> {
@@ -67,7 +66,7 @@ impl RedisTableOperations for RedisHashTable {
         }
 
         // Load all data (either no conditions or pushdown not applicable)
-        let hash_data: HashMap<String, String> = conn.hgetall(key_prefix)?;
+        let hash_data: HashMap<String, String> = redis::cmd("HGETALL").arg(key_prefix).query(conn)?;
         self.data = hash_data.into_iter().collect();
         Ok(None) // Return None to indicate data was loaded into internal storage
     }
@@ -101,7 +100,7 @@ impl RedisTableOperations for RedisHashTable {
 
     fn insert(
         &mut self,
-        conn: &mut redis::Connection,
+        conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         data: &[String],
     ) -> Result<(), redis::RedisError> {
@@ -117,7 +116,7 @@ impl RedisTableOperations for RedisHashTable {
             .collect();
 
         if !fields.is_empty() {
-            let _: () = conn.hset_multiple(key_prefix, &fields)?;
+            let _: () = redis::cmd("HSET").arg(key_prefix).arg(&fields).query(conn)?;
             self.data.extend(fields);
         }
         Ok(())
@@ -125,7 +124,7 @@ impl RedisTableOperations for RedisHashTable {
 
     fn delete(
         &mut self,
-        conn: &mut redis::Connection,
+        conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         data: &[String],
     ) -> Result<(), redis::RedisError> {
@@ -140,7 +139,7 @@ impl RedisTableOperations for RedisHashTable {
 
     fn update(
         &mut self,
-        conn: &mut redis::Connection,
+        conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         _old_data: &[String],
         new_data: &[String],

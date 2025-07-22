@@ -1,4 +1,3 @@
-use redis::Commands;
 
 use crate::redis_fdw::{
     pushdown::{ComparisonOperator, PushableCondition},
@@ -20,7 +19,7 @@ impl RedisSetTable {
 impl RedisTableOperations for RedisSetTable {
     fn load_data(
         &mut self,
-        conn: &mut redis::Connection,
+        conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         conditions: Option<&[PushableCondition]>,
     ) -> Result<Option<Vec<String>>, redis::RedisError> {
@@ -66,7 +65,7 @@ impl RedisTableOperations for RedisSetTable {
         }
 
         // Load all data into internal storage
-        self.data = conn.smembers(key_prefix)?;
+        self.data = redis::cmd("SMEMBERS").arg(key_prefix).query(conn)?;
         Ok(None)
     }
 
@@ -93,12 +92,12 @@ impl RedisTableOperations for RedisSetTable {
 
     fn insert(
         &mut self,
-        conn: &mut redis::Connection,
+        conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         data: &[String],
     ) -> Result<(), redis::RedisError> {
         for value in data {
-            let added: i32 = conn.sadd(key_prefix, value)?;
+            let added: i32 = redis::cmd("SADD").arg(key_prefix).arg(value).query(conn)?;
             if added > 0 {
                 self.data.push(value.clone());
             }
@@ -108,12 +107,12 @@ impl RedisTableOperations for RedisSetTable {
 
     fn delete(
         &mut self,
-        conn: &mut redis::Connection,
+        conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         data: &[String],
     ) -> Result<(), redis::RedisError> {
         for value in data {
-            let _: i32 = conn.srem(key_prefix, value)?;
+            let _: i32 = redis::cmd("SREM").arg(key_prefix).arg(value).query(conn)?;
             self.data.retain(|x| x != value);
         }
         Ok(())
@@ -121,7 +120,7 @@ impl RedisTableOperations for RedisSetTable {
 
     fn update(
         &mut self,
-        conn: &mut redis::Connection,
+        conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         old_data: &[String],
         new_data: &[String],
