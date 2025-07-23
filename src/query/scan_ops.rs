@@ -47,11 +47,13 @@ impl PatternMatcher {
     }
 
     /// Get the Redis-compatible glob pattern
+    #[inline]
     pub fn get_pattern(&self) -> &str {
         &self.pattern
     }
 
     /// Check if this pattern requires SCAN with MATCH
+    #[inline]
     pub fn requires_scan(&self) -> bool {
         self.is_wildcard
     }
