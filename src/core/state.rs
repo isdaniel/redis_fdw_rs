@@ -1,10 +1,12 @@
 use crate::{
-    core::connection::RedisConnectionType,
-    query::pushdown_types::{PushableCondition, PushdownAnalysis},
+    core::{
+        connection::RedisConnectionType,
+        connection_factory::{RedisConnectionConfig, RedisConnectionFactory},
+    },
+    query::pushdown_types::PushdownAnalysis,
     tables::types::{LoadDataResult, RedisTableType},
 };
 use pgrx::{pg_sys::MemoryContext, prelude::*};
-use redis::cluster::ClusterClient;
 use std::collections::HashMap;
 
 /// Read FDW state
@@ -39,42 +41,24 @@ impl RedisFdwState {
 }
 
 impl RedisFdwState {
-    /// Check if redis connection is initialized and create appropriate connection type
-    /// Supports both single-node and cluster connections
-    /// # Panics
-    /// Panics if connection fails
-    pub fn init_redis_connection_from_options(&mut self) {
-        // Check if host_port contains multiple nodes (cluster mode)
-        if self.host_port.contains(',') {
-            // Cluster mode: parse multiple node addresses
-            let nodes: Vec<String> = self
-                .host_port
-                .split(',')
-                .map(|node| {
-                    let trimmed = node.trim();
-                    // Add redis:// prefix if not present and format with database
-                    if trimmed.starts_with("redis://") {
-                        format!("{}/{}", trimmed, self.database)
-                    } else {
-                        format!("redis://{}/{}", trimmed, self.database)
-                    }
-                })
-                .collect();
+    /// Initialize Redis connection using the connection factory
+    /// Returns Result for proper error handling instead of panicking
+    pub fn init_redis_connection_from_options(&mut self) -> Result<(), String> {
+        // Create configuration from current options
+        let config = RedisConnectionConfig::from_options(&self.opts)
+            .map_err(|e| format!("Failed to create Redis configuration: {}", e))?;
 
-            log!("Connecting to Redis cluster with nodes: {:?}", nodes);
-            let cluster_client =
-                ClusterClient::new(nodes).expect("Failed to create Redis cluster client");
-            let cluster_connection = cluster_client
-                .get_connection()
-                .expect("Failed to connect to Redis cluster");
-            self.redis_connection = Some(RedisConnectionType::Cluster(cluster_connection));
-        } else {
-            // Single node mode
-            let addr_port = format!("redis://{}/{}", self.host_port, self.database);
-            log!("Connecting to single Redis node: {}", addr_port);
-            let client = redis::Client::open(addr_port).expect("Failed to create Redis client");
-            let connection = client.get_connection().expect("Failed to connect to Redis");
-            self.redis_connection = Some(RedisConnectionType::Single(connection));
+        // Create connection using the factory with retry logic
+        match RedisConnectionFactory::create_connection_with_retry(&config) {
+            Ok(connection) => {
+                self.redis_connection = Some(connection);
+                log!("Successfully initialized Redis connection");
+                Ok(())
+            }
+            Err(e) => {
+                let error_msg = format!("Failed to initialize Redis connection: {}", e);
+                Err(error_msg)
+            }
         }
     }
 

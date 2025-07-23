@@ -165,7 +165,12 @@ extern "C-unwind" fn begin_foreign_scan(
             let options = get_foreign_table_options(relid);
             log!("Foreign table options: {:?}", options);
             state.update_from_options(options);
-            state.init_redis_connection_from_options();
+            
+            // Initialize Redis connection and handle potential errors
+            if let Err(e) = state.init_redis_connection_from_options() {
+                pgrx::error!("Failed to connect to Redis: {}", e);
+            }
+            
             state.set_table_type();
         });
 
@@ -268,7 +273,12 @@ unsafe extern "C-unwind" fn plan_foreign_modify(
         let opts = get_foreign_table_options(ftable_id);
         log!("Foreign table options for modify: {:?}", opts);
         state.update_from_options(opts);
-        state.init_redis_connection_from_options();
+        
+        // Initialize Redis connection and handle potential errors
+        if let Err(e) = state.init_redis_connection_from_options() {
+            pgrx::error!("Failed to connect to Redis: {}", e);
+        }
+        
         state.set_table_type();
         let p: *mut RedisFdwState = Box::leak(Box::new(state)) as *mut RedisFdwState;
         let state: PgBox<RedisFdwState> = PgBox::<RedisFdwState>::from_pg(p as _);
