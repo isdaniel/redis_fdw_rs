@@ -113,7 +113,6 @@ impl RedisFdwState {
 
     /// Load data from Redis, applying pushdown optimizations if available
     fn load_data(&mut self) {
-        let pushable_conditions: Option<&[PushableCondition]> = None;
         if let Some(conn) = self.redis_connection.as_mut() {
             let conn_like = conn.as_connection_like_mut();
             if let Some(ref analysis) = self.pushdown_analysis {

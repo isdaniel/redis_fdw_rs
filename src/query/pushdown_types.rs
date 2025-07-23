@@ -15,7 +15,6 @@ pub enum ComparisonOperator {
     Equal,    // =
     NotEqual, // <>
     Like,     // LIKE
-    NotLike,  // NOT LIKE
     In,       // IN (...)
     NotIn,    // NOT IN (...)
 }

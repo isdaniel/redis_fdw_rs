@@ -53,5 +53,5 @@ pub trait RedisTableOperations {
     ) -> Result<(), redis::RedisError>;
 
     /// Check if a specific condition can be pushed down for this table type
-    fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool;
+    fn supports_pushdown(&self, operator: ComparisonOperator) -> bool;
 }

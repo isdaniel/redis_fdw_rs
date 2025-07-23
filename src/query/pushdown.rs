@@ -72,7 +72,7 @@ impl WhereClausePushdown {
         if node.is_null() {
             return None;
         }
-
+        //info!("Analyzing expression (*node).type_: {:?}", (*node).type_);
         match (*node).type_ {
             pg_sys::NodeTag::T_OpExpr => {
                 Self::analyze_op_expr(node as *mut pg_sys::OpExpr, table_type)
@@ -112,7 +112,6 @@ impl WhereClausePushdown {
 
         // Extract column name and value
         let (column_name, value) = Self::extract_column_and_value(left_arg, right_arg)?;
-
         // Determine operator type based on operator OID
         let operator = Self::get_operator_from_oid(op_expr.opno)?;
 
@@ -427,13 +426,12 @@ impl WhereClausePushdown {
     }
 
     /// Determine operator type from PostgreSQL operator OID
-    pub unsafe fn get_operator_from_oid(op_oid: pg_sys::Oid) -> Option<ComparisonOperator> {
+    unsafe fn get_operator_from_oid(op_oid: pg_sys::Oid) -> Option<ComparisonOperator> {
         let oid_val = op_oid.to_u32();
         match oid_val {
             98 => Some(ComparisonOperator::Equal),     // text = text
             531 => Some(ComparisonOperator::NotEqual), // text <> text
-            664 => Some(ComparisonOperator::Like),     // text LIKE text
-            665 => Some(ComparisonOperator::NotLike),  // text NOT LIKE text
+            1209 => Some(ComparisonOperator::Like),    // text LIKE text
             _ => {
                 // Look up operator name from system catalog
                 Self::lookup_operator_name(op_oid)

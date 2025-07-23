@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use crate::{
-    query::pushdown_types::{ComparisonOperator, PushableCondition},
+    query::{
+        pushdown_types::{ComparisonOperator, PushableCondition},
+        scan_ops::{extract_scan_conditions, PatternMatcher, RedisScanBuilder},
+    },
     tables::{
         interface::RedisTableOperations,
         types::{DataContainer, DataSet, LoadDataResult},
@@ -20,6 +23,86 @@ impl RedisHashTable {
             dataset: DataSet::Empty,
         }
     }
+
+    /// Load data with HSCAN optimization for pattern matching
+    fn load_with_scan_optimization(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        scan_conditions: &crate::query::scan_ops::ScanConditions,
+    ) -> Result<LoadDataResult, redis::RedisError> {
+        if let Some(pattern) = scan_conditions.get_primary_pattern() {
+            let pattern_matcher = PatternMatcher::from_like_pattern(&pattern);
+
+            if pattern_matcher.requires_scan() {
+                // Use HSCAN with MATCH to find matching fields
+                let matching_fields: Vec<String> = RedisScanBuilder::new_hash_scan(key_prefix)
+                    .with_pattern(pattern_matcher.get_pattern())
+                    .with_count(100)
+                    .execute_all(conn)?;
+
+                if matching_fields.is_empty() {
+                    self.dataset = DataSet::Empty;
+                    return Ok(LoadDataResult::Empty);
+                }
+
+                // Get values for matching fields
+                let mut result = Vec::new();
+                for field in &matching_fields {
+                    if let Ok(Some(value)) = redis::cmd("HGET")
+                        .arg(key_prefix)
+                        .arg(field)
+                        .query::<Option<String>>(conn)
+                    {
+                        result.push(field.clone());
+                        result.push(value);
+                    }
+                }
+
+                // Additional client-side filtering
+                let filtered_result: Vec<String> = result
+                    .chunks(2)
+                    .filter(|chunk| {
+                        if chunk.len() == 2 {
+                            scan_conditions.pattern_conditions.iter().all(|condition| {
+                                let matcher = PatternMatcher::from_like_pattern(&condition.value);
+                                matcher.matches(&chunk[0]) // Check field name
+                            })
+                        } else {
+                            false
+                        }
+                    })
+                    .flatten()
+                    .cloned()
+                    .collect();
+
+                self.dataset = DataSet::Filtered(filtered_result.clone());
+                Ok(LoadDataResult::PushdownApplied(filtered_result))
+            } else {
+                // Exact field match
+                let value: Option<String> = redis::cmd("HGET")
+                    .arg(key_prefix)
+                    .arg(&pattern)
+                    .query(conn)?;
+
+                if let Some(v) = value {
+                    let result = vec![pattern.clone(), v];
+                    self.dataset = DataSet::Filtered(result.clone());
+                    Ok(LoadDataResult::PushdownApplied(result))
+                } else {
+                    self.dataset = DataSet::Empty;
+                    Ok(LoadDataResult::Empty)
+                }
+            }
+        } else {
+            // No pattern available, fallback to regular load
+            let hash_data: HashMap<String, String> =
+                redis::cmd("HGETALL").arg(key_prefix).query(conn)?;
+            let data_vec: Vec<(String, String)> = hash_data.into_iter().collect();
+            self.dataset = DataSet::Complete(DataContainer::Hash(data_vec));
+            Ok(LoadDataResult::LoadedToInternal)
+        }
+    }
 }
 
 impl RedisTableOperations for RedisHashTable {
@@ -30,8 +113,15 @@ impl RedisTableOperations for RedisHashTable {
         conditions: Option<&[PushableCondition]>,
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(conditions) = conditions {
+            let scan_conditions = extract_scan_conditions(conditions);
+
+            // Check for SCAN-optimizable conditions first
+            if scan_conditions.has_optimizable_conditions() {
+                return self.load_with_scan_optimization(conn, key_prefix, &scan_conditions);
+            }
+
+            // Legacy optimization for non-pattern conditions
             if !conditions.is_empty() {
-                // Apply hash-specific pushdown optimizations
                 for condition in conditions {
                     match condition.operator {
                         ComparisonOperator::Equal => {
@@ -159,7 +249,10 @@ impl RedisTableOperations for RedisHashTable {
         self.insert(conn, key_prefix, new_data)
     }
 
-    fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
-        matches!(operator, ComparisonOperator::Equal | ComparisonOperator::In)
+    fn supports_pushdown(&self, operator: ComparisonOperator) -> bool {
+        matches!(
+            operator,
+            ComparisonOperator::Equal | ComparisonOperator::In | ComparisonOperator::Like
+        )
     }
 }

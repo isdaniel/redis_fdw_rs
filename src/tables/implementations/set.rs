@@ -1,5 +1,8 @@
 use crate::{
-    query::pushdown_types::{ComparisonOperator, PushableCondition},
+    query::{
+        pushdown_types::{ComparisonOperator, PushableCondition},
+        scan_ops::{extract_scan_conditions, PatternMatcher, RedisScanBuilder},
+    },
     tables::{
         interface::RedisTableOperations,
         types::{DataContainer, DataSet, LoadDataResult},
@@ -18,6 +21,65 @@ impl RedisSetTable {
             dataset: DataSet::Empty,
         }
     }
+
+    /// Load data with SSCAN optimization for pattern matching
+    fn load_with_scan_optimization(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        scan_conditions: &crate::query::scan_ops::ScanConditions,
+    ) -> Result<LoadDataResult, redis::RedisError> {
+        if let Some(pattern) = scan_conditions.get_primary_pattern() {
+            let pattern_matcher = PatternMatcher::from_like_pattern(&pattern);
+
+            if pattern_matcher.requires_scan() {
+                // Use SSCAN with MATCH to find matching members
+                let matching_members: Vec<String> = RedisScanBuilder::new_set_scan(key_prefix)
+                    .with_pattern(pattern_matcher.get_pattern())
+                    .with_count(100)
+                    .execute_all(conn)?;
+
+                // Additional client-side filtering
+                let filtered_members: Vec<String> = matching_members
+                    .into_iter()
+                    .filter(|member| {
+                        scan_conditions.pattern_conditions.iter().all(|condition| {
+                            let matcher = PatternMatcher::from_like_pattern(&condition.value);
+                            matcher.matches(member)
+                        })
+                    })
+                    .collect();
+
+                if filtered_members.is_empty() {
+                    self.dataset = DataSet::Empty;
+                    Ok(LoadDataResult::Empty)
+                } else {
+                    self.dataset = DataSet::Filtered(filtered_members.clone());
+                    Ok(LoadDataResult::PushdownApplied(filtered_members))
+                }
+            } else {
+                // Exact member match
+                let exists: bool = redis::cmd("SISMEMBER")
+                    .arg(key_prefix)
+                    .arg(&pattern)
+                    .query(conn)?;
+
+                if exists {
+                    let result = vec![pattern.clone()];
+                    self.dataset = DataSet::Filtered(result.clone());
+                    Ok(LoadDataResult::PushdownApplied(result))
+                } else {
+                    self.dataset = DataSet::Empty;
+                    Ok(LoadDataResult::Empty)
+                }
+            }
+        } else {
+            // No pattern available, fallback to regular load
+            let members: Vec<String> = redis::cmd("SMEMBERS").arg(key_prefix).query(conn)?;
+            self.dataset = DataSet::Complete(DataContainer::Set(members));
+            Ok(LoadDataResult::LoadedToInternal)
+        }
+    }
 }
 
 impl RedisTableOperations for RedisSetTable {
@@ -28,8 +90,15 @@ impl RedisTableOperations for RedisSetTable {
         conditions: Option<&[PushableCondition]>,
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(conditions) = conditions {
+            let scan_conditions = extract_scan_conditions(conditions);
+
+            // Check for SCAN-optimizable conditions first
+            if scan_conditions.has_optimizable_conditions() {
+                return self.load_with_scan_optimization(conn, key_prefix, &scan_conditions);
+            }
+
+            // Legacy optimization for non-pattern conditions
             if !conditions.is_empty() {
-                // For sets, we can check membership efficiently
                 for condition in conditions {
                     match condition.operator {
                         ComparisonOperator::Equal => {
@@ -89,7 +158,7 @@ impl RedisTableOperations for RedisSetTable {
         data: &[String],
     ) -> Result<(), redis::RedisError> {
         for value in data {
-            let added: i32 = redis::cmd("SADD").arg(key_prefix).arg(value).query(conn)?;
+            let _added: i32 = redis::cmd("SADD").arg(key_prefix).arg(value).query(conn)?;
         }
         Ok(())
     }
@@ -119,7 +188,10 @@ impl RedisTableOperations for RedisSetTable {
         Ok(())
     }
 
-    fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
-        matches!(operator, ComparisonOperator::Equal | ComparisonOperator::In)
+    fn supports_pushdown(&self, operator: ComparisonOperator) -> bool {
+        matches!(
+            operator,
+            ComparisonOperator::Equal | ComparisonOperator::In | ComparisonOperator::Like
+        )
     }
 }
