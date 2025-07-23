@@ -123,11 +123,11 @@ impl RedisTableType {
     /// Check if this table type supports a specific pushdown operator
     pub fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
         match self {
-            RedisTableType::String(table) => table.supports_pushdown(operator.clone()),
-            RedisTableType::Hash(table) => table.supports_pushdown(operator.clone()),
-            RedisTableType::List(table) => table.supports_pushdown(operator.clone()),
-            RedisTableType::Set(table) => table.supports_pushdown(operator.clone()),
-            RedisTableType::ZSet(table) => table.supports_pushdown(operator.clone()),
+            RedisTableType::String(table) => table.supports_pushdown(operator),
+            RedisTableType::Hash(table) => table.supports_pushdown(operator),
+            RedisTableType::List(table) => table.supports_pushdown(operator),
+            RedisTableType::Set(table) => table.supports_pushdown(operator),
+            RedisTableType::ZSet(table) => table.supports_pushdown(operator),
             RedisTableType::None => false,
         }
     }
