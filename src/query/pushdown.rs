@@ -116,7 +116,7 @@ impl WhereClausePushdown {
         let operator = Self::get_operator_from_oid(op_expr.opno)?;
 
         // Check if this condition is suitable for the table type
-        if Self::is_condition_pushable(&operator, table_type) {
+        if table_type.supports_pushdown(&operator) {
             Some(PushableCondition {
                 column_name,
                 operator,
@@ -180,7 +180,7 @@ impl WhereClausePushdown {
         };
 
         // Check if this condition is suitable for the table type
-        if !Self::is_condition_pushable(&operator, table_type) {
+        if !table_type.supports_pushdown(&operator) {
             return None;
         }
 
@@ -445,13 +445,5 @@ impl WhereClausePushdown {
         // For now, return None for unknown operators
         log!("Unknown operator OID: {}", op_oid.to_u32());
         None
-    }
-
-    /// Check if a condition can be pushed down for the given table type
-    pub fn is_condition_pushable(
-        operator: &ComparisonOperator,
-        table_type: &RedisTableType,
-    ) -> bool {
-        table_type.supports_pushdown(operator)
     }
 }

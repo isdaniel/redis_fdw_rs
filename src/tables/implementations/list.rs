@@ -194,7 +194,7 @@ impl RedisTableOperations for RedisListTable {
         Ok(())
     }
 
-    fn supports_pushdown(&self, operator: ComparisonOperator) -> bool {
+    fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
         matches!(
             operator,
             ComparisonOperator::Equal | ComparisonOperator::Like

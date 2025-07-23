@@ -483,28 +483,25 @@ mod tests {
         let string_type = RedisTableType::from_str("string");
 
         // Test Equal operator (should be supported by most types)
-        assert!(WhereClausePushdown::is_condition_pushable(
-            &ComparisonOperator::Equal,
-            &hash_type
-        ));
-        assert!(WhereClausePushdown::is_condition_pushable(
-            &ComparisonOperator::Equal,
-            &set_type
-        ));
-        assert!(WhereClausePushdown::is_condition_pushable(
-            &ComparisonOperator::Equal,
-            &string_type
-        ));
+        assert!(hash_type.supports_pushdown(&ComparisonOperator::Equal));
+        assert!(set_type.supports_pushdown(&ComparisonOperator::Equal));
+        assert!(string_type.supports_pushdown(&ComparisonOperator::Equal));
 
         // Test In operator (should be supported by hash and set)
-        assert!(WhereClausePushdown::is_condition_pushable(
-            &ComparisonOperator::In,
-            &hash_type
-        ));
-        assert!(WhereClausePushdown::is_condition_pushable(
-            &ComparisonOperator::In,
-            &set_type
-        ));
+        assert!(hash_type.supports_pushdown(&ComparisonOperator::In));
+        assert!(set_type.supports_pushdown(&ComparisonOperator::In));
+        assert!(!string_type.supports_pushdown(&ComparisonOperator::In));
+        
+        // Test Like operator (should be supported by string and set)
+        assert!(string_type.supports_pushdown(&ComparisonOperator::Like));
+        assert!(set_type.supports_pushdown(&ComparisonOperator::Like));
+        assert!(!hash_type.supports_pushdown(&ComparisonOperator::Like));
+        
+        // Test NotEqual operator (should not be supported by any type)
+        assert!(!hash_type.supports_pushdown(&ComparisonOperator::NotEqual));
+        assert!(!set_type.supports_pushdown(&ComparisonOperator::NotEqual));
+        assert!(!string_type.supports_pushdown(&ComparisonOperator::NotEqual));
+
     }
 
     #[test]
