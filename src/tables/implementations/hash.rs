@@ -35,7 +35,7 @@ impl RedisTableOperations for RedisHashTable {
                 for condition in conditions {
                     match condition.operator {
                         ComparisonOperator::Equal => {
-                            pgrx::info!("Applying pushdown for condition: {:?}", condition);
+                            pgrx::log!("Applying pushdown for condition: {:?}", condition);
                             let value: Option<String> = redis::cmd("HGET")
                                 .arg(key_prefix)
                                 .arg(&condition.value)
@@ -132,14 +132,6 @@ impl RedisTableOperations for RedisHashTable {
                 .arg(key_prefix)
                 .arg(&fields)
                 .query(conn)?;
-
-            // Update internal data
-            if let DataSet::Complete(DataContainer::Hash(ref mut hash_data)) = &mut self.dataset {
-                hash_data.extend(fields);
-            } else {
-                // Create new hash data if not present
-                self.dataset = DataSet::Complete(DataContainer::Hash(fields));
-            }
         }
         Ok(())
     }
@@ -152,11 +144,6 @@ impl RedisTableOperations for RedisHashTable {
     ) -> Result<(), redis::RedisError> {
         if !data.is_empty() {
             let _: () = redis::cmd("HDEL").arg(key_prefix).arg(data).query(conn)?;
-
-            // Remove from local data
-            if let DataSet::Complete(DataContainer::Hash(ref mut hash_data)) = &mut self.dataset {
-                hash_data.retain(|(k, _)| !data.contains(k));
-            }
         }
         Ok(())
     }

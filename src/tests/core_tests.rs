@@ -409,7 +409,7 @@ mod tests {
     /// Comprehensive smoke test - Basic FDW functionality without Redis
     #[pg_test]
     fn test_smoke_fdw_basic_functionality() {
-        info!("Starting basic FDW smoke test");
+        log!("Starting basic FDW smoke test");
 
         // Test FDW handler creation
         let result = Spi::get_one::<i32>("SELECT 1 WHERE redis_fdw_handler() IS NOT NULL");
@@ -525,7 +525,7 @@ mod tests {
                 version_num >= 140000,
                 "PostgreSQL version should be 14 or higher"
             );
-            info!("Testing PostgreSQL version: {}", version_num);
+            log!("Testing PostgreSQL version: {}", version_num);
         }
 
         // Cleanup tables
@@ -545,14 +545,14 @@ mod tests {
         Spi::run("DROP SERVER test_redis_server CASCADE;").unwrap();
         Spi::run("DROP FOREIGN DATA WRAPPER test_redis_wrapper CASCADE;").unwrap();
 
-        info!("Basic FDW smoke test completed successfully");
+        log!("Basic FDW smoke test completed successfully");
     }
 
     /// Comprehensive integration test with Redis - INSERT, SELECT, DELETE operations
     #[pg_test]
     #[cfg(feature = "integration_tests")]
     fn test_smoke_comprehensive_redis_operations() {
-        info!("Starting comprehensive Redis operations smoke test");
+        log!("Starting comprehensive Redis operations smoke test");
 
         // Setup Redis FDW
         Spi::run("CREATE FOREIGN DATA WRAPPER redis_wrapper HANDLER redis_fdw_handler;").unwrap();
@@ -566,7 +566,7 @@ mod tests {
         .unwrap();
 
         // Test 1: Hash Table Operations
-        info!("Testing Hash table operations");
+        log!("Testing Hash table operations");
         Spi::run(
             "
             CREATE FOREIGN TABLE test_hash (key text, value text) 
@@ -588,13 +588,13 @@ mod tests {
         // SELECT operations
         let count_result = Spi::get_one::<i64>("SELECT COUNT(*) FROM test_hash");
         assert!(count_result.is_ok());
-        info!("Hash table count: {:?}", count_result.unwrap());
+        log!("Hash table count: {:?}", count_result.unwrap());
 
         // DELETE operations
         Spi::run("DELETE FROM test_hash WHERE key = 'user:2';").unwrap();
 
         // Test 2: List Table Operations
-        info!("Testing List table operations");
+        log!("Testing List table operations");
         Spi::run(
             "
             CREATE FOREIGN TABLE test_list (element text) 
@@ -616,10 +616,10 @@ mod tests {
         // SELECT operations
         let list_count = Spi::get_one::<i64>("SELECT COUNT(*) FROM test_list");
         assert!(list_count.is_ok());
-        info!("List table count: {:?}", list_count.unwrap());
+        log!("List table count: {:?}", list_count.unwrap());
 
         // Test 3: Set Table Operations
-        info!("Testing Set table operations");
+        log!("Testing Set table operations");
         Spi::run(
             "
             CREATE FOREIGN TABLE test_set (member text) 
@@ -642,10 +642,10 @@ mod tests {
         // SELECT operations
         let set_count = Spi::get_one::<i64>("SELECT COUNT(*) FROM test_set");
         assert!(set_count.is_ok());
-        info!("Set table count: {:?}", set_count.unwrap());
+        log!("Set table count: {:?}", set_count.unwrap());
 
         // Test 4: String Table Operations
-        info!("Testing String table operations");
+        log!("Testing String table operations");
         Spi::run(
             "
             CREATE FOREIGN TABLE test_string (value text) 
@@ -665,10 +665,10 @@ mod tests {
         // SELECT operations
         let string_value = Spi::get_one::<String>("SELECT value FROM test_string");
         assert!(string_value.is_ok());
-        info!("String value: {:?}", string_value.unwrap());
+        log!("String value: {:?}", string_value.unwrap());
 
         // Test 5: ZSet Table Operations
-        info!("Testing ZSet table operations");
+        log!("Testing ZSet table operations");
         Spi::run(
             "
             CREATE FOREIGN TABLE test_zset (score numeric, member text) 
@@ -690,10 +690,10 @@ mod tests {
         // SELECT operations
         let zset_count = Spi::get_one::<i64>("SELECT COUNT(*) FROM test_zset");
         assert!(zset_count.is_ok());
-        info!("ZSet table count: {:?}", zset_count.unwrap());
+        log!("ZSet table count: {:?}", zset_count.unwrap());
 
         // Test multiple database support
-        info!("Testing multiple database support");
+        log!("Testing multiple database support");
         Spi::run(
             "
             CREATE FOREIGN TABLE test_db0 (key text, value text) 
@@ -710,7 +710,7 @@ mod tests {
         Spi::run("INSERT INTO test_db0 VALUES ('key1', 'value from db0');").unwrap();
         let db0_result = Spi::get_one::<String>("SELECT value FROM test_db0 WHERE key = 'key1'");
         assert!(db0_result.is_ok());
-        info!("DB0 result: {:?}", db0_result.unwrap());
+        log!("DB0 result: {:?}", db0_result.unwrap());
 
         // Cleanup all test tables
         let tables = [
@@ -729,7 +729,7 @@ mod tests {
         Spi::run("DROP SERVER redis_server CASCADE;").unwrap();
         Spi::run("DROP FOREIGN DATA WRAPPER redis_wrapper CASCADE;").unwrap();
 
-        info!("Comprehensive Redis operations smoke test completed successfully");
+        log!("Comprehensive Redis operations smoke test completed successfully");
     }
 
     #[pg_test]
@@ -767,7 +767,7 @@ mod tests {
         );
         assert_eq!(fdw_state.database, 0);
 
-        info!("Redis cluster connection parsing test completed successfully");
+        log!("Redis cluster connection parsing test completed successfully");
     }
 
     #[pg_test]
@@ -825,6 +825,6 @@ mod tests {
         Spi::run("DROP SERVER test_single_server CASCADE;").unwrap();
         Spi::run("DROP FOREIGN DATA WRAPPER test_cluster_wrapper CASCADE;").unwrap();
 
-        info!("Redis cluster server creation test completed successfully");
+        log!("Redis cluster server creation test completed successfully");
     }
 }

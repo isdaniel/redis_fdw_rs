@@ -206,7 +206,7 @@ impl WhereClausePushdown {
             return None;
         }
 
-        info!("Analyzing scalar array (*node).type_: {:?}", (*node).type_);
+        log!("Analyzing scalar array (*node).type_: {:?}", (*node).type_);
 
         match (*node).type_ {
             // Handle simple array expressions like ARRAY['a', 'b', 'c']

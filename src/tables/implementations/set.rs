@@ -90,15 +90,6 @@ impl RedisTableOperations for RedisSetTable {
     ) -> Result<(), redis::RedisError> {
         for value in data {
             let added: i32 = redis::cmd("SADD").arg(key_prefix).arg(value).query(conn)?;
-            if added > 0 {
-                // Update internal data
-                if let DataSet::Complete(DataContainer::Set(ref mut set_data)) = &mut self.dataset {
-                    set_data.push(value.clone());
-                } else {
-                    // Create new set data if not present
-                    self.dataset = DataSet::Complete(DataContainer::Set(vec![value.clone()]));
-                }
-            }
         }
         Ok(())
     }
@@ -111,11 +102,6 @@ impl RedisTableOperations for RedisSetTable {
     ) -> Result<(), redis::RedisError> {
         for value in data {
             let _: i32 = redis::cmd("SREM").arg(key_prefix).arg(value).query(conn)?;
-
-            // Remove from local data
-            if let DataSet::Complete(DataContainer::Set(ref mut set_data)) = &mut self.dataset {
-                set_data.retain(|x| x != value);
-            }
         }
         Ok(())
     }

@@ -95,17 +95,6 @@ impl RedisTableOperations for RedisZSetTable {
                 .arg(*score)
                 .arg(member)
                 .query(conn)?;
-
-            // Update internal data
-            if let DataSet::Complete(DataContainer::ZSet(ref mut zset_data)) = &mut self.dataset {
-                // Remove existing member if it exists and add new one
-                zset_data.retain(|(m, _)| m != member);
-                zset_data.push((member.clone(), *score));
-            } else {
-                // Create new zset data if not present
-                let new_data = vec![(member.clone(), *score)];
-                self.dataset = DataSet::Complete(DataContainer::ZSet(new_data));
-            }
         }
         Ok(())
     }
@@ -118,11 +107,6 @@ impl RedisTableOperations for RedisZSetTable {
     ) -> Result<(), redis::RedisError> {
         for member in data {
             let _: i32 = redis::cmd("ZREM").arg(key_prefix).arg(member).query(conn)?;
-
-            // Remove from local data
-            if let DataSet::Complete(DataContainer::ZSet(ref mut zset_data)) = &mut self.dataset {
-                zset_data.retain(|(m, _)| m != member);
-            }
         }
         Ok(())
     }

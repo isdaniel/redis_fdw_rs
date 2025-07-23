@@ -65,7 +65,6 @@ impl RedisTableOperations for RedisStringTable {
     ) -> Result<(), redis::RedisError> {
         if let Some(value) = data.first() {
             let _: () = redis::cmd("SET").arg(key_prefix).arg(value).query(conn)?;
-            self.dataset = DataSet::Complete(DataContainer::String(Some(value.clone())));
         }
         Ok(())
     }
@@ -77,7 +76,6 @@ impl RedisTableOperations for RedisStringTable {
         _data: &[String],
     ) -> Result<(), redis::RedisError> {
         let _: () = redis::cmd("DEL").arg(key_prefix).query(conn)?;
-        self.dataset = DataSet::Complete(DataContainer::String(None));
         Ok(())
     }
 
@@ -90,7 +88,6 @@ impl RedisTableOperations for RedisStringTable {
     ) -> Result<(), redis::RedisError> {
         if let Some(value) = new_data.first() {
             let _: () = redis::cmd("SET").arg(key_prefix).arg(value).query(conn)?;
-            self.dataset = DataSet::Complete(DataContainer::String(Some(value.clone())));
         }
         Ok(())
     }

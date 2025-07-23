@@ -14,7 +14,7 @@ mod tests {
     #[pg_test]
     #[cfg(feature = "integration_tests")]
     fn test_hash_where_pushdown() {
-        info!("Testing WHERE clause pushdown for hash tables");
+        log!("Testing WHERE clause pushdown for hash tables");
 
         // Setup Redis FDW
         Spi::run("CREATE FOREIGN DATA WRAPPER redis_wrapper HANDLER redis_fdw_handler;").unwrap();
@@ -56,7 +56,7 @@ mod tests {
         );
         assert!(result.is_ok());
         if let Some(email) = result.unwrap() {
-            info!("Found email via pushdown: {}", email);
+            log!("Found email via pushdown: {}", email);
             assert_eq!(email, "john@example.com");
         }
 
@@ -70,7 +70,7 @@ mod tests {
         );
         assert!(count.is_ok());
         if let Some(c) = count.unwrap() {
-            info!("Found {} fields via IN pushdown", c);
+            log!("Found {} fields via IN pushdown", c);
             assert_eq!(c, 2);
         }
 
@@ -84,7 +84,7 @@ mod tests {
     #[pg_test]
     #[cfg(feature = "integration_tests")]
     fn test_set_where_pushdown() {
-        info!("Testing WHERE clause pushdown for set tables");
+        log!("Testing WHERE clause pushdown for set tables");
 
         // Setup Redis FDW
         Spi::run("CREATE FOREIGN DATA WRAPPER redis_wrapper HANDLER redis_fdw_handler;").unwrap();
@@ -126,7 +126,7 @@ mod tests {
         );
         assert!(exists.is_ok());
         if let Some(e) = exists.unwrap() {
-            info!("Rust tag exists via pushdown: {}", e);
+            log!("Rust tag exists via pushdown: {}", e);
             assert!(e);
         }
 
@@ -137,11 +137,11 @@ mod tests {
         );
         match count {
             Ok(Some(c)) => {
-                info!("Found {} matching tags via ARRAY pushdown", c);
+                log!("Found {} matching tags via ARRAY pushdown", c);
                 assert_eq!(c, 1); // Only 'rust' should match
             }
             Ok(None) => {
-                info!("ARRAY pushdown returned no results");
+                log!("ARRAY pushdown returned no results");
                 // Fallback to individual checks
                 let rust_exists = Spi::get_one::<bool>(
                     "SELECT EXISTS(SELECT 1 FROM user_tags WHERE member = 'rust');",
@@ -152,7 +152,7 @@ mod tests {
                 }
             }
             Err(e) => {
-                info!(
+                log!(
                     "ARRAY pushdown failed with error: {:?}, falling back to individual checks",
                     e
                 );
@@ -185,7 +185,7 @@ mod tests {
                     0
                 });
 
-                info!(
+                log!(
                     "Found {} matching tags via individual pushdown checks",
                     total_matches
                 );
@@ -203,7 +203,7 @@ mod tests {
     #[pg_test]
     #[cfg(feature = "integration_tests")]
     fn test_string_where_pushdown() {
-        info!("Testing WHERE clause pushdown for string tables");
+        log!("Testing WHERE clause pushdown for string tables");
 
         // Setup Redis FDW
         Spi::run("CREATE FOREIGN DATA WRAPPER redis_wrapper HANDLER redis_fdw_handler;").unwrap();
@@ -242,7 +242,7 @@ mod tests {
         );
         assert!(matches.is_ok());
         if let Some(m) = matches.unwrap() {
-            info!("Version matches via pushdown: {}", m);
+            log!("Version matches via pushdown: {}", m);
             assert!(m);
         }
 
@@ -254,7 +254,7 @@ mod tests {
         );
         assert!(no_match.is_ok());
         if let Some(nm) = no_match.unwrap() {
-            info!("Non-matching version correctly filtered: {}", !nm);
+            log!("Non-matching version correctly filtered: {}", !nm);
             assert!(!nm);
         }
 
@@ -268,7 +268,7 @@ mod tests {
     #[pg_test]
     #[cfg(feature = "integration_tests")]
     fn test_pushdown_performance() {
-        info!("Testing pushdown performance benefits");
+        log!("Testing pushdown performance benefits");
 
         // Setup Redis FDW
         Spi::run("CREATE FOREIGN DATA WRAPPER redis_wrapper HANDLER redis_fdw_handler;").unwrap();
@@ -315,16 +315,17 @@ mod tests {
 
         assert!(result.is_ok());
         if let Some(value) = result.unwrap() {
-            info!(
+            log!(
                 "Pushdown query completed in {:?}, result: {}",
-                pushdown_time, value
+                pushdown_time,
+                value
             );
             assert_eq!(value, "value_50");
         }
 
         // The pushdown should be much faster than a full table scan
         // because it uses HGET instead of HGETALL + filtering
-        info!("Pushdown optimization should improve query performance significantly");
+        log!("Pushdown optimization should improve query performance significantly");
 
         // Clean up
         Spi::run("DROP FOREIGN TABLE large_profile;").unwrap();
@@ -336,7 +337,7 @@ mod tests {
     #[pg_test]
     #[cfg(feature = "integration_tests")]
     fn test_mixed_where_clauses() {
-        info!("Testing mixed WHERE clauses with partial pushdown");
+        log!("Testing mixed WHERE clauses with partial pushdown");
 
         // Setup Redis FDW
         Spi::run("CREATE FOREIGN DATA WRAPPER redis_wrapper HANDLER redis_fdw_handler;").unwrap();
@@ -381,14 +382,14 @@ mod tests {
 
         assert!(result.is_ok());
         if let Some(name) = result.unwrap() {
-            info!("Mixed pushdown query result: {}", name);
+            log!("Mixed pushdown query result: {}", name);
             assert_eq!(name, "Alice Smith");
         }
 
         // The FDW should:
         // 1. Push down the field = 'name' condition to Redis (HGET)
         // 2. Apply the LIKE filter at PostgreSQL level
-        info!("Mixed pushdown should optimize Redis access while handling complex filters in PostgreSQL");
+        log!("Mixed pushdown should optimize Redis access while handling complex filters in PostgreSQL");
 
         // Clean up
         Spi::run("DROP FOREIGN TABLE user_data;").unwrap();

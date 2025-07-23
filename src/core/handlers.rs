@@ -120,14 +120,14 @@ unsafe extern "C-unwind" fn get_foreign_plan(
         // Analyze WHERE clauses for pushdown opportunities
         let pushdown_analysis =
             WhereClausePushdown::analyze_scan_clauses(scan_clauses, &state.table_type);
-        info!("Pushdown analysis result: {:?}", pushdown_analysis);
+        log!("Pushdown analysis result: {:?}", pushdown_analysis);
         if pushdown_analysis.can_optimize {
-            info!(
+            log!(
                 "WHERE clause pushdown enabled with {} pushable conditions",
                 pushdown_analysis.pushable_conditions.len()
             );
         } else {
-            info!("No WHERE clause pushdown optimizations possible");
+            log!("No WHERE clause pushdown optimizations possible");
         }
 
         // Store the analysis in the state
@@ -334,7 +334,7 @@ unsafe extern "C-unwind" fn exec_foreign_update(
 ) -> *mut pgrx::pg_sys::TupleTableSlot {
     log!("---> exec_foreign_update");
     let new_row = tuple_table_slot_to_row(plan_slot);
-    info!("New row for update: {:?}", new_row);
+    log!("New row for update: {:?}", new_row);
     unimplemented!("Update operations are not yet implemented for Redis FDW");
 }
 

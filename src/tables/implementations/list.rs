@@ -50,14 +50,6 @@ impl RedisTableOperations for RedisListTable {
     ) -> Result<(), redis::RedisError> {
         for value in data {
             let _: i32 = redis::cmd("RPUSH").arg(key_prefix).arg(value).query(conn)?;
-
-            // Update internal data
-            if let DataSet::Complete(DataContainer::List(ref mut list_data)) = &mut self.dataset {
-                list_data.push(value.clone());
-            } else {
-                // Create new list data if not present
-                self.dataset = DataSet::Complete(DataContainer::List(vec![value.clone()]));
-            }
         }
         Ok(())
     }
@@ -76,11 +68,6 @@ impl RedisTableOperations for RedisListTable {
                 .arg(0)
                 .arg(value)
                 .query(conn)?;
-
-            // Remove from local data cache
-            if let DataSet::Complete(DataContainer::List(ref mut list_data)) = &mut self.dataset {
-                list_data.retain(|x| x != value);
-            }
         }
         Ok(())
     }
