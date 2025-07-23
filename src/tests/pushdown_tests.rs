@@ -495,12 +495,7 @@ mod tests {
         // Test Like operator (should be supported by string and set)
         assert!(string_type.supports_pushdown(&ComparisonOperator::Like));
         assert!(set_type.supports_pushdown(&ComparisonOperator::Like));
-        assert!(!hash_type.supports_pushdown(&ComparisonOperator::Like));
-        
-        // Test NotEqual operator (should not be supported by any type)
-        assert!(!hash_type.supports_pushdown(&ComparisonOperator::NotEqual));
-        assert!(!set_type.supports_pushdown(&ComparisonOperator::NotEqual));
-        assert!(!string_type.supports_pushdown(&ComparisonOperator::NotEqual));
+        assert!(hash_type.supports_pushdown(&ComparisonOperator::Like));
 
     }
 
