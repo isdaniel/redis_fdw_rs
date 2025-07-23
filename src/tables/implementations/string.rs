@@ -1,5 +1,8 @@
 use crate::{
-    query::pushdown_types::{ComparisonOperator, PushableCondition},
+    query::{
+        pushdown_types::{ComparisonOperator, PushableCondition},
+        scan_ops::{extract_scan_conditions, PatternMatcher},
+    },
     tables::{
         interface::RedisTableOperations,
         types::{DataContainer, DataSet, LoadDataResult},
@@ -18,6 +21,60 @@ impl RedisStringTable {
             dataset: DataSet::Empty,
         }
     }
+
+    /// Load data with SCAN optimization for value matching
+    fn load_with_scan_optimization(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        scan_conditions: &crate::query::scan_ops::ScanConditions,
+    ) -> Result<LoadDataResult, redis::RedisError> {
+        // For string tables, we need to check the stored value against conditions
+        // Get the value from Redis
+        let stored_value: Option<String> = redis::cmd("GET").arg(key_prefix).query(conn)?;
+
+        if let Some(value) = stored_value {
+            // Check if the value matches any of the conditions
+            let mut matches = true;
+
+            // Check exact match conditions
+            for condition in &scan_conditions.exact_conditions {
+                if condition.operator == ComparisonOperator::Equal {
+                    if value != condition.value {
+                        matches = false;
+                        break;
+                    }
+                }
+            }
+
+            // Check pattern conditions
+            if matches {
+                for condition in &scan_conditions.pattern_conditions {
+                    if condition.operator == ComparisonOperator::Like {
+                        let pattern_matcher = PatternMatcher::from_like_pattern(&condition.value);
+                        if !pattern_matcher.matches(&value) {
+                            matches = false;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if matches {
+                self.dataset = DataSet::Complete(DataContainer::String(Some(value)));
+                Ok(LoadDataResult::PushdownApplied(
+                    vec![key_prefix.to_string()],
+                ))
+            } else {
+                self.dataset = DataSet::Empty;
+                Ok(LoadDataResult::Empty)
+            }
+        } else {
+            // Key doesn't exist
+            self.dataset = DataSet::Empty;
+            Ok(LoadDataResult::Empty)
+        }
+    }
 }
 
 impl RedisTableOperations for RedisStringTable {
@@ -28,26 +85,15 @@ impl RedisTableOperations for RedisStringTable {
         conditions: Option<&[PushableCondition]>,
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(conditions) = conditions {
-            if let Some(condition) = conditions.first() {
-                // String tables can only be checked for exact value match
-                let value: Option<String> = redis::cmd("GET").arg(key_prefix).query(conn)?;
+            let scan_conditions = extract_scan_conditions(conditions);
 
-                return if let Some(v) = value {
-                    if v == condition.value {
-                        self.dataset = DataSet::Filtered(vec![v.clone()]);
-                        Ok(LoadDataResult::PushdownApplied(vec![v]))
-                    } else {
-                        self.dataset = DataSet::Empty;
-                        Ok(LoadDataResult::Empty)
-                    }
-                } else {
-                    self.dataset = DataSet::Empty;
-                    Ok(LoadDataResult::Empty)
-                };
+            // For string tables, we can optimize by scanning keys with patterns
+            if scan_conditions.has_optimizable_conditions() {
+                return self.load_with_scan_optimization(conn, key_prefix, &scan_conditions);
             }
         }
 
-        // Load all data into internal storage
+        // Fallback: Load single key without optimization
         let value: Option<String> = redis::cmd("GET").arg(key_prefix).query(conn)?;
         self.dataset = DataSet::Complete(DataContainer::String(value));
         Ok(LoadDataResult::LoadedToInternal)
@@ -92,7 +138,10 @@ impl RedisTableOperations for RedisStringTable {
         Ok(())
     }
 
-    fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
-        matches!(operator, ComparisonOperator::Equal)
+    fn supports_pushdown(&self, operator: ComparisonOperator) -> bool {
+        matches!(
+            operator,
+            ComparisonOperator::Equal | ComparisonOperator::Like
+        )
     }
 }
