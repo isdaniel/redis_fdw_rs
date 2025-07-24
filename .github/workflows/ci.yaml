@@ -56,25 +56,43 @@ jobs:
           echo "Starting Redis cluster containers..."
           docker-compose -f docker-compose.cluster-test.yml up -d
           
-          # Wait for all containers to be healthy
+          # Wait for all containers to be healthy with better progress reporting
           echo "Waiting for all Redis containers to be healthy..."
-          for i in {1..60}; do
+          
+          # Function to check container health
+          check_container_health() {
+            local container_name=$1
+            local port=$2
+            if docker ps --filter "name=$container_name" --filter "health=healthy" --format "{{.Names}}" | grep -q "$container_name"; then
+              echo "  ✅ $container_name (port $port) is healthy"
+              return 0
+            else
+              local status=$(docker ps --filter "name=$container_name" --format "{{.Status}}" | head -1)
+              echo "  ⏳ $container_name (port $port) status: $status"
+              return 1
+            fi
+          }
+          
+          # Wait for individual containers with timeout
+          for i in {1..180}; do  # 6 minutes total
+            echo "Attempt $i/180: Checking container health..."
+            
             all_healthy=true
-            for port in 7001 7002 7003 7004 7005 7006; do
-              if ! docker ps --filter "health=healthy" --filter "publish=$port" --format "{{.Names}}" | grep -q "redis-cluster"; then
-                all_healthy=false
-                break
-              fi
-            done
+            check_container_health "redis-cluster-test-1" "7001" || all_healthy=false
+            check_container_health "redis-cluster-test-2" "7002" || all_healthy=false
+            check_container_health "redis-cluster-test-3" "7003" || all_healthy=false
+            check_container_health "redis-cluster-test-4" "7004" || all_healthy=false
+            check_container_health "redis-cluster-test-5" "7005" || all_healthy=false
+            check_container_health "redis-cluster-test-6" "7006" || all_healthy=false
             
             if [ "$all_healthy" = true ]; then
-              echo "All Redis containers are healthy"
+              echo "All Redis containers are healthy, waiting for cluster initialization..."
               break
             fi
             
-            echo "Attempt $i/60: Waiting for containers to be healthy..."
             sleep 2
           done
+          
           
       - name: Install cargo-pgrx
         run: cargo install cargo-pgrx 
@@ -100,13 +118,37 @@ jobs:
           echo "Running standard tests..."
           cargo pgrx test --release pg${{ env.PG_VER }}
           
-          echo "Running cluster integration tests..."
-          # Validate cluster is still running
-          if redis-cli -h 127.0.0.1 -p 7001 ping; then
-            echo "Cluster is healthy, running cluster tests..."
+          echo "Validating cluster connectivity before cluster tests..."
+          if ./scripts/validate_cluster_runtime.sh; then
+            echo "✅ Cluster validation successful, running cluster tests..."
+            
+            # Run cluster integration tests with better environment setup
+            echo "Setting up cluster test environment..."
+            export REDIS_CLUSTER_TEST_ENABLED=true
+            export REDIS_CLUSTER_NODES="127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003,127.0.0.1:7004,127.0.0.1:7005,127.0.0.1:7006"
+            
+            echo "Running cluster integration tests..."
             cargo pgrx test --release pg${{ env.PG_VER }}
           else
-            echo "Warning: Cluster not available, skipping cluster-specific tests"
+            echo "❌ Cluster validation failed, skipping cluster-specific tests"
+            echo "This may indicate a cluster setup issue, but standard tests passed"
+            
+            # Show debug information
+            echo "=== Debug Information ==="
+            echo "Container statuses:"
+            docker ps -a --filter "name=redis-cluster-test" || true
+            echo ""
+            echo "Cluster container logs (last 20 lines each):"
+            for container in redis-cluster-test-1 redis-cluster-test-2 redis-cluster-test-3; do
+              echo "=== Logs for $container ==="
+              docker logs $container --tail 20 2>&1 || true
+            done
+            echo ""
+            echo "Cluster init logs:"
+            docker logs redis-cluster-test-init --tail 30 2>&1 || true
+            
+            # Don't fail the build for cluster issues in CI
+            echo "⚠️ Continuing without cluster tests due to infrastructure issues"
           fi 
 
       - name: Package for PostgreSQL ${{ env.PG_VER }}
@@ -116,5 +158,20 @@ jobs:
         if: always()  # Run cleanup even if tests fail
         run: |
           echo "Cleaning up Redis cluster..."
-          docker-compose -f docker-compose.cluster-test.yml down -v || true
+          
+          # Show final debug information if tests failed
+          if [ "${{ job.status }}" = "failure" ]; then
+            echo "=== Final Debug Information (Test Failure) ==="
+            ./scripts/debug_cluster.sh quick || true
+          fi
+          
+          # Cleanup containers
+          docker-compose -f docker-compose.cluster-test.yml down -v --remove-orphans || true
+          
+          # Force remove any remaining containers
+          docker ps -a --filter "name=redis-cluster-test" --format "{{.Names}}" | xargs -r docker rm -f || true
+          
+          # Clean up networks
+          docker network ls --filter "name=redis-cluster-test" --format "{{.Name}}" | xargs -r docker network rm || true
+          
           echo "Cleanup completed"

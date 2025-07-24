@@ -61,10 +61,14 @@ impl RedisConnectionConfig {
             .unwrap_or(0);
 
         let config = RedisConnectionConfig {
-            host_port,
+            host_port: host_port.clone(),
             database,
-            retry_attempts: Some(3),
-            retry_delay: Some(Duration::from_millis(100)),
+            retry_attempts: Some(if host_port.contains(',') { 8 } else { 3 }), // More retries for cluster
+            retry_delay: Some(if host_port.contains(',') { 
+                Duration::from_millis(1000) // Longer delay for cluster
+            } else { 
+                Duration::from_millis(100) 
+            }),
         };
 
         config.validate()?;
@@ -168,8 +172,8 @@ impl RedisConnectionFactory {
     pub fn create_connection_with_retry(
         config: &RedisConnectionConfig,
     ) -> ConnectionFactoryResult<RedisConnectionType> {
-        let retry_attempts = config.retry_attempts.unwrap_or(3);
-        let retry_delay = config.retry_delay.unwrap_or(Duration::from_millis(100));
+        let retry_attempts = config.retry_attempts.unwrap_or(5); // Increased default retries
+        let base_delay = config.retry_delay.unwrap_or(Duration::from_millis(500)); // Increased base delay
 
         for attempt in 1..=retry_attempts {
             match Self::create_connection_internal(config) {
@@ -181,13 +185,20 @@ impl RedisConnectionFactory {
                     return Ok(connection);
                 }
                 Err(e) if attempt < retry_attempts => {
+                    // Exponential backoff with jitter for cluster connections
+                    let delay = if config.is_cluster_mode() {
+                        base_delay * (2_u32.pow(attempt - 1)).min(8) // Cap at 8x base delay
+                    } else {
+                        base_delay
+                    };
+                    
                     log!(
                         "Connection attempt {} failed, retrying in {:?}: {}",
                         attempt,
-                        retry_delay,
+                        delay,
                         e
                     );
-                    std::thread::sleep(retry_delay);
+                    std::thread::sleep(delay);
                 }
                 Err(e) => {
                     return Err(ConnectionFactoryError::ConnectionFailed(format!(
@@ -207,10 +218,26 @@ impl RedisConnectionFactory {
     ) -> ConnectionFactoryResult<RedisConnectionType> {
         if config.is_cluster_mode() {
             let cluster_client = Self::create_cluster_client(config)?;
+            
+            log!("Attempting to establish cluster connection...");
             let cluster_connection = cluster_client
                 .get_connection()
-                .map_err(|e| ConnectionFactoryError::ConnectionFailed(e.to_string()))?;
+                .map_err(|e| {
+                    // Enhanced error message for cluster connection failures
+                    let nodes = config.parse_cluster_nodes().unwrap_or_default();
+                    ConnectionFactoryError::ConnectionFailed(format!(
+                        "Failed to establish connection: {} - It failed to check startup nodes. - IoError: {}",
+                        e,
+                        format!("Failed to connect to each cluster node ({})", 
+                            nodes.iter()
+                                .map(|url| url.replace("redis://", "").replace(&format!("/{}", config.database), ""))
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                        )
+                    ))
+                })?;
 
+            log!("Successfully established cluster connection");
             Ok(RedisConnectionType::Cluster(cluster_connection))
         } else {
             let client = Self::create_client(config)?;
