@@ -36,7 +36,8 @@ jobs:
             clang \
             llvm \
             ca-certificates \
-            redis-tools
+            redis-tools \
+            docker-compose
           echo ""
           sudo apt-get install -y postgresql-${{ env.PG_VER }} postgresql-server-dev-${{ env.PG_VER }}
 
@@ -45,13 +46,6 @@ jobs:
 
       - name: Start Redis Cluster for testing
         run: |
-          echo "Starting Redis cluster for integration testing..."
-          # Install docker-compose if not available
-          if ! command -v docker-compose &> /dev/null; then
-            sudo curl -L "https://github.com/docker/compose/releases/download/v2.21.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-            sudo chmod +x /usr/local/bin/docker-compose
-          fi
-          
           # Start Redis cluster using docker-compose
           echo "Starting Redis cluster containers..."
           docker-compose -f docker-compose.cluster-test.yml up -d
@@ -91,13 +85,13 @@ jobs:
             fi
             sleep 1
           done
-          redis-cli -h 0.0.0.0 -p 8899 ping
-          redis-cli -h 0.0.0.0 -p 7001 ping
-          redis-cli -h 0.0.0.0 -p 7002 ping
-          redis-cli -h 0.0.0.0 -p 700 ping
+          redis-cli -h 127.0.0.1 -p 8899 ping
+          redis-cli -h 127.0.0.1 -p 7001 ping
+          redis-cli -h 127.0.0.1 -p 7002 ping
+          redis-cli -h 127.0.0.1 -p 700 ping
 
-          redis-cli -h 0.0.0.0 -p 7001 cluster info 
-          redis-cli -h 0.0.0.0 -p 7001 cluster nodes 
+          redis-cli -h 127.0.0.1 -p 7001 cluster info 
+          redis-cli -h 127.0.0.1 -p 7001 cluster nodes 
           
       - name: Install cargo-pgrx
         run: cargo install cargo-pgrx 
