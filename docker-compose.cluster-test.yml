@@ -10,8 +10,6 @@ x-redis-common: &redis-common
   restart: unless-stopped
   sysctls:
     - net.core.somaxconn=65535
-  volumes:
-    - ./test-logs:/var/log/redis
   networks:
     - redis-cluster-test
   healthcheck:
@@ -38,7 +36,6 @@ services:
       --appendonly yes
       --bind 0.0.0.0
       --protected-mode no
-      --logfile /var/log/redis/redis-1.log
       --loglevel notice
     healthcheck:
       test: ["CMD", "redis-cli", "-p", "7001", "ping"]
@@ -61,7 +58,6 @@ services:
       --appendonly yes
       --bind 0.0.0.0
       --protected-mode no
-      --logfile /var/log/redis/redis-2.log
       --loglevel notice
     healthcheck:
       test: ["CMD", "redis-cli", "-p", "7002", "ping"]
@@ -84,7 +80,6 @@ services:
       --appendonly yes
       --bind 0.0.0.0
       --protected-mode no
-      --logfile /var/log/redis/redis-3.log
       --loglevel notice
     healthcheck:
       test: ["CMD", "redis-cli", "-p", "7003", "ping"]
@@ -107,7 +102,6 @@ services:
       --appendonly yes
       --bind 0.0.0.0
       --protected-mode no
-      --logfile /var/log/redis/redis-4.log
       --loglevel notice
     healthcheck:
       test: ["CMD", "redis-cli", "-p", "7004", "ping"]
@@ -122,6 +116,7 @@ services:
     ports:
       - "7005:7005"
     command: >
+    command: >
       redis-server
       --port 7005
       --cluster-enabled yes
@@ -130,9 +125,7 @@ services:
       --appendonly yes
       --bind 0.0.0.0
       --protected-mode no
-      --logfile /var/log/redis/redis-5.log
       --loglevel notice
-    healthcheck:
       test: ["CMD", "redis-cli", "-p", "7005", "ping"]
     networks:
       redis-cluster-test:
@@ -146,6 +139,8 @@ services:
       - "7006:7006"
     command: >
       redis-server
+    command: >
+      redis-server
       --port 7006
       --cluster-enabled yes
       --cluster-config-file nodes.conf
@@ -153,10 +148,7 @@ services:
       --appendonly yes
       --bind 0.0.0.0
       --protected-mode no
-      --logfile /var/log/redis/redis-6.log
-      --loglevel notice
-    healthcheck:
-      test: ["CMD", "redis-cli", "-p", "7006", "ping"]
+      --loglevel noticedis-cli", "-p", "7006", "ping"]
     networks:
       redis-cluster-test:
         ipv4_address: 10.1.0.16
