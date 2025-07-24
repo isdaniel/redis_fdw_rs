@@ -35,13 +35,35 @@ jobs:
             build-essential \
             clang \
             llvm \
-            ca-certificates
+            ca-certificates \
+            redis-tools \
+            docker-compose
           echo ""
           sudo apt-get install -y postgresql-${{ env.PG_VER }} postgresql-server-dev-${{ env.PG_VER }}
 
       - name: Start Redis container
         run: docker run -d --name redis-server -p 8899:6379 redis
-        
+
+      - name: Start Redis Cluster for testing
+        run: |
+          echo "Starting Redis Cluster containers..."
+          chmod +x ./scripts/start-redis-cluster.sh
+          ./scripts/start-redis-cluster.sh
+
+      - name: Ensure Redis Cluster is reachable before tests
+        run: |
+          for i in {1..10}; do
+            if redis-cli -h 127.0.0.1 -p 7001 cluster info | grep -q 'cluster_state:ok'; then
+              echo "Redis cluster is fully operational."
+              break
+            else
+              echo "Waiting for Redis cluster to be fully operational..."
+              sleep 3
+            fi
+          done
+          # Final check, fail clearly if not ready
+          redis-cli -h 127.0.0.1 -p 7001 cluster info | grep 'cluster_state:ok'
+          
       - name: Install cargo-pgrx
         run: cargo install cargo-pgrx 
 
@@ -57,9 +79,37 @@ jobs:
         run: |
           sudo chmod 777 /usr/share/postgresql/${{ env.PG_VER }} -R
           sudo chmod 777 /usr/lib/postgresql/${{ env.PG_VER }} -R
-          
+
       - name: Run Tests for PostgreSQL ${{ env.PG_VER }}
-        run: cargo pgrx test --release pg${{ env.PG_VER }} 
+        # env:
+        #   REDIS_CLUSTER_TEST_ENABLED: "true"
+        #   REDIS_CLUSTER_NODES: "127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003,127.0.0.1:7004,127.0.0.1:7005,127.0.0.1:7006"
+        run: |
+          echo "Running standard tests..."
+          cargo pgrx test --release pg${{ env.PG_VER }}
 
       - name: Package for PostgreSQL ${{ env.PG_VER }}
         run: cargo pgrx package --pg-config=${{ env.PG_BIN }}/pg_config
+
+      - name: Setup tmate session
+        if: ${{ failure() }}
+        uses: mxschmitt/action-tmate@v3
+        
+      - name: Cleanup Redis Cluster
+        if: always()  # Run cleanup even if tests fail
+        run: |
+          echo "Cleaning up Redis cluster..."
+          
+          # Show final debug information if tests failed
+          if [ "${{ job.status }}" = "failure" ]; then
+            echo "=== Final Debug Information (Test Failure) ==="
+            ./scripts/debug_cluster.sh quick || true
+          fi
+          
+          # Force remove any remaining containers
+          docker ps -a --filter "name=redis-cluster-test" --format "{{.Names}}" | xargs -r docker rm -f || true
+          
+          # Clean up networks
+          docker network ls --filter "name=redis-cluster-test" --format "{{.Name}}" | xargs -r docker network rm || true
+          
+          echo "Cleanup completed"
