@@ -10,6 +10,8 @@ x-redis-common: &redis-common
   restart: unless-stopped
   sysctls:
     - net.core.somaxconn=65535
+  volumes:
+    - ./test-logs:/var/log/redis
   networks:
     - redis-cluster-test
   healthcheck:
@@ -116,7 +118,6 @@ services:
     ports:
       - "7005:7005"
     command: >
-    command: >
       redis-server
       --port 7005
       --cluster-enabled yes
@@ -126,6 +127,7 @@ services:
       --bind 0.0.0.0
       --protected-mode no
       --loglevel notice
+    healthcheck:
       test: ["CMD", "redis-cli", "-p", "7005", "ping"]
     networks:
       redis-cluster-test:
@@ -139,8 +141,6 @@ services:
       - "7006:7006"
     command: >
       redis-server
-    command: >
-      redis-server
       --port 7006
       --cluster-enabled yes
       --cluster-config-file nodes.conf
@@ -148,7 +148,9 @@ services:
       --appendonly yes
       --bind 0.0.0.0
       --protected-mode no
-      --loglevel noticedis-cli", "-p", "7006", "ping"]
+      --loglevel notice
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "7006", "ping"]
     networks:
       redis-cluster-test:
         ipv4_address: 10.1.0.16
@@ -177,7 +179,7 @@ services:
       - REPLICAS_PER_MASTER=${REPLICAS_PER_MASTER:-1}
     volumes:
       - ./scripts/cluster:/scripts:ro
-    command: /scripts/init-cluster.sh
+    command: /scripts/cluster/init-cluster.sh
     restart: "no"
 
 networks:
