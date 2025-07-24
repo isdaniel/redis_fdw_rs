@@ -12,7 +12,7 @@ mod tests {
     use pgrx::prelude::*;
     /// Test basic WHERE clause pushdown for hash tables
     #[pg_test]
-    #[cfg(feature = "integration_tests")]
+
     fn test_hash_where_pushdown() {
         log!("Testing WHERE clause pushdown for hash tables");
 
@@ -82,7 +82,7 @@ mod tests {
 
     /// Test WHERE clause pushdown for set tables
     #[pg_test]
-    #[cfg(feature = "integration_tests")]
+
     fn test_set_where_pushdown() {
         log!("Testing WHERE clause pushdown for set tables");
 
@@ -201,7 +201,7 @@ mod tests {
 
     /// Test WHERE clause pushdown for string tables
     #[pg_test]
-    #[cfg(feature = "integration_tests")]
+
     fn test_string_where_pushdown() {
         log!("Testing WHERE clause pushdown for string tables");
 
@@ -266,7 +266,7 @@ mod tests {
 
     /// Test performance comparison: pushdown vs full scan
     #[pg_test]
-    #[cfg(feature = "integration_tests")]
+
     fn test_pushdown_performance() {
         log!("Testing pushdown performance benefits");
 
@@ -335,7 +335,7 @@ mod tests {
 
     /// Test complex WHERE clauses (some pushable, some not)
     #[pg_test]
-    #[cfg(feature = "integration_tests")]
+
     fn test_mixed_where_clauses() {
         log!("Testing mixed WHERE clauses with partial pushdown");
 
@@ -399,7 +399,7 @@ mod tests {
 
     /// Test that non-pushable queries still work correctly
     #[pg_test]
-    #[cfg(feature = "integration_tests")]
+
     fn test_non_pushable_queries() {
         // Setup Redis FDW
         Spi::run("CREATE FOREIGN DATA WRAPPER redis_wrapper HANDLER redis_fdw_handler;").unwrap();

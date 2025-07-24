@@ -237,7 +237,7 @@ mod tests {
     // These tests are marked with a special feature flag to run only when Redis is available
 
     #[pg_test]
-    #[cfg(feature = "integration_tests")]
+
     fn test_redis_connection_and_select() {
         // Setup Redis FDW
         Spi::run("CREATE FOREIGN DATA WRAPPER redis_wrapper HANDLER redis_fdw_handler;").unwrap();
@@ -279,7 +279,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[cfg(feature = "integration_tests")]
+
     fn test_redis_hash_insert() {
         // Setup Redis FDW
         Spi::run("CREATE FOREIGN DATA WRAPPER redis_wrapper HANDLER redis_fdw_handler;").unwrap();
@@ -320,7 +320,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[cfg(feature = "integration_tests")]
+
     fn test_redis_list_operations() {
         // Setup Redis FDW
         Spi::run("CREATE FOREIGN DATA WRAPPER redis_wrapper HANDLER redis_fdw_handler;").unwrap();
@@ -550,7 +550,7 @@ mod tests {
 
     /// Comprehensive integration test with Redis - INSERT, SELECT, DELETE operations
     #[pg_test]
-    #[cfg(feature = "integration_tests")]
+
     fn test_smoke_comprehensive_redis_operations() {
         log!("Starting comprehensive Redis operations smoke test");
 
