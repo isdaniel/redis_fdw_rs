@@ -248,5 +248,7 @@ services:
 
 networks:
   redis-cluster-test:
-    external: true
-    name: redis-cluster-test
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.1.0.0/16
