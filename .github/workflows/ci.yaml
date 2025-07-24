@@ -48,6 +48,7 @@ jobs:
         run: |
           # Start Redis cluster using docker-compose
           echo "Starting Redis cluster containers..."
+          docker network create --driver=bridge  --subnet=10.1.0.0/16  redis-cluster-test
           docker-compose -f docker-compose.cluster-test.yml up -d
           
           # Wait for all containers to be healthy with better progress reporting
