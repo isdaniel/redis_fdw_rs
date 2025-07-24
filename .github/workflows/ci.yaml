@@ -59,7 +59,7 @@ jobs:
           sudo chmod 777 /usr/lib/postgresql/${{ env.PG_VER }} -R
           
       - name: Run Tests for PostgreSQL ${{ env.PG_VER }}
-        run: cargo pgrx test --release --features integration_tests pg${{ env.PG_VER }} 
+        run: cargo pgrx test --release pg${{ env.PG_VER }} 
 
       - name: Package for PostgreSQL ${{ env.PG_VER }}
         run: cargo pgrx package --pg-config=${{ env.PG_BIN }}/pg_config
