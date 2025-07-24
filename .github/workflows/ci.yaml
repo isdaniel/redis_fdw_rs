@@ -76,33 +76,6 @@ jobs:
             sleep 2
           done
           
-          # Wait for cluster initialization to complete
-          echo "Waiting for cluster initialization to complete..."
-          for i in {1..60}; do
-            if redis-cli -h 127.0.0.1 -p 7001 cluster info 2>/dev/null | grep -q "cluster_state:ok"; then
-              echo "Redis cluster is ready!"
-              break
-            fi
-            echo "Attempt $i/60: Cluster not ready yet, waiting..."
-            sleep 3
-          done
-          
-          # Verify cluster status with error handling
-          echo "Verifying cluster status..."
-          if redis-cli -h 127.0.0.1 -p 7001 ping 2>/dev/null; then
-            echo "✅ Cluster ping successful"
-            redis-cli -h 127.0.0.1 -p 7001 cluster info || echo "Warning: Could not get cluster info"
-            redis-cli -h 127.0.0.1 -p 7001 cluster nodes || echo "Warning: Could not get cluster nodes"
-          else
-            echo "❌ Failed to connect to cluster"
-            # Show debug information
-            echo "Docker containers status:"
-            docker ps --filter "name=redis-cluster"
-            echo "Container logs:"
-            docker-compose -f docker-compose.cluster-test.yml logs --tail=20
-            exit 1
-          fi
-        
       - name: Install cargo-pgrx
         run: cargo install cargo-pgrx 
 
