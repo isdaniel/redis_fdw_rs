@@ -55,31 +55,6 @@ jobs:
           # Start Redis cluster using docker-compose
           docker-compose -f docker-compose.cluster-test.yml up -d
           
-          # Wait for cluster to be ready
-          echo "Waiting for Redis cluster to initialize..."
-          timeout=120
-          elapsed=0
-          while [ $elapsed -lt $timeout ]; do
-            if docker logs redis-cluster-test-init 2>&1 | grep -q "Redis cluster initialization completed successfully"; then
-              echo "Redis cluster is ready!"
-              break
-            elif docker logs redis-cluster-test-init 2>&1 | grep -q "ERROR"; then
-              echo "Redis cluster initialization failed:"
-              docker logs redis-cluster-test-init
-              exit 1
-            fi
-            sleep 5
-            elapsed=$((elapsed + 5))
-            echo "Waiting... (${elapsed}s/${timeout}s)"
-          done
-          
-          if [ $elapsed -ge $timeout ]; then
-            echo "Timeout waiting for Redis cluster to start"
-            echo "Cluster logs:"
-            docker-compose -f docker-compose.cluster-test.yml logs
-            exit 1
-          fi
-          
           # Verify cluster status
           echo "Verifying cluster status..."
           redis-cli -h 127.0.0.1 -p 7001 cluster info
