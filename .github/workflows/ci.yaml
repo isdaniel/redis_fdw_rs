@@ -85,12 +85,13 @@ jobs:
             fi
             sleep 1
           done
+          netstat -tulnp | grep LISTEN
           redis-cli -h 127.0.0.1 -p 8899 ping
-          redis-cli -h 10.1.0.11 -p 7001 ping
-          redis-cli -h 10.1.0.12-p 7002 ping
+          redis-cli -h 127.0.0.1 -p 7001 ping
+          redis-cli -h 127.0.0.1 -p 7002 ping
 
-          redis-cli -h 10.1.0.11 -p 7001 cluster info 
-          redis-cli -h 10.1.0.11 -p 7001 cluster nodes 
+          redis-cli -h 127.0.0.1 -p 7001 cluster info 
+          redis-cli -h 127.0.0.1 -p 7001 cluster nodes 
           
       - name: Install cargo-pgrx
         run: cargo install cargo-pgrx 
