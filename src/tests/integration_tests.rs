@@ -258,6 +258,8 @@ mod tests {
             key_prefix,
         );
 
+        controlled_delete(table_name, "1 = 1");
+
         // Test INSERT operations with pacing
         log!("Testing INSERT operations...");
         controlled_insert_single(table_name, "First Item");
@@ -300,6 +302,8 @@ mod tests {
             "list",
             key_prefix,
         );
+
+        controlled_delete(table_name, "1 = 1");
 
         // Insert items in sequence
         controlled_insert_single(table_name, "First");
@@ -619,6 +623,8 @@ mod tests {
             "list",
             "integration:multi:list",
         );
+
+        controlled_delete("multi_list", "1 = 1");
 
         create_foreign_table(
             "multi_set",
