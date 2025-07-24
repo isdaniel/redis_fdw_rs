@@ -558,6 +558,70 @@ log_min_messages = debug1
 
 Look for log messages starting with `---> redis_fdw` to trace execution.
 
+## Testing
+
+### Regular Testing
+
+Run the comprehensive test suite:
+
+```bash
+# Run all tests for PostgreSQL 14
+cargo pgrx test pg14
+
+# Run tests for other PostgreSQL versions
+cargo pgrx test pg15
+cargo pgrx test pg16
+cargo pgrx test pg17
+
+# Run tests with a specific Redis server
+REDIS_HOST_PORT="127.0.0.1:8899" cargo pgrx test pg14
+```
+
+### Redis Cluster Testing
+
+This project includes comprehensive Redis cluster integration testing infrastructure:
+
+#### Quick Start with Cluster Testing
+
+```bash
+# 1. Validate your cluster testing setup
+./scripts/validate_cluster_setup.sh
+
+# 2. Start a Redis cluster using Docker Compose
+./scripts/cluster_test.sh start
+
+# 3. Run integration tests against the cluster
+./scripts/cluster_test.sh test
+
+# 4. Monitor cluster status
+./scripts/cluster_test.sh status
+
+# 5. View cluster logs
+./scripts/cluster_test.sh logs
+
+# 6. Clean up when done
+./scripts/cluster_test.sh cleanup
+```
+
+#### Cluster Test Features
+
+- **Automated Setup**: Docker Compose creates a 6-node Redis cluster (3 masters + 3 replicas)
+- **Health Checks**: Ensures all nodes are ready before running tests
+- **Complete Coverage**: Tests all Redis table types with cluster distribution
+- **Error Handling**: Validates cluster resilience and failover scenarios
+- **Performance Testing**: Verifies key distribution across cluster nodes
+
+#### Manual Cluster Testing
+
+```bash
+# Set environment variables for cluster testing
+export REDIS_CLUSTER_TEST_ENABLED=true
+export REDIS_CLUSTER_NODES="127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003,127.0.0.1:7004,127.0.0.1:7005,127.0.0.1:7006"
+
+# Run tests with cluster configuration
+cargo pgrx test pg14
+```
+
 ## Roadmap
 
 ### Recently Completed ✅

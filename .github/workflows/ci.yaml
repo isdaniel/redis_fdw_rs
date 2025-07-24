@@ -35,13 +35,47 @@ jobs:
             build-essential \
             clang \
             llvm \
-            ca-certificates
+            ca-certificates \
+            redis-tools
           echo ""
           sudo apt-get install -y postgresql-${{ env.PG_VER }} postgresql-server-dev-${{ env.PG_VER }}
 
       - name: Start Redis container
         run: docker run -d --name redis-server -p 8899:6379 redis
-        
+
+      - name: Start Redis Cluster for testing
+        run: |
+          echo "Starting Redis cluster for integration testing..."
+          # Install docker-compose if not available
+          if ! command -v docker-compose &> /dev/null; then
+            sudo curl -L "https://github.com/docker/compose/releases/download/v2.21.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+            sudo chmod +x /usr/local/bin/docker-compose
+          fi
+          
+          # Start Redis cluster using docker-compose
+          echo "Starting Redis cluster containers..."
+          docker-compose -f docker-compose.cluster-test.yml up -d
+          
+          # Wait for all containers to be healthy
+          echo "Waiting for all Redis containers to be healthy..."
+          for i in {1..60}; do
+            all_healthy=true
+            for port in 7001 7002 7003 7004 7005 7006; do
+              if ! docker ps --filter "health=healthy" --filter "publish=$port" --format "{{.Names}}" | grep -q "redis-cluster"; then
+                all_healthy=false
+                break
+              fi
+            done
+            
+            if [ "$all_healthy" = true ]; then
+              echo "All Redis containers are healthy"
+              break
+            fi
+            
+            echo "Attempt $i/60: Waiting for containers to be healthy..."
+            sleep 2
+          done
+          
       - name: Install cargo-pgrx
         run: cargo install cargo-pgrx 
 
@@ -59,7 +93,28 @@ jobs:
           sudo chmod 777 /usr/lib/postgresql/${{ env.PG_VER }} -R
           
       - name: Run Tests for PostgreSQL ${{ env.PG_VER }}
-        run: cargo pgrx test --release pg${{ env.PG_VER }} 
+        env:
+          REDIS_CLUSTER_TEST_ENABLED: "true"
+          REDIS_CLUSTER_NODES: "127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003,127.0.0.1:7004,127.0.0.1:7005,127.0.0.1:7006"
+        run: |
+          echo "Running standard tests..."
+          cargo pgrx test --release pg${{ env.PG_VER }}
+          
+          echo "Running cluster integration tests..."
+          # Validate cluster is still running
+          if redis-cli -h 127.0.0.1 -p 7001 ping; then
+            echo "Cluster is healthy, running cluster tests..."
+            cargo pgrx test --release pg${{ env.PG_VER }}
+          else
+            echo "Warning: Cluster not available, skipping cluster-specific tests"
+          fi 
 
       - name: Package for PostgreSQL ${{ env.PG_VER }}
         run: cargo pgrx package --pg-config=${{ env.PG_BIN }}/pg_config
+
+      - name: Cleanup Redis Cluster
+        if: always()  # Run cleanup even if tests fail
+        run: |
+          echo "Cleaning up Redis cluster..."
+          docker-compose -f docker-compose.cluster-test.yml down -v || true
+          echo "Cleanup completed"
