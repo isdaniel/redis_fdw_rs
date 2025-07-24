@@ -5,9 +5,7 @@
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 mod tests {
-    use crate::query::{
-        pushdown_types::{ComparisonOperator, PushableCondition},
-    };
+    use crate::query::pushdown_types::{ComparisonOperator, PushableCondition};
     use pgrx::prelude::*;
     /// Test basic WHERE clause pushdown for hash tables
     #[pg_test]
@@ -490,12 +488,11 @@ mod tests {
         assert!(hash_type.supports_pushdown(&ComparisonOperator::In));
         assert!(set_type.supports_pushdown(&ComparisonOperator::In));
         assert!(!string_type.supports_pushdown(&ComparisonOperator::In));
-        
+
         // Test Like operator (should be supported by string and set)
         assert!(string_type.supports_pushdown(&ComparisonOperator::Like));
         assert!(set_type.supports_pushdown(&ComparisonOperator::Like));
         assert!(hash_type.supports_pushdown(&ComparisonOperator::Like));
-
     }
 
     #[test]

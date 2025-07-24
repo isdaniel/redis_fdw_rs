@@ -26,7 +26,7 @@ mod tests {
     const TEST_DATABASE: &str = "15";
     const FDW_NAME: &str = "redis_test_wrapper";
     const SERVER_NAME: &str = "redis_test_server";
-    
+
     /// Connection management constants
     const OPERATION_DELAY_MS: u64 = 35; // 35ms between operations
     const BATCH_SIZE: usize = 10; // Process operations in smaller batches
@@ -35,25 +35,30 @@ mod tests {
     /// Setup helper to create FDW and server with error handling
     fn setup_redis_fdw() {
         log!("Setting up Redis FDW connection...");
-        
+
         // Clean up any existing FDW/server first
-        let _ = Spi::run(&format!("DROP FOREIGN DATA WRAPPER IF EXISTS {} CASCADE;", FDW_NAME));
-        
+        let _ = Spi::run(&format!(
+            "DROP FOREIGN DATA WRAPPER IF EXISTS {} CASCADE;",
+            FDW_NAME
+        ));
+
         // Small delay to ensure cleanup completes
         thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
-        
+
         // Create FDW
         Spi::run(&format!(
             "CREATE FOREIGN DATA WRAPPER {} HANDLER redis_fdw_handler;",
             FDW_NAME
-        )).unwrap();
+        ))
+        .unwrap();
 
         // Create server
         Spi::run(&format!(
             "CREATE SERVER {} FOREIGN DATA WRAPPER {} OPTIONS (host_port '{}');",
             SERVER_NAME, FDW_NAME, REDIS_HOST_PORT
-        )).unwrap();
-        
+        ))
+        .unwrap();
+
         log!("Redis FDW setup completed successfully");
     }
 
@@ -61,20 +66,18 @@ mod tests {
     fn cleanup_redis_fdw() {
         log!("Cleaning up Redis FDW connection...");
         let _ = Spi::run(&format!("DROP SERVER IF EXISTS {} CASCADE;", SERVER_NAME));
-        let _ = Spi::run(&format!("DROP FOREIGN DATA WRAPPER IF EXISTS {} CASCADE;", FDW_NAME));
-        
+        let _ = Spi::run(&format!(
+            "DROP FOREIGN DATA WRAPPER IF EXISTS {} CASCADE;",
+            FDW_NAME
+        ));
+
         // Small delay to ensure cleanup completes
         thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
         log!("Redis FDW cleanup completed");
     }
 
     /// Helper to create a foreign table with specified options
-    fn create_foreign_table(
-        table_name: &str,
-        columns: &str,
-        table_type: &str,
-        key_prefix: &str,
-    ) {
+    fn create_foreign_table(table_name: &str, columns: &str, table_type: &str, key_prefix: &str) {
         let sql: String = format!(
             "CREATE FOREIGN TABLE {table_name} ({columns}) SERVER {SERVER_NAME} OPTIONS (
                 database '{TEST_DATABASE}',
@@ -84,7 +87,7 @@ mod tests {
         );
         Spi::run(&sql).unwrap();
         log!("Created foreign table: {table_name} of type: {table_type}");
-        
+
         // Small delay after table creation
         thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
     }
@@ -93,7 +96,7 @@ mod tests {
     fn drop_foreign_table(table_name: &str) {
         let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {table_name};"));
         log!("Dropped foreign table: {table_name}");
-        
+
         // Small delay after table drop
         thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
     }
@@ -101,10 +104,7 @@ mod tests {
     /// Helper to perform operations with controlled pacing - for single-column tables
     fn controlled_insert_single(table_name: &str, value: &str) {
         thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
-        Spi::run(&format!(
-            "INSERT INTO {} VALUES ('{}');",
-            table_name, value
-        )).unwrap();
+        Spi::run(&format!("INSERT INTO {} VALUES ('{}');", table_name, value)).unwrap();
     }
 
     /// Helper to perform operations with controlled pacing - for two-column tables
@@ -113,7 +113,8 @@ mod tests {
         Spi::run(&format!(
             "INSERT INTO {} VALUES ('{}', '{}');",
             table_name, col1, col2
-        )).unwrap();
+        ))
+        .unwrap();
     }
 
     /// Helper to perform controlled delete operations
@@ -122,7 +123,8 @@ mod tests {
         Spi::run(&format!(
             "DELETE FROM {} WHERE {};",
             table_name, where_clause
-        )).unwrap();
+        ))
+        .unwrap();
     }
 
     /// Helper to perform controlled select operations
@@ -138,19 +140,14 @@ mod tests {
     #[pg_test]
     fn test_integration_hash_table_basic_crud() {
         log!("=== Testing Hash Table Basic CRUD Operations ===");
-        
+
         setup_redis_fdw();
-        
+
         let table_name = "test_hash_crud";
         let key_prefix = "integration:hash:crud";
-        
+
         // Create hash table
-        create_foreign_table(
-            table_name,
-            "field text, value text",
-            "hash",
-            key_prefix,
-        );
+        create_foreign_table(table_name, "field text, value text", "hash", key_prefix);
 
         // Test INSERT operations with pacing
         log!("Testing INSERT operations...");
@@ -184,25 +181,20 @@ mod tests {
         // Cleanup
         drop_foreign_table(table_name);
         cleanup_redis_fdw();
-        
+
         log!("=== Hash Table Basic CRUD Test Completed ===");
     }
 
     #[pg_test]
     fn test_integration_hash_table_bulk_operations() {
         log!("=== Testing Hash Table Bulk Operations ===");
-        
+
         setup_redis_fdw();
-        
+
         let table_name = "test_hash_bulk";
         let key_prefix = "integration:hash:bulk";
-        
-        create_foreign_table(
-            table_name,
-            "field text, value text",
-            "hash",
-            key_prefix,
-        );
+
+        create_foreign_table(table_name, "field text, value text", "hash", key_prefix);
 
         for batch in 0..(30 / BATCH_SIZE) {
             for i in 1..=BATCH_SIZE {
@@ -234,29 +226,24 @@ mod tests {
         // Cleanup
         drop_foreign_table(table_name);
         cleanup_redis_fdw();
-        
+
         log!("=== Hash Table Bulk Operations Test Completed ===");
     }
 
     // ================================================
-    // LIST TABLE INTEGRATION TESTS  
+    // LIST TABLE INTEGRATION TESTS
     // ================================================
 
     #[pg_test]
     fn test_integration_list_table_basic_crud() {
         log!("=== Testing List Table Basic CRUD Operations ===");
-        
+
         setup_redis_fdw();
-        
+
         let table_name = "test_list_crud";
         let key_prefix = "integration:list:crud";
-        
-        create_foreign_table(
-            table_name,
-            "element text",
-            "list",
-            key_prefix,
-        );
+
+        create_foreign_table(table_name, "element text", "list", key_prefix);
 
         controlled_delete(table_name, "1 = 1");
 
@@ -283,25 +270,20 @@ mod tests {
         // Cleanup
         drop_foreign_table(table_name);
         cleanup_redis_fdw();
-        
+
         log!("=== List Table Basic CRUD Test Completed ===");
     }
 
     #[pg_test]
     fn test_integration_list_table_ordering() {
         log!("=== Testing List Table Ordering ===");
-        
+
         setup_redis_fdw();
-        
+
         let table_name = "test_list_order";
         let key_prefix = "integration:list:order";
-        
-        create_foreign_table(
-            table_name,
-            "element text",
-            "list",
-            key_prefix,
-        );
+
+        create_foreign_table(table_name, "element text", "list", key_prefix);
 
         controlled_delete(table_name, "1 = 1");
 
@@ -316,14 +298,15 @@ mod tests {
 
         // Test simple selection
         thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
-        let result = Spi::get_one::<String>(&format!("SELECT element FROM {} LIMIT 1;", table_name));
+        let result =
+            Spi::get_one::<String>(&format!("SELECT element FROM {} LIMIT 1;", table_name));
         assert!(result.is_ok());
         log!("First list element: {:?}", result.unwrap());
 
         // Cleanup
         drop_foreign_table(table_name);
         cleanup_redis_fdw();
-        
+
         log!("=== List Table Ordering Test Completed ===");
     }
 
@@ -334,18 +317,13 @@ mod tests {
     #[pg_test]
     fn test_integration_set_table_basic_crud() {
         log!("=== Testing Set Table Basic CRUD Operations ===");
-        
+
         setup_redis_fdw();
-        
+
         let table_name = "test_set_crud";
         let key_prefix = "integration:set:crud";
-        
-        create_foreign_table(
-            table_name,
-            "member text",
-            "set",
-            key_prefix,
-        );
+
+        create_foreign_table(table_name, "member text", "set", key_prefix);
 
         // Test INSERT operations with pacing
         log!("Testing INSERT operations...");
@@ -359,7 +337,10 @@ mod tests {
         // Test SELECT operations
         log!("Testing SELECT operations...");
         let count = controlled_select_count(table_name);
-        log!("Set table count after INSERT (including duplicate): {:?}", count);
+        log!(
+            "Set table count after INSERT (including duplicate): {:?}",
+            count
+        );
 
         // Test membership check
         thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
@@ -380,25 +361,20 @@ mod tests {
         // Cleanup
         drop_foreign_table(table_name);
         cleanup_redis_fdw();
-        
+
         log!("=== Set Table Basic CRUD Test Completed ===");
     }
 
     #[pg_test]
     fn test_integration_set_table_uniqueness() {
         log!("=== Testing Set Table Uniqueness ===");
-        
+
         setup_redis_fdw();
-        
+
         let table_name = "test_set_unique";
         let key_prefix = "integration:set:unique";
-        
-        create_foreign_table(
-            table_name,
-            "member text",
-            "set",
-            key_prefix,
-        );
+
+        create_foreign_table(table_name, "member text", "set", key_prefix);
 
         // Insert same value multiple times
         for i in 1..=5 {
@@ -408,12 +384,15 @@ mod tests {
 
         // Check that set maintains uniqueness (Redis behavior)
         let count = controlled_select_count(table_name);
-        log!("Set count after multiple inserts of same value: {:?}", count);
+        log!(
+            "Set count after multiple inserts of same value: {:?}",
+            count
+        );
 
         // Cleanup
         drop_foreign_table(table_name);
         cleanup_redis_fdw();
-        
+
         log!("=== Set Table Uniqueness Test Completed ===");
     }
 
@@ -425,12 +404,12 @@ mod tests {
     // #[pg_test]
     // fn test_integration_string_table_basic_crud() {
     //     log!("=== Testing String Table Basic CRUD Operations ===");
-        
+
     //     setup_redis_fdw();
-        
+
     //     let table_name = "test_string_crud";
     //     let key_prefix = "integration:string:crud";
-        
+
     //     create_foreign_table(
     //         table_name,
     //         "value text",
@@ -464,25 +443,20 @@ mod tests {
     //     // Cleanup
     //     drop_foreign_table(table_name);
     //     cleanup_redis_fdw();
-        
+
     //     log!("=== String Table Basic CRUD Test Completed ===");
     // }
 
     #[pg_test]
     fn test_integration_string_table_large_data() {
         log!("=== Testing String Table Large Data Handling ===");
-        
+
         setup_redis_fdw();
-        
+
         let table_name = "test_string_large";
         let key_prefix = "integration:string:large";
-        
-        create_foreign_table(
-            table_name,
-            "value text",
-            "string",
-            key_prefix,
-        );
+
+        create_foreign_table(table_name, "value text", "string", key_prefix);
 
         // Test with large string (1KB)
         let large_value = "X".repeat(1000);
@@ -500,7 +474,7 @@ mod tests {
         // Cleanup
         drop_foreign_table(table_name);
         cleanup_redis_fdw();
-        
+
         log!("=== String Table Large Data Test Completed ===");
     }
 
@@ -511,18 +485,13 @@ mod tests {
     #[pg_test]
     fn test_integration_zset_table_basic_crud() {
         log!("=== Testing ZSet Table Basic CRUD Operations ===");
-        
+
         setup_redis_fdw();
-        
+
         let table_name = "test_zset_crud";
         let key_prefix = "integration:zset:crud";
-        
-        create_foreign_table(
-            table_name,
-            "member text, score numeric",
-            "zset",
-            key_prefix,
-        );
+
+        create_foreign_table(table_name, "member text, score numeric", "zset", key_prefix);
 
         // Test INSERT operations with pacing
         log!("Testing INSERT operations...");
@@ -554,25 +523,20 @@ mod tests {
         // Cleanup
         drop_foreign_table(table_name);
         cleanup_redis_fdw();
-        
+
         log!("=== ZSet Table Basic CRUD Test Completed ===");
     }
 
     #[pg_test]
     fn test_integration_zset_table_scoring() {
         log!("=== Testing ZSet Table Scoring ===");
-        
+
         setup_redis_fdw();
-        
+
         let table_name = "test_zset_score";
         let key_prefix = "integration:zset:score";
-        
-        create_foreign_table(
-            table_name,
-            "member text,score numeric",
-            "zset",
-            key_prefix,
-        );
+
+        create_foreign_table(table_name, "member text,score numeric", "zset", key_prefix);
 
         // Insert with different scores
         controlled_insert_pair(table_name, "low_player", "50");
@@ -595,7 +559,7 @@ mod tests {
         // Cleanup
         drop_foreign_table(table_name);
         cleanup_redis_fdw();
-        
+
         log!("=== ZSet Table Scoring Test Completed ===");
     }
 
@@ -606,7 +570,7 @@ mod tests {
     #[pg_test]
     fn test_integration_multiple_table_types() {
         log!("=== Testing Multiple Redis Table Types Simultaneously ===");
-        
+
         setup_redis_fdw();
 
         // Create different table types
@@ -626,12 +590,7 @@ mod tests {
 
         controlled_delete("multi_list", "1 = 1");
 
-        create_foreign_table(
-            "multi_set",
-            "member text",
-            "set",
-            "integration:multi:set",
-        );
+        create_foreign_table("multi_set", "member text", "set", "integration:multi:set");
 
         create_foreign_table(
             "multi_string",
@@ -653,7 +612,7 @@ mod tests {
         controlled_insert_single("multi_list", "list_item");
         controlled_insert_single("multi_set", "set_member");
         controlled_insert_single("multi_string", "string_value");
-        controlled_insert_pair("multi_zset",  "zset_member","100");
+        controlled_insert_pair("multi_zset", "zset_member", "100");
 
         // Verify all tables have data
         assert_eq!(controlled_select_count("multi_hash"), Some(1));
@@ -668,9 +627,9 @@ mod tests {
         drop_foreign_table("multi_set");
         drop_foreign_table("multi_string");
         drop_foreign_table("multi_zset");
-        
+
         cleanup_redis_fdw();
-        
+
         log!("=== Multiple Table Types Test Completed ===");
     }
 
@@ -681,21 +640,19 @@ mod tests {
     #[pg_test]
     fn test_integration_stress_controlled_operations() {
         log!("=== Testing Stress Operations with Controlled Pacing ===");
-        
+
         setup_redis_fdw();
-        
+
         let table_name = "test_stress_hash";
         let key_prefix = "integration:stress:hash";
-        
-        create_foreign_table(
-            table_name,
-            "field text, value text",
-            "hash",
-            key_prefix,
-        );
+
+        create_foreign_table(table_name, "field text, value text", "hash", key_prefix);
 
         // Stress test with controlled pacing
-        log!("Performing stress test with {} operations...", BATCH_SIZE * 5);
+        log!(
+            "Performing stress test with {} operations...",
+            BATCH_SIZE * 5
+        );
         for batch in 0..5 {
             for i in 1..=BATCH_SIZE {
                 let index = batch * BATCH_SIZE + i;
@@ -711,12 +668,15 @@ mod tests {
         // Verify final count
         let final_count = controlled_select_count(table_name);
         assert_eq!(final_count, Some(50));
-        log!("Stress test completed successfully with {} records", final_count.unwrap());
+        log!(
+            "Stress test completed successfully with {} records",
+            final_count.unwrap()
+        );
 
         // Cleanup
         drop_foreign_table(table_name);
         cleanup_redis_fdw();
-        
+
         log!("=== Stress Test Completed ===");
     }
 
@@ -727,7 +687,7 @@ mod tests {
     #[pg_test]
     fn test_integration_database_isolation() {
         log!("=== Testing Database Isolation ===");
-        
+
         setup_redis_fdw();
 
         // Create tables in different Redis databases
@@ -757,17 +717,21 @@ mod tests {
         // Verify isolation
         let db0_count = controlled_select_count("db0_table");
         let db1_count = controlled_select_count("db1_table");
-        
+
         assert_eq!(db0_count, Some(1));
         assert_eq!(db1_count, Some(1));
 
-        log!("Database isolation verified: DB0={:?}, DB1={:?}", db0_count, db1_count);
+        log!(
+            "Database isolation verified: DB0={:?}, DB1={:?}",
+            db0_count,
+            db1_count
+        );
 
         // Cleanup
         drop_foreign_table("db0_table");
         drop_foreign_table("db1_table");
         cleanup_redis_fdw();
-        
+
         log!("=== Database Isolation Test Completed ===");
     }
 
@@ -778,7 +742,7 @@ mod tests {
     #[pg_test]
     fn test_integration_comprehensive_smoke_test() {
         log!("=== Running Comprehensive Integration Smoke Test ===");
-        
+
         setup_redis_fdw();
 
         // Test basic connectivity and operations for each table type
@@ -787,12 +751,17 @@ mod tests {
             ("smoke_list", "element text", "list", "smoke:list"),
             ("smoke_set", "member text", "set", "smoke:set"),
             ("smoke_string", "value text", "string", "smoke:string"),
-            ("smoke_zset", "member text ,score numeric", "zset", "smoke:zset"),
+            (
+                "smoke_zset",
+                "member text ,score numeric",
+                "zset",
+                "smoke:zset",
+            ),
         ];
 
         for (table_name, columns, table_type, key_prefix) in &test_cases {
             log!("Testing table type: {}", table_type);
-            
+
             create_foreign_table(table_name, columns, table_type, key_prefix);
 
             // Perform appropriate operations based on table type
@@ -804,7 +773,7 @@ mod tests {
                     controlled_insert_single(table_name, "test_value");
                 }
                 "zset" => {
-                    controlled_insert_pair(table_name,  "test_member" ,"100");
+                    controlled_insert_pair(table_name, "test_member", "100");
                 }
                 _ => {}
             }
@@ -818,7 +787,7 @@ mod tests {
         }
 
         cleanup_redis_fdw();
-        
+
         log!("=== Comprehensive Smoke Test Completed Successfully ===");
     }
 }

@@ -82,7 +82,7 @@ test-unit-pg14:
 
 test-integration-pg14:
 	@echo "Running integration tests for PostgreSQL 14..."
-	cargo pgrx test pg14 --features integration_tests
+	cargo pgrx test pg14
 
 test-unit-pg15:
 	@echo "Running unit tests for PostgreSQL 15..."
@@ -90,7 +90,7 @@ test-unit-pg15:
 
 test-integration-pg15:
 	@echo "Running integration tests for PostgreSQL 15..."
-	cargo pgrx test pg15 --features integration_tests
+	cargo pgrx test pg15 
 
 # Individual test types
 test-unit-pg16:
@@ -99,7 +99,7 @@ test-unit-pg16:
 
 test-integration-pg16:
 	@echo "Running integration tests for PostgreSQL 16..."
-	cargo pgrx test pg16 --features integration_tests
+	cargo pgrx test pg16 
 	
 # Individual test types
 test-unit-pg17:
@@ -108,28 +108,28 @@ test-unit-pg17:
 
 test-integration-pg17:
 	@echo "Running integration tests for PostgreSQL 17..."
-	cargo pgrx test pg17 --features integration_tests
+	cargo pgrx test pg17 
 
 # Specific test functions
 test-hash:
 	@echo "Running hash table tests..."
-	cargo pgrx test pg15 --features integration_tests -- test_hash_table_smoke
+	cargo pgrx test pg15 -- test_hash_table_smoke
 
 test-list:
 	@echo "Running list table tests..."
-	cargo pgrx test pg15 --features integration_tests -- test_list_table_smoke
+	cargo pgrx test pg15 -- test_list_table_smoke
 
 test-set:
 	@echo "Running set table tests..."
-	cargo pgrx test pg15 --features integration_tests -- test_set_table_smoke
+	cargo pgrx test pg15 -- test_set_table_smoke
 
 test-string:
 	@echo "Running string table tests..."
-	cargo pgrx test pg15 --features integration_tests -- test_string_table_smoke
+	cargo pgrx test pg15
 
 test-zset:
 	@echo "Running zset table tests..."
-	cargo pgrx test pg15 --features integration_tests -- test_zset_table_smoke
+	cargo pgrx test pg15 
 
 # Redis management
 setup-redis:
@@ -214,7 +214,7 @@ ci-test:
 # Performance testing
 perf-test:
 	@echo "Running performance tests..."
-	cargo pgrx test pg15 --features integration_tests -- test_performance_smoke
+	cargo pgrx test pg15
 
 # Package for distribution
 package:
