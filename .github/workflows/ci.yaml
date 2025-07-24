@@ -85,7 +85,7 @@ jobs:
             fi
             sleep 1
           done
-
+          sleep 10
           redis-cli -h 127.0.0.1 -p 8899 ping
           docker exec -i redis-cluster-test-1 redis-cli -p 7001 ping
           docker exec -i redis-cluster-test-1 redis-cli -p 7001 cluster info
