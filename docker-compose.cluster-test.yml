@@ -16,10 +16,10 @@ x-redis-common: &redis-common
     - redis-cluster-test
   healthcheck:
     test: ["CMD", "redis-cli", "-p", "PORT_PLACEHOLDER", "ping"]
-    interval: 5s
-    timeout: 3s
-    retries: 5
-    start_period: 10s
+    interval: 3s
+    timeout: 2s
+    retries: 10
+    start_period: 15s
 
 services:
   # Redis cluster nodes
@@ -39,6 +39,8 @@ services:
       --bind 0.0.0.0
       --protected-mode no
       --loglevel notice
+      --tcp-keepalive 60
+      --tcp-backlog 511
     healthcheck:
       test: ["CMD", "redis-cli", "-p", "7001", "ping"]
     networks:
@@ -61,6 +63,8 @@ services:
       --bind 0.0.0.0
       --protected-mode no
       --loglevel notice
+      --tcp-keepalive 60
+      --tcp-backlog 511
     healthcheck:
       test: ["CMD", "redis-cli", "-p", "7002", "ping"]
     networks:
@@ -83,6 +87,8 @@ services:
       --bind 0.0.0.0
       --protected-mode no
       --loglevel notice
+      --tcp-keepalive 60
+      --tcp-backlog 511
     healthcheck:
       test: ["CMD", "redis-cli", "-p", "7003", "ping"]
     networks:
@@ -105,6 +111,8 @@ services:
       --bind 0.0.0.0
       --protected-mode no
       --loglevel notice
+      --tcp-keepalive 60
+      --tcp-backlog 511
     healthcheck:
       test: ["CMD", "redis-cli", "-p", "7004", "ping"]
     networks:
@@ -127,6 +135,8 @@ services:
       --bind 0.0.0.0
       --protected-mode no
       --loglevel notice
+      --tcp-keepalive 60
+      --tcp-backlog 511
     healthcheck:
       test: ["CMD", "redis-cli", "-p", "7005", "ping"]
     networks:
@@ -149,6 +159,8 @@ services:
       --bind 0.0.0.0
       --protected-mode no
       --loglevel notice
+      --tcp-keepalive 60
+      --tcp-backlog 511
     healthcheck:
       test: ["CMD", "redis-cli", "-p", "7006", "ping"]
     networks:
@@ -178,9 +190,15 @@ services:
       - CLUSTER_NODES=${CLUSTER_NODES:-10.1.0.11:7001 10.1.0.12:7002 10.1.0.13:7003 10.1.0.14:7004 10.1.0.15:7005 10.1.0.16:7006}
       - REPLICAS_PER_MASTER=${REPLICAS_PER_MASTER:-1}
     volumes:
-      - ./scripts/cluster:/scripts:ro
+      - ./scripts:/scripts:ro
     command: /scripts/cluster/init-cluster.sh
     restart: "no"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-h", "10.1.0.11", "-p", "7001", "cluster", "info"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
 networks:
   redis-cluster-test:
