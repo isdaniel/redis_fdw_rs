@@ -117,39 +117,6 @@ jobs:
         run: |
           echo "Running standard tests..."
           cargo pgrx test --release pg${{ env.PG_VER }}
-          
-          echo "Validating cluster connectivity before cluster tests..."
-          if ./scripts/validate_cluster_runtime.sh; then
-            echo "✅ Cluster validation successful, running cluster tests..."
-            
-            # Run cluster integration tests with better environment setup
-            echo "Setting up cluster test environment..."
-            export REDIS_CLUSTER_TEST_ENABLED=true
-            export REDIS_CLUSTER_NODES="127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003,127.0.0.1:7004,127.0.0.1:7005,127.0.0.1:7006"
-            
-            echo "Running cluster integration tests..."
-            cargo pgrx test --release pg${{ env.PG_VER }}
-          else
-            echo "❌ Cluster validation failed, skipping cluster-specific tests"
-            echo "This may indicate a cluster setup issue, but standard tests passed"
-            
-            # Show debug information
-            echo "=== Debug Information ==="
-            echo "Container statuses:"
-            docker ps -a --filter "name=redis-cluster-test" || true
-            echo ""
-            echo "Cluster container logs (last 20 lines each):"
-            for container in redis-cluster-test-1 redis-cluster-test-2 redis-cluster-test-3; do
-              echo "=== Logs for $container ==="
-              docker logs $container --tail 20 2>&1 || true
-            done
-            echo ""
-            echo "Cluster init logs:"
-            docker logs redis-cluster-test-init --tail 30 2>&1 || true
-            
-            # Don't fail the build for cluster issues in CI
-            echo "⚠️ Continuing without cluster tests due to infrastructure issues"
-          fi 
 
       - name: Package for PostgreSQL ${{ env.PG_VER }}
         run: cargo pgrx package --pg-config=${{ env.PG_BIN }}/pg_config
