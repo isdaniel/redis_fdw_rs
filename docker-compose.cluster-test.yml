@@ -27,8 +27,6 @@ services:
     hostname: redis-cluster-1
     ports:
       - "7001:7001"
-    expose:
-      - "7001"
     environment:
       - REDIS_PORT=7001
     command: >
@@ -59,8 +57,6 @@ services:
     hostname: redis-cluster-2
     ports:
       - "7002:7002"
-    expose:
-      - "7002"
     environment:
       - REDIS_PORT=7002
     command: >
@@ -91,8 +87,6 @@ services:
     hostname: redis-cluster-3
     ports:
       - "7003:7003"
-    expose:
-      - "7003"
     environment:
       - REDIS_PORT=7003
     command: >
@@ -123,8 +117,6 @@ services:
     hostname: redis-cluster-4
     ports:
       - "7004:7004"
-    expose:
-      - "7004"
     environment:
       - REDIS_PORT=7004
     command: >
@@ -155,8 +147,6 @@ services:
     hostname: redis-cluster-5
     ports:
       - "7005:7005"
-    expose:
-      - "7005"
     environment:
       - REDIS_PORT=7005
     command: >
@@ -187,8 +177,6 @@ services:
     hostname: redis-cluster-6
     ports:
       - "7006:7006"
-    expose:
-      - "7006"
     environment:
       - REDIS_PORT=7006
     command: >
