@@ -1,33 +1,32 @@
+use crate::core::connection::RedisConnectionType;
 /// Redis connection factory module
-/// 
+///
 /// This module provides a clean interface for creating Redis connections
 /// with proper error handling, configuration validation, and retry logic.
 /// It supports both single-node and cluster Redis deployments.
-
 use pgrx::prelude::*;
 use redis::{cluster::ClusterClient, Client};
 use std::collections::HashMap;
 use std::time::Duration;
-use crate::core::connection::RedisConnectionType;
 
 /// Errors that can occur during connection creation
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectionFactoryError {
     #[error("Invalid host_port configuration: {0}")]
     InvalidHostPort(String),
-    
+
     #[error("Failed to create Redis client: {0}")]
     ClientCreationFailed(#[from] redis::RedisError),
-    
+
     #[error("Failed to establish connection: {0}")]
     ConnectionFailed(String),
-    
+
     #[error("Database parameter out of range: {0}")]
     InvalidDatabase(i64),
-    
+
     #[error("Missing required configuration: {0}")]
     MissingConfiguration(String),
-    
+
     #[error("Configuration validation failed: {0}")]
     ValidationFailed(String),
 }
@@ -175,7 +174,10 @@ impl RedisConnectionFactory {
         for attempt in 1..=retry_attempts {
             match Self::create_connection_internal(config) {
                 Ok(connection) => {
-                    log!("Successfully created Redis connection on attempt {}", attempt);
+                    log!(
+                        "Successfully created Redis connection on attempt {}",
+                        attempt
+                    );
                     return Ok(connection);
                 }
                 Err(e) if attempt < retry_attempts => {
@@ -209,7 +211,7 @@ impl RedisConnectionFactory {
                 .get_connection()
                 .map_err(|e| ConnectionFactoryError::ConnectionFailed(e.to_string()))?;
 
-            Ok(RedisConnectionType::Cluster(cluster_connection, ))
+            Ok(RedisConnectionType::Cluster(cluster_connection))
         } else {
             let client = Self::create_client(config)?;
             let connection = client
@@ -261,7 +263,7 @@ mod tests {
 
         let config = RedisConnectionConfig::from_options(&opts).unwrap();
         let nodes = config.parse_cluster_nodes().unwrap();
-        
+
         assert_eq!(nodes.len(), 2);
         assert_eq!(nodes[0], "redis://127.0.0.1:7000/0");
         assert_eq!(nodes[1], "redis://127.0.0.1:7001/0");
@@ -275,7 +277,7 @@ mod tests {
 
         let config = RedisConnectionConfig::from_options(&opts).unwrap();
         let url = config.get_single_node_url().unwrap();
-        
+
         assert_eq!(url, "redis://127.0.0.1:6379/2");
     }
 
@@ -283,7 +285,7 @@ mod tests {
     fn test_validation_missing_host_port() {
         let opts = HashMap::new();
         let result = RedisConnectionConfig::from_options(&opts);
-        
+
         assert!(result.is_err());
         match result.unwrap_err() {
             ConnectionFactoryError::MissingConfiguration(msg) => {
@@ -300,7 +302,7 @@ mod tests {
         opts.insert("database".to_string(), "16".to_string());
 
         let result = RedisConnectionConfig::from_options(&opts);
-        
+
         assert!(result.is_err());
         match result.unwrap_err() {
             ConnectionFactoryError::InvalidDatabase(db) => {
@@ -313,12 +315,15 @@ mod tests {
     #[test]
     fn test_url_with_prefix() {
         let mut opts = HashMap::new();
-        opts.insert("host_port".to_string(), "redis://127.0.0.1:6379".to_string());
+        opts.insert(
+            "host_port".to_string(),
+            "redis://127.0.0.1:6379".to_string(),
+        );
         opts.insert("database".to_string(), "0".to_string());
 
         let config = RedisConnectionConfig::from_options(&opts).unwrap();
         let url = config.get_single_node_url().unwrap();
-        
+
         assert_eq!(url, "redis://127.0.0.1:6379/0");
     }
 }

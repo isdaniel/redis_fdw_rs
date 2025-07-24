@@ -14,3 +14,6 @@ pub mod pushdown_tests;
 
 #[cfg(any(test, feature = "pg_test"))]
 pub mod utils_tests;
+
+#[cfg(any(test, feature = "pg_test"))]
+pub mod basic_test;
