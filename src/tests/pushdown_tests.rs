@@ -6,7 +6,6 @@
 #[pgrx::pg_schema]
 mod tests {
     use crate::query::{
-        pushdown::WhereClausePushdown,
         pushdown_types::{ComparisonOperator, PushableCondition},
     };
     use pgrx::prelude::*;
