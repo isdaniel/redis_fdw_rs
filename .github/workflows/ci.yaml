@@ -87,9 +87,9 @@ jobs:
           done
 
           redis-cli -h 127.0.0.1 -p 8899 ping
-          docker exec -it redis-cluster-test-1 redis-cli -p 7001 ping
-          docker exec -it redis-cluster-test-1 redis-cli -p 7001 cluster info
-          
+          docker exec -i redis-cluster-test-1 redis-cli -p 7001 ping
+          docker exec -i redis-cluster-test-1 redis-cli -p 7001 cluster info
+
           redis-cli -h 127.0.0.1 -p 7001 ping
           redis-cli -h 127.0.0.1 -p 7002 ping
 
