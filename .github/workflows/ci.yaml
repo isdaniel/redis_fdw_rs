@@ -35,13 +35,64 @@ jobs:
             build-essential \
             clang \
             llvm \
-            ca-certificates
+            ca-certificates \
+            redis-tools \
+            docker-compose
           echo ""
           sudo apt-get install -y postgresql-${{ env.PG_VER }} postgresql-server-dev-${{ env.PG_VER }}
 
       - name: Start Redis container
         run: docker run -d --name redis-server -p 8899:6379 redis
-        
+
+      - name: Start Redis Cluster for testing
+        run: |
+          # Start Redis cluster using docker-compose
+          echo "Starting Redis cluster containers..."
+          docker-compose -f docker-compose.cluster-test.yml up -d
+          
+          # Wait for all containers to be healthy with better progress reporting
+          echo "Waiting for all Redis containers to be healthy..."
+          
+          # Function to check container health
+          check_container_health() {
+            local container_name=$1
+            local port=$2
+            if docker ps --filter "name=$container_name" --filter "health=healthy" --format "{{.Names}}" | grep -q "$container_name"; then
+              echo "  ✅ $container_name (port $port) is healthy"
+              return 0
+            else
+              local status=$(docker ps --filter "name=$container_name" --format "{{.Status}}" | head -1)
+              echo "  ⏳ $container_name (port $port) status: $status"
+              return 1
+            fi
+          }
+          
+          # Wait for individual containers with timeout
+          for i in {1..180}; do 
+            echo "Attempt $i/180: Checking container health..."
+            
+            all_healthy=true
+            check_container_health "redis-cluster-test-1" "7001" || all_healthy=false
+            check_container_health "redis-cluster-test-2" "7002" || all_healthy=false
+            check_container_health "redis-cluster-test-3" "7003" || all_healthy=false
+            check_container_health "redis-cluster-test-4" "7004" || all_healthy=false
+            check_container_health "redis-cluster-test-5" "7005" || all_healthy=false
+            check_container_health "redis-cluster-test-6" "7006" || all_healthy=false
+            
+            if [ "$all_healthy" = true ]; then
+              echo "All Redis containers are healthy, waiting for cluster initialization..."
+              break
+            fi
+            sleep 1
+          done
+          redis-cli -h 127.0.0.1 -p 8899 ping
+          redis-cli -h 127.0.0.1 -p 7001 ping
+          redis-cli -h 127.0.0.1 -p 7002 ping
+          redis-cli -h 127.0.0.1 -p 700 ping
+
+          redis-cli -h 127.0.0.1 -p 7001 cluster info 
+          redis-cli -h 127.0.0.1 -p 7001 cluster nodes 
+          
       - name: Install cargo-pgrx
         run: cargo install cargo-pgrx 
 
@@ -59,7 +110,34 @@ jobs:
           sudo chmod 777 /usr/lib/postgresql/${{ env.PG_VER }} -R
           
       - name: Run Tests for PostgreSQL ${{ env.PG_VER }}
-        run: cargo pgrx test --release pg${{ env.PG_VER }} 
+        env:
+          REDIS_CLUSTER_TEST_ENABLED: "true"
+          REDIS_CLUSTER_NODES: "127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003,127.0.0.1:7004,127.0.0.1:7005,127.0.0.1:7006"
+        run: |
+          echo "Running standard tests..."
+          cargo pgrx test --release pg${{ env.PG_VER }}
 
       - name: Package for PostgreSQL ${{ env.PG_VER }}
         run: cargo pgrx package --pg-config=${{ env.PG_BIN }}/pg_config
+
+      - name: Cleanup Redis Cluster
+        if: always()  # Run cleanup even if tests fail
+        run: |
+          echo "Cleaning up Redis cluster..."
+          
+          # Show final debug information if tests failed
+          if [ "${{ job.status }}" = "failure" ]; then
+            echo "=== Final Debug Information (Test Failure) ==="
+            ./scripts/debug_cluster.sh quick || true
+          fi
+          
+          # Cleanup containers
+          docker-compose -f docker-compose.cluster-test.yml down -v --remove-orphans || true
+          
+          # Force remove any remaining containers
+          docker ps -a --filter "name=redis-cluster-test" --format "{{.Names}}" | xargs -r docker rm -f || true
+          
+          # Clean up networks
+          docker network ls --filter "name=redis-cluster-test" --format "{{.Name}}" | xargs -r docker network rm || true
+          
+          echo "Cleanup completed"
