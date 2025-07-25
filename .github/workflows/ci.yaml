@@ -46,48 +46,12 @@ jobs:
 
       - name: Start Redis Cluster for testing
         run: |
-          # Start Redis cluster using docker-compose
-          echo "Starting Redis cluster containers..."
-          docker-compose -f docker-compose.cluster-test.yml up -d
-          
-          # Wait for all containers to be healthy with better progress reporting
-          echo "Waiting for all Redis containers to be healthy..."
-          
-          # Function to check container health
-          check_container_health() {
-            local container_name=$1
-            local port=$2
-            if docker ps --filter "name=$container_name" --filter "health=healthy" --format "{{.Names}}" | grep -q "$container_name"; then
-              echo "  ✅ $container_name (port $port) is healthy"
-              return 0
-            else
-              local status=$(docker ps --filter "name=$container_name" --format "{{.Status}}" | head -1)
-              echo "  ⏳ $container_name (port $port) status: $status"
-              return 1
-            fi
-          }
-          
-          # Wait for individual containers with timeout
-          for i in {1..180}; do 
-            echo "Attempt $i/180: Checking container health..."
-            
-            all_healthy=true
-            check_container_health "redis-cluster-test-1" "7001" || all_healthy=false
-            check_container_health "redis-cluster-test-2" "7002" || all_healthy=false
-            check_container_health "redis-cluster-test-3" "7003" || all_healthy=false
-            check_container_health "redis-cluster-test-4" "7004" || all_healthy=false
-            check_container_health "redis-cluster-test-5" "7005" || all_healthy=false
-            check_container_health "redis-cluster-test-6" "7006" || all_healthy=false
-            
-            if [ "$all_healthy" = true ]; then
-              echo "All Redis containers are healthy, waiting for cluster initialization..."
-              break
-            fi
-            sleep 1
-          done
-          
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3
+          echo "Starting Redis Cluster containers..."
+          chmod +x ./scripts/start-redis-cluster.sh
+          ./scripts/start-redis-cluster.sh
+
+      # - name: Setup tmate session
+      #   uses: mxschmitt/action-tmate@v3
 
       - name: Ensure Redis Cluster is reachable before tests
         run: |
