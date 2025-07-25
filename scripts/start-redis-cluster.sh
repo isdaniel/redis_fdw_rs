@@ -50,9 +50,58 @@ for NODE in "${NODES[@]}"; do
       --cluster-announce-bus-port "$BUS_PORT"
 done
 
-echo "Waiting 10s for Redis containers to initialize..."
-sleep 10
+echo "Waiting for all Redis containers to be ready..."
 
+# Function to check if a Redis container is healthy and responding
+check_redis_health() {
+  local container_name="$1"
+  local ip="$2"
+  local port="$3"
+  local max_attempts=30
+  local attempt=1
+  
+  echo "Checking health of $container_name ($ip:$port)..."
+  
+  while [ $attempt -le $max_attempts ]; do
+    # Check if container is running
+    if ! docker ps --format "table {{.Names}}" | grep -q "^$container_name$"; then
+      echo "  ❌ Container $container_name is not running (attempt $attempt/$max_attempts)"
+      sleep 2
+      ((attempt++))
+      continue
+    fi
+    
+    # Check if Redis is responding to PING command
+    if docker exec "$container_name" redis-cli -p "$port" ping >/dev/null 2>&1; then
+      echo "  ✅ $container_name is healthy and responding"
+      return 0
+    else
+      echo "  ⏳ $container_name not ready yet (attempt $attempt/$max_attempts)"
+      sleep 2
+      ((attempt++))
+    fi
+  done
+  
+  echo "  ❌ $container_name failed to become healthy after $max_attempts attempts"
+  return 1
+}
+
+# Check health of all Redis nodes
+all_healthy=true
+for NODE in "${NODES[@]}"; do
+  read -r ID IP PORT BUS_PORT <<< "$NODE"
+  if ! check_redis_health "redis-cluster-test-$ID" "$IP" "$PORT"; then
+    all_healthy=false
+  fi
+done
+
+if [ "$all_healthy" = false ]; then
+  echo "❌ Some Redis containers are not healthy. Aborting cluster initialization."
+  echo "💡 Try running 'docker logs redis-cluster-test-<ID>' to check container logs"
+  exit 1
+fi
+
+echo "✅ All Redis containers are healthy and ready!"
 echo "Initializing Redis cluster..."
 CLUSTER_NODES=$(printf "%s:%s " "${NODES[@]// /:}" | awk '{for(i=2;i<=NF;i+=4) printf $i ":" $(i+1) " "; print ""}')
 
