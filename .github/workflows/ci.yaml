@@ -85,16 +85,9 @@ jobs:
             fi
             sleep 1
           done
-
-          for i in {1..30}; do
-            cluster_state=$(docker exec -i redis-cluster-test-1 redis-cli -p 7001 cluster info | grep cluster_state:ok || true)
-            if [ -n "$cluster_state" ]; then
-              echo "Redis cluster is ready"
-              break
-            fi
-            echo "Waiting for Redis cluster to be ready..."
-            sleep 2
-          done
+          
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
 
       - name: Ensure Redis Cluster is reachable before tests
         run: |
