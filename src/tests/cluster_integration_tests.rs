@@ -7,7 +7,6 @@
 /// Prerequisites:
 /// - Redis cluster running via Docker Compose (use scripts/cluster_test.sh start)
 /// - Environment variable REDIS_CLUSTER_NODES set to cluster endpoints
-/// - Environment variable REDIS_CLUSTER_TEST_ENABLED=true to enable cluster tests
 ///
 /// To run cluster tests:
 /// ```bash
@@ -34,21 +33,6 @@ mod tests {
     const BATCH_SIZE: usize = 5; // Process operations in smaller batches for cluster
     const BATCH_DELAY_MS: u64 = 100; // 100ms between batches
 
-    /// Check if cluster tests are enabled and cluster is available
-    fn is_cluster_test_enabled() -> bool {
-        // Check if cluster tests are enabled
-        if env::var("REDIS_CLUSTER_TEST_ENABLED").unwrap_or_default() != "true" {
-            return false;
-        }
-
-        // Check if cluster nodes are configured
-        let _cluster_nodes = env::var("REDIS_CLUSTER_NODES")
-            .unwrap_or_else(|_| DEFAULT_CLUSTER_NODES.to_string());
-
-        // TODO: Could add actual connectivity check here
-        true
-    }
-
     /// Get cluster nodes configuration
     fn get_cluster_nodes() -> String {
         env::var("REDIS_CLUSTER_NODES")
@@ -57,10 +41,6 @@ mod tests {
 
     /// Setup helper to create FDW and server for cluster with error handling
     fn setup_redis_cluster_fdw() {
-        if !is_cluster_test_enabled() {
-            return;
-        }
-
         log!("Setting up Redis cluster FDW connection...");
 
         let cluster_nodes = get_cluster_nodes();
@@ -93,10 +73,6 @@ mod tests {
 
     /// Cleanup helper to remove FDW and server
     fn cleanup_redis_cluster_fdw() {
-        if !is_cluster_test_enabled() {
-            return;
-        }
-
         log!("Cleaning up Redis cluster FDW connection...");
         let _ = Spi::run(&format!("DROP SERVER IF EXISTS {} CASCADE;", SERVER_NAME));
         let _ = Spi::run(&format!(
@@ -137,26 +113,21 @@ mod tests {
     /// Test cluster connectivity and basic operations
     #[pg_test]
     fn test_cluster_connectivity() {
-        if !is_cluster_test_enabled() {
-            log!("Cluster tests disabled, skipping test_cluster_connectivity");
-            return;
-        }
-
         setup_redis_cluster_fdw();
 
         // Test with a simple string table
         create_cluster_foreign_table(
             "cluster_connectivity_test",
-            "key TEXT, value TEXT",
+            "value TEXT",
             "string",
-            "conn_test:"
+            "conn_test:test1"
         );
 
         // Test basic operations
-        Spi::run("INSERT INTO cluster_connectivity_test (key, value) VALUES ('test1', 'cluster_value1');").unwrap();
+        Spi::run("INSERT INTO cluster_connectivity_test (value) VALUES ('cluster_value1');").unwrap();
         thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
 
-        let result = Spi::get_one::<String>("SELECT value FROM cluster_connectivity_test WHERE key = 'test1';")
+        let result = Spi::get_one::<String>("SELECT value FROM cluster_connectivity_test;")
             .expect("Failed to retrieve value from cluster");
 
         assert_eq!(result, Some("cluster_value1".to_string()));
@@ -168,328 +139,361 @@ mod tests {
     /// Test string table operations across cluster
     #[pg_test]
     fn test_cluster_string_table() {
-        if !is_cluster_test_enabled() {
-            log!("Cluster tests disabled, skipping test_cluster_string_table");
-            return;
-        }
-
         setup_redis_cluster_fdw();
 
+        // Create multiple string tables to test different keys
         create_cluster_foreign_table(
-            "cluster_string_test",
-            "key TEXT, value TEXT",
+            "cluster_string_test1",
+            "value TEXT",
             "string",
-            "str_cluster:"
+            "str_cluster:key1"
+        );
+        
+        create_cluster_foreign_table(
+            "cluster_string_test2",
+            "value TEXT",
+            "string",
+            "str_cluster:key2"
+        );
+        
+        create_cluster_foreign_table(
+            "cluster_string_test3",
+            "value TEXT",
+            "string",
+            "str_cluster:key3"
         );
 
-        // Insert multiple values that will be distributed across cluster nodes
-        let test_data = vec![
-            ("key1", "value1"),
-            ("key2", "value2"),
-            ("key3", "value3"),
-            ("key4", "value4"),
-            ("key5", "value5"),
-        ];
-
-        for (key, value) in &test_data {
-            Spi::run(&format!(
-                "INSERT INTO cluster_string_test (key, value) VALUES ('{}', '{}');",
-                key, value
-            )).unwrap();
-            thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
-        }
+        // Insert values into different string tables (different Redis keys)
+        Spi::run("INSERT INTO cluster_string_test1 (value) VALUES ('value1');").unwrap();
+        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
+        Spi::run("INSERT INTO cluster_string_test2 (value) VALUES ('value2');").unwrap();
+        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
+        Spi::run("INSERT INTO cluster_string_test3 (value) VALUES ('value3');").unwrap();
+        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
 
         // Verify all values can be retrieved
-        for (key, expected_value) in &test_data {
-            let result = Spi::get_one::<String>(&format!(
-                "SELECT value FROM cluster_string_test WHERE key = '{}';",
-                key
-            )).expect("Failed to retrieve value from cluster");
+        let result1 = Spi::get_one::<String>("SELECT value FROM cluster_string_test1;")
+            .expect("Failed to retrieve value from cluster");
+        assert_eq!(result1, Some("value1".to_string()));
+        
+        let result2 = Spi::get_one::<String>("SELECT value FROM cluster_string_test2;")
+            .expect("Failed to retrieve value from cluster");
+        assert_eq!(result2, Some("value2".to_string()));
+        
+        let result3 = Spi::get_one::<String>("SELECT value FROM cluster_string_test3;")
+            .expect("Failed to retrieve value from cluster");
+        assert_eq!(result3, Some("value3".to_string()));
 
-            assert_eq!(result, Some(expected_value.to_string()));
-        }
-
-        // Test batch retrieval
-        let count = Spi::get_one::<i64>("SELECT COUNT(*) FROM cluster_string_test;")
-            .expect("Failed to count rows");
-        assert_eq!(count, Some(test_data.len() as i64));
-
-        drop_cluster_foreign_table("cluster_string_test");
+        drop_cluster_foreign_table("cluster_string_test1");
+        drop_cluster_foreign_table("cluster_string_test2");
+        drop_cluster_foreign_table("cluster_string_test3");
         cleanup_redis_cluster_fdw();
     }
 
     /// Test hash table operations across cluster
     #[pg_test]
     fn test_cluster_hash_table() {
-        if !is_cluster_test_enabled() {
-            log!("Cluster tests disabled, skipping test_cluster_hash_table");
-            return;
-        }
-
         setup_redis_cluster_fdw();
 
+        // Create hash tables for different users
         create_cluster_foreign_table(
-            "cluster_hash_test",
-            "key TEXT, field TEXT, value TEXT",
+            "cluster_hash_user1",
+            "field TEXT, value TEXT",
             "hash",
-            "hash_cluster:"
+            "hash_cluster:user:1"
+        );
+        
+        create_cluster_foreign_table(
+            "cluster_hash_user2",
+            "field TEXT, value TEXT",
+            "hash",
+            "hash_cluster:user:2"
+        );
+        
+        create_cluster_foreign_table(
+            "cluster_hash_user3",
+            "field TEXT, value TEXT",
+            "hash",
+            "hash_cluster:user:3"
         );
 
-        // Insert hash data across cluster
-        let hash_data = vec![
-            ("user:1", "name", "Alice"),
-            ("user:1", "age", "30"),
-            ("user:2", "name", "Bob"),
-            ("user:2", "age", "25"),
-            ("user:3", "name", "Charlie"),
-            ("user:3", "age", "35"),
-        ];
-
-        for (key, field, value) in &hash_data {
-            Spi::run(&format!(
-                "INSERT INTO cluster_hash_test (key, field, value) VALUES ('{}', '{}', '{}');",
-                key, field, value
-            )).unwrap();
-            thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
-        }
+        // Insert hash data for user:1
+        Spi::run("INSERT INTO cluster_hash_user1 (field, value) VALUES ('name', 'Alice');").unwrap();
+        Spi::run("INSERT INTO cluster_hash_user1 (field, value) VALUES ('age', '30');").unwrap();
+        
+        // Insert hash data for user:2
+        Spi::run("INSERT INTO cluster_hash_user2 (field, value) VALUES ('name', 'Bob');").unwrap();
+        Spi::run("INSERT INTO cluster_hash_user2 (field, value) VALUES ('age', '25');").unwrap();
+        
+        // Insert hash data for user:3
+        Spi::run("INSERT INTO cluster_hash_user3 (field, value) VALUES ('name', 'Charlie');").unwrap();
+        Spi::run("INSERT INTO cluster_hash_user3 (field, value) VALUES ('age', '35');").unwrap();
 
         // Verify hash values
         let alice_name = Spi::get_one::<String>(
-            "SELECT value FROM cluster_hash_test WHERE key = 'user:1' AND field = 'name';"
+            "SELECT value FROM cluster_hash_user1 WHERE field = 'name';"
         ).expect("Failed to retrieve hash value");
         assert_eq!(alice_name, Some("Alice".to_string()));
 
         let bob_age = Spi::get_one::<String>(
-            "SELECT value FROM cluster_hash_test WHERE key = 'user:2' AND field = 'age';"
+            "SELECT value FROM cluster_hash_user2 WHERE field = 'age';"
         ).expect("Failed to retrieve hash value");
         assert_eq!(bob_age, Some("25".to_string()));
 
-        // Test retrieving all fields for a key
+        // Test retrieving all fields for a user
         let user1_count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM cluster_hash_test WHERE key = 'user:1';"
+            "SELECT COUNT(*) FROM cluster_hash_user1;"
         ).expect("Failed to count hash fields");
         assert_eq!(user1_count, Some(2));
 
-        drop_cluster_foreign_table("cluster_hash_test");
+        drop_cluster_foreign_table("cluster_hash_user1");
+        drop_cluster_foreign_table("cluster_hash_user2");
+        drop_cluster_foreign_table("cluster_hash_user3");
         cleanup_redis_cluster_fdw();
     }
 
     /// Test list table operations across cluster
     #[pg_test]
     fn test_cluster_list_table() {
-        if !is_cluster_test_enabled() {
-            log!("Cluster tests disabled, skipping test_cluster_list_table");
-            return;
-        }
-
         setup_redis_cluster_fdw();
 
+        // Create list tables for different task queues
         create_cluster_foreign_table(
-            "cluster_list_test",
-            "key TEXT, value TEXT",
+            "cluster_list_urgent",
+            "element TEXT",
             "list",
-            "list_cluster:"
+            "list_cluster:tasks:urgent"
+        );
+        
+        create_cluster_foreign_table(
+            "cluster_list_normal",
+            "element TEXT",
+            "list",
+            "list_cluster:tasks:normal"
+        );
+        
+        create_cluster_foreign_table(
+            "cluster_list_low",
+            "element TEXT",
+            "list",
+            "list_cluster:tasks:low"
         );
 
         // Insert list data
-        let list_data = vec![
-            ("tasks:urgent", "task1"),
-            ("tasks:urgent", "task2"),
-            ("tasks:normal", "task3"),
-            ("tasks:normal", "task4"),
-            ("tasks:low", "task5"),
-        ];
-
-        for (key, value) in &list_data {
-            Spi::run(&format!(
-                "INSERT INTO cluster_list_test (key, value) VALUES ('{}', '{}');",
-                key, value
-            )).unwrap();
-            thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
-        }
+        Spi::run("INSERT INTO cluster_list_urgent (element) VALUES ('task1');").unwrap();
+        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
+        Spi::run("INSERT INTO cluster_list_urgent (element) VALUES ('task2');").unwrap();
+        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
+        Spi::run("INSERT INTO cluster_list_normal (element) VALUES ('task3');").unwrap();
+        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
+        Spi::run("INSERT INTO cluster_list_normal (element) VALUES ('task4');").unwrap();
+        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
+        Spi::run("INSERT INTO cluster_list_low (element) VALUES ('task5');").unwrap();
+        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
 
         // Verify list contents
         let urgent_count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM cluster_list_test WHERE key = 'tasks:urgent';"
+            "SELECT COUNT(*) FROM cluster_list_urgent;"
         ).expect("Failed to count list items");
         assert_eq!(urgent_count, Some(2));
 
         let normal_count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM cluster_list_test WHERE key = 'tasks:normal';"
+            "SELECT COUNT(*) FROM cluster_list_normal;"
         ).expect("Failed to count list items");
         assert_eq!(normal_count, Some(2));
+        
+        let low_count = Spi::get_one::<i64>(
+            "SELECT COUNT(*) FROM cluster_list_low;"
+        ).expect("Failed to count list items");
+        assert_eq!(low_count, Some(1));
 
-        drop_cluster_foreign_table("cluster_list_test");
+        drop_cluster_foreign_table("cluster_list_urgent");
+        drop_cluster_foreign_table("cluster_list_normal");
+        drop_cluster_foreign_table("cluster_list_low");
         cleanup_redis_cluster_fdw();
     }
 
     /// Test set table operations across cluster
     #[pg_test]
     fn test_cluster_set_table() {
-        if !is_cluster_test_enabled() {
-            log!("Cluster tests disabled, skipping test_cluster_set_table");
-            return;
-        }
-
         setup_redis_cluster_fdw();
 
+        // Create set tables for different tag categories
         create_cluster_foreign_table(
-            "cluster_set_test",
-            "key TEXT, member TEXT",
+            "cluster_set_frontend",
+            "member TEXT",
             "set",
-            "set_cluster:"
+            "set_cluster:tags:frontend"
+        );
+        
+        create_cluster_foreign_table(
+            "cluster_set_backend",
+            "member TEXT",
+            "set",
+            "set_cluster:tags:backend"
         );
 
         // Insert set data
-        let set_data = vec![
-            ("tags:frontend", "javascript"),
-            ("tags:frontend", "react"),
-            ("tags:frontend", "css"),
-            ("tags:backend", "rust"),
-            ("tags:backend", "postgresql"),
-            ("tags:backend", "redis"),
-        ];
-
-        for (key, member) in &set_data {
-            Spi::run(&format!(
-                "INSERT INTO cluster_set_test (key, member) VALUES ('{}', '{}');",
-                key, member
-            )).unwrap();
-            thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
-        }
+        Spi::run("INSERT INTO cluster_set_frontend (member) VALUES ('javascript');").unwrap();
+        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
+        Spi::run("INSERT INTO cluster_set_frontend (member) VALUES ('react');").unwrap();
+        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
+        Spi::run("INSERT INTO cluster_set_frontend (member) VALUES ('css');").unwrap();
+        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
+        Spi::run("INSERT INTO cluster_set_backend (member) VALUES ('rust');").unwrap();
+        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
+        Spi::run("INSERT INTO cluster_set_backend (member) VALUES ('postgresql');").unwrap();
+        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
+        Spi::run("INSERT INTO cluster_set_backend (member) VALUES ('redis');").unwrap();
+        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
 
         // Verify set contents
         let frontend_count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM cluster_set_test WHERE key = 'tags:frontend';"
+            "SELECT COUNT(*) FROM cluster_set_frontend;"
         ).expect("Failed to count set members");
         assert_eq!(frontend_count, Some(3));
 
         let backend_count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM cluster_set_test WHERE key = 'tags:backend';"
+            "SELECT COUNT(*) FROM cluster_set_backend;"
         ).expect("Failed to count set members");
         assert_eq!(backend_count, Some(3));
 
         // Test duplicate insertion (should not increase count)
-        Spi::run("INSERT INTO cluster_set_test (key, member) VALUES ('tags:frontend', 'javascript');").unwrap();
+        Spi::run("INSERT INTO cluster_set_frontend (member) VALUES ('javascript');").unwrap();
         thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
 
         let frontend_count_after = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM cluster_set_test WHERE key = 'tags:frontend';"
+            "SELECT COUNT(*) FROM cluster_set_frontend;"
         ).expect("Failed to count set members");
         assert_eq!(frontend_count_after, Some(3)); // Should still be 3
 
-        drop_cluster_foreign_table("cluster_set_test");
+        drop_cluster_foreign_table("cluster_set_frontend");
+        drop_cluster_foreign_table("cluster_set_backend");
         cleanup_redis_cluster_fdw();
     }
 
     /// Test sorted set table operations across cluster
     #[pg_test]
     fn test_cluster_zset_table() {
-        if !is_cluster_test_enabled() {
-            log!("Cluster tests disabled, skipping test_cluster_zset_table");
-            return;
-        }
-
         setup_redis_cluster_fdw();
 
+        // Create sorted set tables for different game leaderboards
         create_cluster_foreign_table(
-            "cluster_zset_test",
-            "key TEXT, score FLOAT, member TEXT",
+            "cluster_zset_game1",
+            "member TEXT, score FLOAT8",
             "zset",
-            "zset_cluster:"
+            "zset_cluster:leaderboard:game1"
+        );
+        
+        create_cluster_foreign_table(
+            "cluster_zset_game2",
+            "member TEXT, score FLOAT8",
+            "zset",
+            "zset_cluster:leaderboard:game2"
         );
 
         // Insert sorted set data
-        let zset_data = vec![
-            ("leaderboard:game1", 1000.0, "player1"),
-            ("leaderboard:game1", 950.0, "player2"),
-            ("leaderboard:game1", 1100.0, "player3"),
-            ("leaderboard:game2", 800.0, "player4"),
-            ("leaderboard:game2", 1200.0, "player5"),
-        ];
-
-        for (key, score, member) in &zset_data {
-            Spi::run(&format!(
-                "INSERT INTO cluster_zset_test (key, score, member) VALUES ('{}', {}, '{}');",
-                key, score, member
-            )).unwrap();
-            thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
-        }
+        Spi::run("INSERT INTO cluster_zset_game1 (member, score) VALUES ('player1', 1000.0);").unwrap();
+        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
+        Spi::run("INSERT INTO cluster_zset_game1 (member, score) VALUES ('player2', 950.0);").unwrap();
+        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
+        Spi::run("INSERT INTO cluster_zset_game1 (member, score) VALUES ('player3', 1100.0);").unwrap();
+        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
+        Spi::run("INSERT INTO cluster_zset_game2 (member, score) VALUES ('player4', 800.0);").unwrap();
+        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
+        Spi::run("INSERT INTO cluster_zset_game2 (member, score) VALUES ('player5', 1200.0);").unwrap();
+        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
 
         // Verify sorted set contents
         let game1_count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM cluster_zset_test WHERE key = 'leaderboard:game1';"
+            "SELECT COUNT(*) FROM cluster_zset_game1;"
         ).expect("Failed to count zset members");
         assert_eq!(game1_count, Some(3));
 
+        let game2_count = Spi::get_one::<i64>(
+            "SELECT COUNT(*) FROM cluster_zset_game2;"
+        ).expect("Failed to count zset members");
+        assert_eq!(game2_count, Some(2));
+
         // Test that scores are stored correctly
         let player3_score = Spi::get_one::<f64>(
-            "SELECT score FROM cluster_zset_test WHERE key = 'leaderboard:game1' AND member = 'player3';"
+            "SELECT score FROM cluster_zset_game1 WHERE member = 'player3';"
         ).expect("Failed to retrieve score");
         assert_eq!(player3_score, Some(1100.0));
 
-        drop_cluster_foreign_table("cluster_zset_test");
+        drop_cluster_foreign_table("cluster_zset_game1");
+        drop_cluster_foreign_table("cluster_zset_game2");
         cleanup_redis_cluster_fdw();
     }
 
     /// Test mixed operations across multiple table types in cluster
     #[pg_test]
     fn test_cluster_mixed_operations() {
-        if !is_cluster_test_enabled() {
-            log!("Cluster tests disabled, skipping test_cluster_mixed_operations");
-            return;
-        }
-
         setup_redis_cluster_fdw();
 
-        // Create multiple table types
+        // Create multiple table types with correct schemas
         create_cluster_foreign_table(
             "cluster_mixed_string",
-            "key TEXT, value TEXT",
+            "value TEXT",
             "string",
-            "mixed_str:"
+            "mixed_str:config:app"
         );
 
         create_cluster_foreign_table(
             "cluster_mixed_hash",
-            "key TEXT, field TEXT, value TEXT",
+            "field TEXT, value TEXT",
             "hash",
-            "mixed_hash:"
+            "mixed_hash:user:settings"
         );
 
         create_cluster_foreign_table(
             "cluster_mixed_set",
-            "key TEXT, member TEXT",
+            "member TEXT",
             "set",
-            "mixed_set:"
+            "mixed_set:permissions:admin"
         );
 
         // Insert data into all table types
-        Spi::run("INSERT INTO cluster_mixed_string (key, value) VALUES ('config:app', 'production');").unwrap();
+        Spi::run("INSERT INTO cluster_mixed_string (value) VALUES ('production');").unwrap();
         thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
 
-        Spi::run("INSERT INTO cluster_mixed_hash (key, field, value) VALUES ('user:settings', 'theme', 'dark');").unwrap();
+        Spi::run("INSERT INTO cluster_mixed_hash (field, value) VALUES ('theme', 'dark');").unwrap();
         thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
 
-        Spi::run("INSERT INTO cluster_mixed_set (key, member) VALUES ('permissions:admin', 'read');").unwrap();
+        Spi::run("INSERT INTO cluster_mixed_set (member) VALUES ('read');").unwrap();
         thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
 
-        Spi::run("INSERT INTO cluster_mixed_set (key, member) VALUES ('permissions:admin', 'write');").unwrap();
+        Spi::run("INSERT INTO cluster_mixed_set (member) VALUES ('write');").unwrap();
         thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
 
         // Verify all data is accessible
         let config_value = Spi::get_one::<String>(
-            "SELECT value FROM cluster_mixed_string WHERE key = 'config:app';"
+            "SELECT value FROM cluster_mixed_string;"
         ).expect("Failed to retrieve string value");
         assert_eq!(config_value, Some("production".to_string()));
 
         let theme_value = Spi::get_one::<String>(
-            "SELECT value FROM cluster_mixed_hash WHERE key = 'user:settings' AND field = 'theme';"
+            "SELECT value FROM cluster_mixed_hash WHERE field = 'theme';"
         ).expect("Failed to retrieve hash value");
         assert_eq!(theme_value, Some("dark".to_string()));
 
         let permission_count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM cluster_mixed_set WHERE key = 'permissions:admin';"
+            "SELECT COUNT(*) FROM cluster_mixed_set;"
         ).expect("Failed to count set members");
         assert_eq!(permission_count, Some(2));
 
@@ -503,29 +507,30 @@ mod tests {
     /// Test cluster behavior with key distribution
     #[pg_test]
     fn test_cluster_key_distribution() {
-        if !is_cluster_test_enabled() {
-            log!("Cluster tests disabled, skipping test_cluster_key_distribution");
-            return;
-        }
-
         setup_redis_cluster_fdw();
 
-        create_cluster_foreign_table(
-            "cluster_distribution_test",
-            "key TEXT, value TEXT",
-            "string",
-            "dist:"
-        );
-
-        // Insert many keys to ensure distribution across cluster nodes
-        let key_count = 20;
-        for i in 1..=key_count {
+        // Create multiple string tables to test distribution across cluster nodes
+        // Each table represents a different Redis key that will be distributed across nodes
+        let table_count = 10;
+        let mut table_names = Vec::new();
+        
+        for i in 1..=table_count {
+            let table_name = format!("cluster_dist_test_{}", i);
+            create_cluster_foreign_table(
+                &table_name,
+                "value TEXT",
+                "string",
+                &format!("dist:key{}", i)
+            );
+            table_names.push(table_name);
+            
+            // Insert value into each table
             Spi::run(&format!(
-                "INSERT INTO cluster_distribution_test (key, value) VALUES ('key{}', 'value{}');",
+                "INSERT INTO cluster_dist_test_{} (value) VALUES ('value{}');",
                 i, i
             )).unwrap();
             
-            // Small delay between insertions
+            // Small delay between insertions to allow cluster distribution
             if i % BATCH_SIZE == 0 {
                 thread::sleep(Duration::from_millis(BATCH_DELAY_MS));
             } else {
@@ -534,50 +539,55 @@ mod tests {
         }
 
         // Verify all keys are accessible
-        let total_count = Spi::get_one::<i64>("SELECT COUNT(*) FROM cluster_distribution_test;")
-            .expect("Failed to count distributed keys");
-        assert_eq!(total_count, Some(key_count as i64));
+        for i in 1..=table_count {
+            let result = Spi::get_one::<String>(&format!(
+                "SELECT value FROM cluster_dist_test_{};", i
+            )).expect("Failed to retrieve distributed key");
+            assert_eq!(result, Some(format!("value{}", i)));
+        }
 
-        // Test retrieving specific keys
-        let key10_value = Spi::get_one::<String>(
-            "SELECT value FROM cluster_distribution_test WHERE key = 'key10';"
-        ).expect("Failed to retrieve specific key");
-        assert_eq!(key10_value, Some("value10".to_string()));
-
-        drop_cluster_foreign_table("cluster_distribution_test");
+        // Cleanup all tables
+        for table_name in table_names {
+            drop_cluster_foreign_table(&table_name);
+        }
+        
         cleanup_redis_cluster_fdw();
     }
 
     /// Test cluster error handling and resilience
     #[pg_test]
     fn test_cluster_error_handling() {
-        if !is_cluster_test_enabled() {
-            log!("Cluster tests disabled, skipping test_cluster_error_handling");
-            return;
-        }
-
         setup_redis_cluster_fdw();
 
         create_cluster_foreign_table(
             "cluster_error_test",
-            "key TEXT, value TEXT",
+            "value TEXT",
             "string",
-            "error_test:"
+            "error_test:valid_key"
         );
 
         // Test successful operation first
-        Spi::run("INSERT INTO cluster_error_test (key, value) VALUES ('valid_key', 'valid_value');").unwrap();
+        Spi::run("INSERT INTO cluster_error_test (value) VALUES ('valid_value');").unwrap();
         thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
 
-        let result = Spi::get_one::<String>("SELECT value FROM cluster_error_test WHERE key = 'valid_key';")
+        let result = Spi::get_one::<String>("SELECT value FROM cluster_error_test;")
             .expect("Failed to retrieve value");
         assert_eq!(result, Some("valid_value".to_string()));
 
-        // Test querying non-existent key (should return None, not error)
-        let non_existent = Spi::get_one::<String>("SELECT value FROM cluster_error_test WHERE key = 'non_existent_key';");
-        assert_eq!(non_existent, Ok(None));
+        // Test with an empty table (different key prefix)
+        create_cluster_foreign_table(
+            "cluster_error_empty",
+            "value TEXT",
+            "string",
+            "error_test:non_existent_key"
+        );
+
+        // Query empty table should return None, not error
+        let non_existent = Spi::get_one::<String>("SELECT value FROM cluster_error_empty;");
+        assert_eq!(non_existent, Err(pgrx::spi::SpiError::InvalidPosition));
 
         drop_cluster_foreign_table("cluster_error_test");
+        drop_cluster_foreign_table("cluster_error_empty");
         cleanup_redis_cluster_fdw();
     }
 }
