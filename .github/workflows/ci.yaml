@@ -80,10 +80,6 @@ jobs:
           sudo chmod 777 /usr/share/postgresql/${{ env.PG_VER }} -R
           sudo chmod 777 /usr/lib/postgresql/${{ env.PG_VER }} -R
 
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3
-        timeout-minutes: 5
-       
       - name: Run Tests for PostgreSQL ${{ env.PG_VER }}
         env:
           REDIS_CLUSTER_TEST_ENABLED: "true"
@@ -95,6 +91,10 @@ jobs:
       - name: Package for PostgreSQL ${{ env.PG_VER }}
         run: cargo pgrx package --pg-config=${{ env.PG_BIN }}/pg_config
 
+      - name: Setup tmate session
+        if: ${{ failure() }}
+        uses: mxschmitt/action-tmate@v3
+        
       - name: Cleanup Redis Cluster
         if: always()  # Run cleanup even if tests fail
         run: |
