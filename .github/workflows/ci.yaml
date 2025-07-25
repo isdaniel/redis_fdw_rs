@@ -50,9 +50,6 @@ jobs:
           chmod +x ./scripts/start-redis-cluster.sh
           ./scripts/start-redis-cluster.sh
 
-      # - name: Setup tmate session
-      #   uses: mxschmitt/action-tmate@v3
-
       - name: Ensure Redis Cluster is reachable before tests
         run: |
           for i in {1..10}; do
@@ -82,7 +79,10 @@ jobs:
         run: |
           sudo chmod 777 /usr/share/postgresql/${{ env.PG_VER }} -R
           sudo chmod 777 /usr/lib/postgresql/${{ env.PG_VER }} -R
-          
+
+      - name: Setup tmate session
+        uses: mxschmitt/action-tmate@v3
+       
       - name: Run Tests for PostgreSQL ${{ env.PG_VER }}
         env:
           REDIS_CLUSTER_TEST_ENABLED: "true"
@@ -104,9 +104,6 @@ jobs:
             echo "=== Final Debug Information (Test Failure) ==="
             ./scripts/debug_cluster.sh quick || true
           fi
-          
-          # Cleanup containers
-          docker-compose -f docker-compose.cluster-test.yml down -v --remove-orphans || true
           
           # Force remove any remaining containers
           docker ps -a --filter "name=redis-cluster-test" --format "{{.Names}}" | xargs -r docker rm -f || true
