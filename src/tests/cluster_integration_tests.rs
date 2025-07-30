@@ -281,6 +281,12 @@ mod tests {
             "list_cluster:tasks:low"
         );
 
+        Spi::run("
+        DELETE FROM cluster_list_urgent;
+        DELETE FROM cluster_list_normal;
+        DELETE FROM cluster_list_low;
+        ").unwrap();
+
         // Insert list data
         Spi::run("INSERT INTO cluster_list_urgent (element) VALUES ('task1');").unwrap();
         thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));

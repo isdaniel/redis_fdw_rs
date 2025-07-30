@@ -368,44 +368,6 @@ mod tests {
         Spi::run("DROP FOREIGN DATA WRAPPER redis_wrapper CASCADE;").unwrap();
     }
 
-    // #[pg_test]
-    // fn test_update_and_delete_operations() {
-    //     // Test that UPDATE and DELETE don't crash (even though they're not implemented)
-    //     Spi::run("CREATE FOREIGN DATA WRAPPER redis_wrapper HANDLER redis_fdw_handler;").unwrap();
-    //     Spi::run("
-    //         CREATE SERVER redis_server
-    //         FOREIGN DATA WRAPPER redis_wrapper
-    //         OPTIONS (host_port '127.0.0.1:8899');
-    //     ").unwrap();
-
-    //     Spi::run("
-    //         CREATE FOREIGN TABLE test_update_delete (key text, value text)
-    //         SERVER redis_server
-    //         OPTIONS (
-    //             database '0',
-    //             table_type 'hash',
-    //             table_key_prefix 'test:'
-    //         );
-    //     ").unwrap();
-
-    //     // These should not crash, even though they don't actually do anything
-    //     let update_result = std::panic::catch_unwind(|| {
-    //         Spi::run("UPDATE test_update_delete SET value = 'new_value' WHERE key = 'some_key';").unwrap();
-    //     });
-
-    //     let delete_result = std::panic::catch_unwind(|| {
-    //         Spi::run("DELETE FROM test_update_delete WHERE key = 'some_key';").unwrap();
-    //     });
-
-    //     assert!(update_result.is_ok());
-    //     assert!(delete_result.is_ok());
-
-    //     // Clean up
-    //     Spi::run("DROP FOREIGN TABLE test_update_delete;").unwrap();
-    //     Spi::run("DROP SERVER redis_server CASCADE;").unwrap();
-    //     Spi::run("DROP FOREIGN DATA WRAPPER redis_wrapper CASCADE;").unwrap();
-    // }
-
     /// Comprehensive smoke test - Basic FDW functionality without Redis
     #[pg_test]
     fn test_smoke_fdw_basic_functionality() {

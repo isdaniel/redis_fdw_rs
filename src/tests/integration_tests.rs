@@ -400,52 +400,51 @@ mod tests {
     // STRING TABLE INTEGRATION TESTS
     // ================================================
 
-    // todo fix string bug.
-    // #[pg_test]
-    // fn test_integration_string_table_basic_crud() {
-    //     log!("=== Testing String Table Basic CRUD Operations ===");
+    #[pg_test]
+    fn test_integration_string_table_basic_crud() {
+        log!("=== Testing String Table Basic CRUD Operations ===");
 
-    //     setup_redis_fdw();
+        setup_redis_fdw();
 
-    //     let table_name = "test_string_crud";
-    //     let key_prefix = "integration:string:crud";
+        let table_name = "test_string_crud";
+        let key_prefix = "integration:string:crud";
 
-    //     create_foreign_table(
-    //         table_name,
-    //         "value text",
-    //         "string",
-    //         key_prefix,
-    //     );
+        create_foreign_table(
+            table_name,
+            "value text",
+            "string",
+            key_prefix,
+        );
 
-    //     // Test INSERT operations with pacing
-    //     log!("Testing INSERT operations...");
-    //     controlled_insert_single(table_name, "Hello Redis FDW");
-    //     controlled_insert_single(table_name, "Another string value");
+        // Test INSERT operations with pacing
+        log!("Testing INSERT operations...");
+        controlled_insert_single(table_name, "Hello Redis FDW");
+        controlled_insert_single(table_name, "Another string value");
 
-    //     // Test SELECT operations
-    //     log!("Testing SELECT operations...");
-    //     let count = controlled_select_count(table_name);
-    //     log!("String table count after INSERT: {:?}", count);
+        // Test SELECT operations
+        log!("Testing SELECT operations...");
+        let count = controlled_select_count(table_name);
+        log!("String table count after INSERT: {:?}", count);
 
-    //     // Test individual record selection
-    //     thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
-    //     let result = Spi::get_one::<String>(&format!("SELECT value FROM {table_name} WHERE value = 'Hello Redis FDW';"));
-    //     assert!(result.is_ok());
-    //     assert_eq!(result.unwrap().unwrap(), "Hello Redis FDW");
+        // Test individual record selection
+        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        let result = Spi::get_one::<String>(&format!("SELECT value FROM {table_name} WHERE value = 'Another string value';"));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().unwrap(), "Another string value");
 
-    //     // Test DELETE operations
-    //     log!("Testing DELETE operations...");
-    //     controlled_delete(table_name, "value = 'Another string value'");
+        // Test DELETE operations
+        log!("Testing DELETE operations...");
+        controlled_delete(table_name, "value = 'Another string value'");
 
-    //     let count_after_delete = controlled_select_count(table_name);
-    //     log!("String table count after DELETE: {:?}", count_after_delete);
+        let count_after_delete = controlled_select_count(table_name);
+        log!("String table count after DELETE: {:?}", count_after_delete);
 
-    //     // Cleanup
-    //     drop_foreign_table(table_name);
-    //     cleanup_redis_fdw();
+        // Cleanup
+        drop_foreign_table(table_name);
+        cleanup_redis_fdw();
 
-    //     log!("=== String Table Basic CRUD Test Completed ===");
-    // }
+        log!("=== String Table Basic CRUD Test Completed ===");
+    }
 
     #[pg_test]
     fn test_integration_string_table_large_data() {
