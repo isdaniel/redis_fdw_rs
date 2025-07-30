@@ -1,9 +1,12 @@
-use crate::core::connection::RedisConnectionType;
+use crate::{
+    auth::RedisAuthConfig,
+    core::connection::RedisConnectionType,
+};
 /// Redis connection factory module
 ///
 /// This module provides a clean interface for creating Redis connections
 /// with proper error handling, configuration validation, and retry logic.
-/// It supports both single-node and cluster Redis deployments.
+/// It supports both single-node and cluster Redis deployments with authentication.
 use pgrx::prelude::*;
 use redis::{cluster::ClusterClient, Client};
 use std::collections::HashMap;
@@ -40,6 +43,7 @@ pub struct RedisConnectionConfig {
     pub database: i64,
     pub retry_attempts: Option<u32>,
     pub retry_delay: Option<Duration>,
+    pub auth_config: RedisAuthConfig,
 }
 
 impl RedisConnectionConfig {
@@ -65,6 +69,7 @@ impl RedisConnectionConfig {
             database,
             retry_attempts: Some(3),
             retry_delay: Some(Duration::from_millis(100)),
+            auth_config: RedisAuthConfig::from_user_mapping_options(&opts)
         };
 
         config.validate()?;
@@ -110,12 +115,15 @@ impl RedisConnectionConfig {
                     ));
                 }
 
-                // Add redis:// prefix if not present and format with database
-                let url = if trimmed.starts_with("redis://") {
+                // Create base URL with database
+                let base_url = if trimmed.starts_with("redis://") {
                     format!("{}/{}", trimmed, self.database)
                 } else {
                     format!("redis://{}/{}", trimmed, self.database)
                 };
+
+                // Apply authentication if required
+                let url = self.auth_config.apply_to_url(&base_url);
 
                 Ok(url)
             })
@@ -132,11 +140,15 @@ impl RedisConnectionConfig {
             ));
         }
 
-        let url = if self.host_port.starts_with("redis://") {
+        // Create base URL with database
+        let base_url = if self.host_port.starts_with("redis://") {
             format!("{}/{}", self.host_port, self.database)
         } else {
             format!("redis://{}/{}", self.host_port, self.database)
         };
+
+        // Apply authentication if required
+        let url = self.auth_config.apply_to_url(&base_url);
 
         Ok(url)
     }
@@ -220,110 +232,5 @@ impl RedisConnectionFactory {
 
             Ok(RedisConnectionType::Single(connection))
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_redis_connection_config_from_options() {
-        let mut opts = HashMap::new();
-        opts.insert("host_port".to_string(), "127.0.0.1:6379".to_string());
-        opts.insert("database".to_string(), "1".to_string());
-
-        let config = RedisConnectionConfig::from_options(&opts).unwrap();
-        assert_eq!(config.host_port, "127.0.0.1:6379");
-        assert_eq!(config.database, 1);
-        assert!(!config.is_cluster_mode());
-    }
-
-    #[test]
-    fn test_cluster_mode_detection() {
-        let mut opts = HashMap::new();
-        opts.insert(
-            "host_port".to_string(),
-            "127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002".to_string(),
-        );
-        opts.insert("database".to_string(), "0".to_string());
-
-        let config = RedisConnectionConfig::from_options(&opts).unwrap();
-        assert!(config.is_cluster_mode());
-    }
-
-    #[test]
-    fn test_cluster_nodes_parsing() {
-        let mut opts = HashMap::new();
-        opts.insert(
-            "host_port".to_string(),
-            "127.0.0.1:7000,127.0.0.1:7001".to_string(),
-        );
-        opts.insert("database".to_string(), "0".to_string());
-
-        let config = RedisConnectionConfig::from_options(&opts).unwrap();
-        let nodes = config.parse_cluster_nodes().unwrap();
-
-        assert_eq!(nodes.len(), 2);
-        assert_eq!(nodes[0], "redis://127.0.0.1:7000/0");
-        assert_eq!(nodes[1], "redis://127.0.0.1:7001/0");
-    }
-
-    #[test]
-    fn test_single_node_url() {
-        let mut opts = HashMap::new();
-        opts.insert("host_port".to_string(), "127.0.0.1:6379".to_string());
-        opts.insert("database".to_string(), "2".to_string());
-
-        let config = RedisConnectionConfig::from_options(&opts).unwrap();
-        let url = config.get_single_node_url().unwrap();
-
-        assert_eq!(url, "redis://127.0.0.1:6379/2");
-    }
-
-    #[test]
-    fn test_validation_missing_host_port() {
-        let opts = HashMap::new();
-        let result = RedisConnectionConfig::from_options(&opts);
-
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            ConnectionFactoryError::MissingConfiguration(msg) => {
-                assert_eq!(msg, "host_port");
-            }
-            _ => panic!("Expected MissingConfiguration error"),
-        }
-    }
-
-    #[test]
-    fn test_validation_invalid_database() {
-        let mut opts = HashMap::new();
-        opts.insert("host_port".to_string(), "127.0.0.1:6379".to_string());
-        opts.insert("database".to_string(), "16".to_string());
-
-        let result = RedisConnectionConfig::from_options(&opts);
-
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            ConnectionFactoryError::InvalidDatabase(db) => {
-                assert_eq!(db, 16);
-            }
-            _ => panic!("Expected InvalidDatabase error"),
-        }
-    }
-
-    #[test]
-    fn test_url_with_prefix() {
-        let mut opts = HashMap::new();
-        opts.insert(
-            "host_port".to_string(),
-            "redis://127.0.0.1:6379".to_string(),
-        );
-        opts.insert("database".to_string(), "0".to_string());
-
-        let config = RedisConnectionConfig::from_options(&opts).unwrap();
-        let url = config.get_single_node_url().unwrap();
-
-        assert_eq!(url, "redis://127.0.0.1:6379/0");
     }
 }

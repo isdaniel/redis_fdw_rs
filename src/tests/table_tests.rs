@@ -483,7 +483,6 @@ mod tests {
         }
 
         // Test with empty filtered data
-        let empty_filtered: Vec<String> = vec![];
         assert_eq!(hash_table.data_len(), 0);
         assert_eq!(list_table.data_len(), 0);
         assert_eq!(set_table.data_len(), 0);

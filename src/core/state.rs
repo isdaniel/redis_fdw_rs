@@ -41,10 +41,9 @@ impl RedisFdwState {
 }
 
 impl RedisFdwState {
-    /// Initialize Redis connection using the connection factory
+    /// Initialize Redis connection using the connection factory with authentication
     /// Returns Result for proper error handling instead of panicking
     pub fn init_redis_connection_from_options(&mut self) -> Result<(), String> {
-        // Create configuration from current options
         let config = RedisConnectionConfig::from_options(&self.opts)
             .map_err(|e| format!("Failed to create Redis configuration: {}", e))?;
 
@@ -52,7 +51,7 @@ impl RedisFdwState {
         match RedisConnectionFactory::create_connection_with_retry(&config) {
             Ok(connection) => {
                 self.redis_connection = Some(connection);
-                log!("Successfully initialized Redis connection");
+                log!("Successfully initialized Redis connection with authentication");
                 Ok(())
             }
             Err(e) => {
