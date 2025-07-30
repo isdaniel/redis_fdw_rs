@@ -8,7 +8,7 @@ A high-performance Redis Foreign Data Wrapper (FDW) for PostgreSQL written in Ru
 - **Redis Cluster support** with automatic failover and sharding across multiple nodes
 - **WHERE clause pushdown optimization** for significantly improved query performance
 - **Redis data types support**: Hash, List, Set, ZSet, and String (with varying levels of implementation)
-- **Supported operations**: SELECT, INSERT, UPDATE, DELETE (with improved error handling)
+- **Supported operations**: SELECT, INSERT, DELETE (UPDATE operations are not supported due to Redis data model differences)
 - **Connection management** and memory optimization
 - **Built with Rust** for memory safety and performance
 - **Unified trait interface** providing consistent behavior across all Redis table types
@@ -96,7 +96,8 @@ HANDLER redis_fdw_handler;
 CREATE SERVER redis_server 
 FOREIGN DATA WRAPPER redis_wrapper
 OPTIONS (
-    host_port '127.0.0.1:8899'
+    host_port '127.0.0.1:8899',
+    password 'your_redis_password'
 );
 ```
 
@@ -109,23 +110,20 @@ Redis FDW supports both single-node and cluster deployments. To connect to a Red
 CREATE SERVER redis_cluster_server 
 FOREIGN DATA WRAPPER redis_wrapper
 OPTIONS (
-    host_port '127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002'
+    host_port '127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002',
+    password 'your_redis_password'
 );
 
 -- You can mix IP addresses and hostnames
 CREATE SERVER redis_cluster_prod 
 FOREIGN DATA WRAPPER redis_wrapper
 OPTIONS (
-    host_port 'redis-node1.example.com:7000,redis-node2.example.com:7001,redis-node3.example.com:7002'
-);
-
--- Minimal cluster setup (only one node needed for discovery)
-CREATE SERVER redis_cluster_minimal 
-FOREIGN DATA WRAPPER redis_wrapper
-OPTIONS (
-    host_port '10.0.0.100:7000'
+    host_port 'redis-node1.example.com:7000,redis-node2.example.com:7001,redis-node3.example.com:7002',
+    password 'your_redis_password'
 );
 ```
+
+* Password is Optional setting.
 
 **Cluster Benefits:**
 - **Automatic failover**: If nodes fail, operations continue on healthy nodes
@@ -149,12 +147,6 @@ INSERT INTO user_sessions VALUES ('user123', 'session_token_abc');
 SELECT * FROM user_sessions WHERE field = 'user123';
 ```
 
-### 4. Create User Mapping (Optional)
-```sql
-CREATE USER MAPPING FOR PUBLIC 
-SERVER redis_server 
-OPTIONS (password 'your_redis_password');
-```
 
 ## Supported Redis Data Types (Usage Examples)
 
@@ -218,7 +210,10 @@ SERVER redis_server OPTIONS (table_type 'zset', table_key_prefix 'leaderboard');
 -- String operations
 INSERT INTO redis_string VALUES ('MyApplicationName');
 SELECT * FROM redis_string;
-UPDATE redis_string SET value = 'UpdatedAppName';
+-- UPDATE is not supported for Redis FDW
+-- To change a value, delete and insert:
+DELETE FROM redis_string WHERE value = 'MyApplicationName';
+INSERT INTO redis_string VALUES ('UpdatedAppName');
 
 -- Hash operations
 INSERT INTO redis_hash VALUES ('name', 'John'), ('age', '30');
@@ -245,11 +240,11 @@ SELECT * FROM redis_zset ORDER BY score DESC;
 ### Table Options
 - `database`: Redis database number (default: 0) - **Optional**
 - `table_type`: Redis data type - **Required**
-  - `'string'` - Partial implemented ✅ (SELECT, INSERT, DELETE; UPDATE not implemented)
-  - `'hash'` - Partial implemented ✅ (SELECT, INSERT, DELETE; UPDATE not implemented)
-  - `'list'` - Partial implemented ✅ (SELECT, INSERT DELETE; UPDATE not implemented)
-  - `'set'` - Partial implemented ✅ (SELECT, INSERT, DELETE; UPDATE not implemented)
-  - `'zset'` - Partial implemented ✅ (SELECT, INSERT, DELETE; UPDATE not implemented)
+  - `'string'` - Partial implementation ✅ (SELECT, INSERT, DELETE; UPDATE not supported)
+  - `'hash'` - Partial implementation ✅ (SELECT, INSERT, DELETE; UPDATE not supported)
+  - `'list'` - Partial implementation ✅ (SELECT, INSERT, DELETE; UPDATE not supported)
+  - `'set'` - Partial implementation ✅ (SELECT, INSERT, DELETE; UPDATE not supported)
+  - `'zset'` - Partial implementation ✅ (SELECT, INSERT, DELETE; UPDATE not supported)
 - `table_key_prefix`: Key prefix for Redis operations - **Required**
 
 ### User Mapping Options
@@ -273,8 +268,10 @@ INSERT INTO app_version VALUES ('1.2.3');
 SELECT 'Database URL: ' || value FROM app_config;
 SELECT 'App Version: ' || value FROM app_version;
 
--- Update configuration
-UPDATE app_config SET value = 'postgresql://newhost:5432/mydb';
+-- Update configuration (Note: Redis FDW does not support UPDATE operations)
+-- To update a string value, you need to DELETE and INSERT:
+DELETE FROM app_config WHERE value = 'postgresql://localhost:5432/mydb';
+INSERT INTO app_config VALUES ('postgresql://newhost:5432/mydb');
 ```
 
 ### Complex Queries
@@ -312,11 +309,11 @@ INSERT INTO redis_list_table VALUES
 
 | Redis Type | SELECT | INSERT | UPDATE | DELETE | Status |
 |------------|--------|--------|--------|--------|--------|
-| Hash       | ✅     | ✅     | 🚧     | ✅     | **Partial** (UPDATE in progress) |
-| List       | ✅     | ✅     | 🚧     | ✅     | **Partial** (UPDATE in progress) |
-| Set        | ✅     | ✅     | 🚧     | ✅     | **Partial** (UPDATE in progress) |
-| ZSet       | ✅     | ✅     | 🚧     | ✅     | **Partial** (UPDATE in progress) |
-| String     | ✅     | ✅     | 🚧     | ✅     | **Partial** (UPDATE in progress) |
+| Hash       | ✅     | ✅     | ❌     | ✅     | **Partial** (UPDATE not supported) |
+| List       | ✅     | ✅     | ❌     | ✅     | **Partial** (UPDATE not supported) |
+| Set        | ✅     | ✅     | ❌     | ✅     | **Partial** (UPDATE not supported) |
+| ZSet       | ✅     | ✅     | ❌     | ✅     | **Partial** (UPDATE not supported) |
+| String     | ✅     | ✅     | ❌     | ✅     | **Partial** (UPDATE not supported) |
 
 ## Recent Changes (v0.3.0)
 
@@ -365,8 +362,6 @@ INSERT INTO redis_list_table VALUES
 
 ## Current Limitations
 
-- **UPDATE Operations**: UPDATE operations are not yet implemented for any Redis table type (returns `unimplemented!` error)
-- **List Operations**: UPDATE and DELETE operations for List type are not yet fully implemented
 - **Transactions**: Redis operations are not transactional with PostgreSQL
 - **Complex WHERE clauses**: Filtering happens at PostgreSQL level, not pushed down to Redis
 - **Large Data Sets**: All data for a table is loaded at scan initialization (not suitable for very large Redis keys)
@@ -461,7 +456,7 @@ All Redis table types implement this unified interface providing:
 - **`load_data()`**: Unified data loading with optional pushdown conditions
 - **`data_len()`**: Length calculation with optional filtered data support
 - **`get_row()`**: Row retrieval with optional filtered data support
-- **`insert()`**, **`delete()`**, **`update()`**: CRUD operations
+- **`insert()`**, **`delete()`**: CRUD operations (UPDATE not supported)
 - **`supports_pushdown()`**: Pushdown capability checking
 
 #### Table Type Implementations
@@ -545,9 +540,9 @@ SELECT EXISTS(SELECT 1 FROM user_roles WHERE member = 'admin');
 
 5. **Unsupported table type**: All Redis table types (`hash`, `list`, `set`, `zset`, `string`) are supported for SELECT and INSERT operations
 
-6. **UPDATE operations failing**: UPDATE operations are not yet implemented and will return an `unimplemented!` error
+5. **UPDATE operations failing**: UPDATE operations are not supported by design and will not work with Redis FDW
 
-7. **DELETE operations failing on Lists**: DELETE operations for List type are not yet fully implemented
+6. **DELETE operations failing on Lists**: DELETE operations for List type are not yet fully implemented
 
 ### Debug Logging
 
@@ -638,7 +633,6 @@ cargo pgrx test pg14
 - ✅ **WHERE clause pushdown optimization** for Hash, Set, and String table types
 
 ### Planned Features
-- 🚧 **UPDATE operations for all Redis table types** - Currently returns `unimplemented!` error
 - 🚧 Complete DELETE operations for List types
 - 🚧 Extended WHERE clause pushdown (ZSet score ranges, LIKE pattern optimization)
 - 🚧 Connection pooling and reuse
@@ -646,6 +640,8 @@ cargo pgrx test pg14
 - 🚧 Streaming support for large data sets
 - 🚧 Advanced Redis operations (SCAN, pattern matching)
 - 🚧 Transaction support and rollback capabilities
+
+**Note**: UPDATE operations are intentionally not supported due to fundamental differences between Redis data models and SQL UPDATE semantics. Redis operations like HSET, SADD, etc. are inherently insert-or-update operations, making traditional SQL UPDATE behavior problematic.
 
 ## Contributing
 

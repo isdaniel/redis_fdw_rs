@@ -2,6 +2,8 @@
 
 This document describes the new object-oriented design for Redis table types in the Redis FDW extension.
 
+> **⚠️ UPDATE Operations Notice**: As of the current version, UPDATE operations are **not supported** in Redis FDW due to fundamental differences between Redis data models and SQL UPDATE semantics. Any references to UPDATE operations in this document are for architectural understanding only.
+
 ## Overview
 
 The new design uses a trait-based approach where each Redis data type is implemented as a separate struct with common operations defined by the `RedisTableOperations` trait.
@@ -17,7 +19,7 @@ pub trait RedisTableOperations {
     fn get_row(&self, index: usize) -> Option<Vec<String>>;
     fn insert(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError>;
     fn delete(&mut self, conn: &mut redis::Connection, key_prefix: &str, data: &[String]) -> Result<(), redis::RedisError>;
-    fn update(&mut self, conn: &mut redis::Connection, key_prefix: &str, old_data: &[String], new_data: &[String]) -> Result<(), redis::RedisError>;
+    // Note: UPDATE operations are not supported due to Redis data model differences
 }
 ```
 

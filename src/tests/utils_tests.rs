@@ -136,8 +136,8 @@ mod tests {
     }
 
     #[pg_test]
-    fn test_update_and_delete_operations() {
-        // Test that UPDATE and DELETE don't crash (even though they're not implemented)
+    fn test_delete_operations() {
+        // Test that DELETE operations work properly
         Spi::run("CREATE FOREIGN DATA WRAPPER redis_wrapper HANDLER redis_fdw_handler;").unwrap();
         Spi::run(
             "
@@ -150,7 +150,7 @@ mod tests {
 
         Spi::run(
             "
-            CREATE FOREIGN TABLE test_update_delete (key text, value text) 
+            CREATE FOREIGN TABLE test_delete (key text, value text) 
             SERVER redis_server
             OPTIONS (
                 database '0',
@@ -161,21 +161,15 @@ mod tests {
         )
         .unwrap();
 
-        // These should not crash, even though they don't actually do anything
-        let update_result = std::panic::catch_unwind(|| {
-            Spi::run("UPDATE test_update_delete SET value = 'new_value' WHERE key = 'some_key';")
-                .unwrap();
-        });
-
+        // DELETE should work without crashing
         let delete_result = std::panic::catch_unwind(|| {
-            Spi::run("DELETE FROM test_update_delete WHERE key = 'some_key';").unwrap();
+            Spi::run("DELETE FROM test_delete WHERE key = 'some_key';").unwrap();
         });
 
-        assert!(update_result.is_ok());
         assert!(delete_result.is_ok());
 
         // Clean up
-        Spi::run("DROP FOREIGN TABLE test_update_delete;").unwrap();
+        Spi::run("DROP FOREIGN TABLE test_delete;").unwrap();
         Spi::run("DROP SERVER redis_server CASCADE;").unwrap();
         Spi::run("DROP FOREIGN DATA WRAPPER redis_wrapper CASCADE;").unwrap();
     }

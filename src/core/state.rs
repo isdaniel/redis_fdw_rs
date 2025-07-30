@@ -181,24 +181,6 @@ impl RedisFdwState {
         }
     }
 
-    /// Update data using the appropriate table type
-    pub fn update_data(
-        &mut self,
-        old_data: &[String],
-        new_data: &[String],
-    ) -> Result<(), redis::RedisError> {
-        if let Some(conn) = self.redis_connection.as_mut() {
-            let conn_like = conn.as_connection_like_mut();
-            self.table_type
-                .update(conn_like, &self.table_key_prefix, old_data, new_data)
-        } else {
-            Err(redis::RedisError::from((
-                redis::ErrorKind::IoError,
-                "Redis connection not initialized",
-            )))
-        }
-    }
-
     /// Get a row at the specified index
     pub fn get_row(&self, index: usize) -> Option<Vec<String>> {
         self.table_type.get_row(index)

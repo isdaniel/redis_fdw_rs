@@ -43,15 +43,6 @@ pub trait RedisTableOperations {
         data: &[String],
     ) -> Result<(), redis::RedisError>;
 
-    /// Update data in Redis
-    fn update(
-        &mut self,
-        conn: &mut dyn redis::ConnectionLike,
-        key_prefix: &str,
-        old_data: &[String],
-        new_data: &[String],
-    ) -> Result<(), redis::RedisError>;
-
     /// Check if a specific condition can be pushed down for this table type
     fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool;
 }

@@ -125,19 +125,6 @@ impl RedisTableOperations for RedisStringTable {
         Ok(())
     }
 
-    fn update(
-        &mut self,
-        conn: &mut dyn redis::ConnectionLike,
-        key_prefix: &str,
-        _old_data: &[String],
-        new_data: &[String],
-    ) -> Result<(), redis::RedisError> {
-        if let Some(value) = new_data.first() {
-            let _: () = redis::cmd("SET").arg(key_prefix).arg(value).query(conn)?;
-        }
-        Ok(())
-    }
-
     fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
         matches!(
             operator,

@@ -238,17 +238,6 @@ impl RedisTableOperations for RedisHashTable {
         Ok(())
     }
 
-    fn update(
-        &mut self,
-        conn: &mut dyn redis::ConnectionLike,
-        key_prefix: &str,
-        _old_data: &[String],
-        new_data: &[String],
-    ) -> Result<(), redis::RedisError> {
-        // For hash update, treat it as insert (HSET overwrites)
-        self.insert(conn, key_prefix, new_data)
-    }
-
     fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
         matches!(
             operator,

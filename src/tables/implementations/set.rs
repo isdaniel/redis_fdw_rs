@@ -175,19 +175,6 @@ impl RedisTableOperations for RedisSetTable {
         Ok(())
     }
 
-    fn update(
-        &mut self,
-        conn: &mut dyn redis::ConnectionLike,
-        key_prefix: &str,
-        old_data: &[String],
-        new_data: &[String],
-    ) -> Result<(), redis::RedisError> {
-        // For sets, update means remove old and add new
-        self.delete(conn, key_prefix, old_data)?;
-        self.insert(conn, key_prefix, new_data)?;
-        Ok(())
-    }
-
     fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
         matches!(
             operator,

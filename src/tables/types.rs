@@ -103,23 +103,6 @@ impl RedisTableType {
         }
     }
 
-    pub fn update(
-        &mut self,
-        conn: &mut dyn redis::ConnectionLike,
-        key_prefix: &str,
-        old_data: &[String],
-        new_data: &[String],
-    ) -> Result<(), redis::RedisError> {
-        match self {
-            RedisTableType::String(table) => table.update(conn, key_prefix, old_data, new_data),
-            RedisTableType::Hash(table) => table.update(conn, key_prefix, old_data, new_data),
-            RedisTableType::List(table) => table.update(conn, key_prefix, old_data, new_data),
-            RedisTableType::Set(table) => table.update(conn, key_prefix, old_data, new_data),
-            RedisTableType::ZSet(table) => table.update(conn, key_prefix, old_data, new_data),
-            RedisTableType::None => Ok(()),
-        }
-    }
-
     /// Check if this table type supports a specific pushdown operator
     pub fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
         match self {

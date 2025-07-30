@@ -38,7 +38,7 @@ pub extern "C" fn redis_fdw_handler() -> FdwRoutine {
         fdw_routine.BeginForeignModify = Some(begin_foreign_modify);
         fdw_routine.ExecForeignInsert = Some(exec_foreign_insert);
         fdw_routine.ExecForeignDelete = Some(exec_foreign_delete);
-        fdw_routine.ExecForeignUpdate = Some(exec_foreign_update);
+        //fdw_routine.ExecForeignUpdate = Some(exec_foreign_update);
         fdw_routine.EndForeignModify = Some(end_foreign_modify);
         //fdw_routine.IsForeignRelUpdatable =
 
@@ -335,18 +335,18 @@ unsafe extern "C-unwind" fn exec_foreign_insert(
     slot
 }
 
-#[pg_guard]
-unsafe extern "C-unwind" fn exec_foreign_update(
-    _estate: *mut pgrx::pg_sys::EState,
-    _rinfo: *mut pgrx::pg_sys::ResultRelInfo,
-    _slot: *mut pgrx::pg_sys::TupleTableSlot,
-    plan_slot: *mut pgrx::pg_sys::TupleTableSlot,
-) -> *mut pgrx::pg_sys::TupleTableSlot {
-    log!("---> exec_foreign_update");
-    let new_row = tuple_table_slot_to_row(plan_slot);
-    log!("New row for update: {:?}", new_row);
-    unimplemented!("Update operations are not yet implemented for Redis FDW");
-}
+// #[pg_guard]
+// unsafe extern "C-unwind" fn exec_foreign_update(
+//     _estate: *mut pgrx::pg_sys::EState,
+//     _rinfo: *mut pgrx::pg_sys::ResultRelInfo,
+//     _slot: *mut pgrx::pg_sys::TupleTableSlot,
+//     plan_slot: *mut pgrx::pg_sys::TupleTableSlot,
+// ) -> *mut pgrx::pg_sys::TupleTableSlot {
+//     log!("---> exec_foreign_update");
+//     let new_row = tuple_table_slot_to_row(plan_slot);
+//     log!("New row for update: {:?}", new_row);
+//     unimplemented!("Update operations are not yet implemented for Redis FDW");
+// }
 
 #[pg_guard]
 unsafe extern "C-unwind" fn exec_foreign_delete(
