@@ -78,7 +78,7 @@ impl RedisStreamTable {
                 row.push(field);
                 row.push(value);
             }
-            data.push(row.join(","));
+            data.push(row.join("\t"));
         }
 
         // Store last stream ID for pagination
