@@ -5,6 +5,7 @@
 pub mod hash;
 pub mod list;
 pub mod set;
+pub mod stream;
 pub mod string;
 pub mod zset;
 
@@ -12,5 +13,6 @@ pub mod zset;
 pub use hash::RedisHashTable;
 pub use list::RedisListTable;
 pub use set::RedisSetTable;
+pub use stream::RedisStreamTable;
 pub use string::RedisStringTable;
 pub use zset::RedisZSetTable;
