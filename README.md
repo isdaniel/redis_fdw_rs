@@ -1,13 +1,15 @@
 # Redis Foreign Data Wrapper for PostgreSQL (Rust)
 
-A high-performance Redis Foreign Data Wrapper (FDW) for PostgreSQL written in Rust using the [pgrx](https://github.com/pgcentralfoundation/pgrx) framework. This extension allows PostgreSQL to directly query and manipulate Redis data as if it were regular PostgreSQL tables.
+A high-performance Redis Foreign Data Wrapper (FDW) for PostgreSQL written in Rust using the [pgrx](https://github.com/pgcentralfoundation/pgrx) framework. This extension allows PostgreSQL to directly query and manipulate Redis data as if it were regular PostgreSQL tables, with full support for Redis Streams and large data set handling.
 
 ## Features
 
 - **High-performance data access** from Redis to PostgreSQL
 - **Redis Cluster support** with automatic failover and sharding across multiple nodes
 - **WHERE clause pushdown optimization** for significantly improved query performance
-- **Redis data types support**: Hash, List, Set, ZSet, and String (with varying levels of implementation)
+- **Redis data types support**: Hash, List, Set, ZSet, String, and Stream (with varying levels of implementation)
+- **Redis Streams support**: Full implementation with large data set handling, pagination, and time-based queries
+- **Large data set optimization**: Configurable batch processing and streaming access for Redis Streams
 - **Supported operations**: SELECT, INSERT, DELETE (UPDATE operations are not supported due to Redis data model differences)
 - **Connection management** and memory optimization
 - **Built with Rust** for memory safety and performance
@@ -80,6 +82,26 @@ SELECT * FROM user_profiles;
 INSERT INTO task_queue VALUES ('Process invoice #123');
 INSERT INTO task_queue VALUES ('Send welcome email');
 SELECT * FROM task_queue;
+
+-- 6. Create a foreign table for Redis stream (event logging)
+CREATE FOREIGN TABLE event_log (
+    stream_id TEXT,
+    event_type TEXT,
+    event_data TEXT,
+    user_id TEXT,
+    timestamp_data TEXT
+) 
+SERVER redis_server
+OPTIONS (
+    database '0',
+    table_type 'stream',
+    table_key_prefix 'app:events'
+);
+
+-- 7. Use the stream table for event logging
+INSERT INTO event_log VALUES ('*', 'user_action', 'login', '123', '2024-01-01');
+INSERT INTO event_log VALUES ('*', 'user_action', 'purchase', '456', '2024-01-01');
+SELECT * FROM event_log ORDER BY stream_id;
 ```
 
 ## Configuration
@@ -182,6 +204,17 @@ SELECT * FROM user_sessions WHERE field = 'user123';
 - **Use Cases**: Leaderboards, rankings, priority queues
 - **Redis Commands**: ZADD, ZRANGE, ZREM
 
+#### Stream Table (`table_type 'stream'`)
+- **Purpose**: Store append-only log of structured entries with automatic IDs
+- **SQL Columns**: Multiple columns (stream_id, field1, value1, field2, value2, ...)
+- **Use Cases**: Event logs, time-series data, message streams, audit trails
+- **Redis Commands**: XADD, XRANGE, XDEL, XLEN
+- **Features**: 
+  - **Large Data Set Support**: Configurable batch processing (default: 1000 entries)
+  - **Time-based Queries**: Efficient range queries using stream IDs
+  - **Pagination**: Automatic streaming through large data sets
+  - **Pushdown Optimization**: WHERE clause optimization for stream ID filtering
+
 ### SQL Table Definitions
 ```sql
 -- String table (single value storage)
@@ -203,6 +236,16 @@ SERVER redis_server OPTIONS (table_type 'set', table_key_prefix 'tags');
 -- Sorted set table
 CREATE FOREIGN TABLE redis_zset (member TEXT, score FLOAT8)
 SERVER redis_server OPTIONS (table_type 'zset', table_key_prefix 'leaderboard');
+
+-- Stream table (for event logs and time-series data)
+CREATE FOREIGN TABLE redis_stream (
+    stream_id TEXT,
+    field1 TEXT,
+    value1 TEXT,
+    field2 TEXT, 
+    value2 TEXT
+)
+SERVER redis_server OPTIONS (table_type 'stream', table_key_prefix 'events');
 ```
 
 ### SQL Operations
@@ -230,6 +273,19 @@ SELECT * FROM redis_set;
 -- Sorted set operations
 INSERT INTO redis_zset VALUES ('player1', 100.5), ('player2', 95.0);
 SELECT * FROM redis_zset ORDER BY score DESC;
+
+-- Stream operations
+INSERT INTO redis_stream VALUES ('*', 'user_id', '123', 'action', 'login');
+INSERT INTO redis_stream VALUES ('*', 'user_id', '456', 'action', 'logout');
+SELECT * FROM redis_stream ORDER BY stream_id;
+
+-- Time-based queries with pushdown optimization
+SELECT * FROM redis_stream 
+WHERE stream_id >= '1640995200000-0' 
+ORDER BY stream_id;
+
+-- Large data set pagination (automatically handled)
+SELECT * FROM redis_stream LIMIT 1000;
 ```
 
 ## Configuration Options
@@ -245,12 +301,90 @@ SELECT * FROM redis_zset ORDER BY score DESC;
   - `'list'` - Partial implementation ✅ (SELECT, INSERT, DELETE; UPDATE not supported)
   - `'set'` - Partial implementation ✅ (SELECT, INSERT, DELETE; UPDATE not supported)
   - `'zset'` - Partial implementation ✅ (SELECT, INSERT, DELETE; UPDATE not supported)
+  - `'stream'` - Full implementation ✅ (SELECT, INSERT, DELETE; Large data set support with pagination)
 - `table_key_prefix`: Key prefix for Redis operations - **Required**
 
 ### User Mapping Options
 - `password`: Redis authentication password - **Optional**
 
 ## Advanced Usage
+
+### Redis Streams - Large Data Set Support
+
+Redis Streams provide powerful functionality for handling large-scale event logs, time-series data, and message streams. The Redis FDW offers full Stream support with advanced features for large data sets.
+
+#### Stream Table Features
+- **Automatic Pagination**: Configurable batch sizes (default: 1000 entries)
+- **Time-based Queries**: Efficient range queries using Redis stream IDs
+- **Pushdown Optimization**: WHERE clause conditions executed in Redis
+- **Memory Efficient**: Streaming access without loading entire data sets
+
+#### Stream Table Definition
+```sql
+-- Basic stream table for event logging
+CREATE FOREIGN TABLE application_events (
+    stream_id TEXT,           -- Redis stream ID (auto-generated if '*')
+    event_type TEXT,          -- Event classification  
+    user_id TEXT,            -- User identifier
+    action TEXT,             -- Action performed
+    metadata TEXT            -- Additional event data
+) 
+SERVER redis_server 
+OPTIONS (
+    database '0',
+    table_type 'stream',
+    table_key_prefix 'app:events'
+);
+```
+
+#### Stream Operations Examples
+```sql
+-- Insert events (use '*' for auto-generated stream IDs)
+INSERT INTO application_events VALUES 
+    ('*', 'user_login', '123', 'authenticate', '{"ip":"192.168.1.1"}'),
+    ('*', 'page_view', '123', 'view_dashboard', '{"page":"/dashboard"}'),
+    ('*', 'user_logout', '123', 'logout', '{"session_duration":"45m"}');
+
+-- Query recent events
+SELECT * FROM application_events 
+ORDER BY stream_id DESC 
+LIMIT 100;
+
+-- Time-based queries (pushdown optimized)
+-- Stream IDs are timestamp-based: "timestamp-sequence"
+SELECT * FROM application_events 
+WHERE stream_id >= '1640995200000-0'  -- Events after specific timestamp
+ORDER BY stream_id;
+
+-- Filter by event type
+SELECT stream_id, user_id, action, metadata 
+FROM application_events 
+WHERE event_type = 'user_login'
+ORDER BY stream_id DESC;
+
+-- Large data set handling (automatic pagination)
+-- PostgreSQL will automatically fetch data in batches
+SELECT COUNT(*) FROM application_events;  -- Counts all events efficiently
+
+-- Complex analytics queries
+SELECT event_type, COUNT(*) as event_count
+FROM application_events 
+WHERE stream_id >= '1640995200000-0'
+GROUP BY event_type
+ORDER BY event_count DESC;
+```
+
+#### Performance Benefits for Large Data Sets
+- **Streaming Access**: No memory constraints for large streams
+- **Batch Processing**: Configurable batch sizes prevent memory exhaustion  
+- **Range Optimization**: Leverages Redis O(log(N)) stream indexing
+- **Pushdown Queries**: Reduces data transfer between Redis and PostgreSQL
+
+#### Use Cases
+- **Event Logging**: Application events, user activities, system logs
+- **Time-series Data**: Metrics, sensor data, monitoring information
+- **Message Streams**: Chat messages, notifications, real-time updates  
+- **Audit Trails**: Security events, data changes, compliance logging
 
 ### String Table Examples
 ```sql
@@ -633,12 +767,9 @@ cargo pgrx test pg14
 - ✅ **WHERE clause pushdown optimization** for Hash, Set, and String table types
 
 ### Planned Features
-- 🚧 Complete DELETE operations for List types
-- 🚧 Extended WHERE clause pushdown (ZSet score ranges, LIKE pattern optimization)
 - 🚧 Connection pooling and reuse
 - 🚧 Async operations support
 - 🚧 Streaming support for large data sets
-- 🚧 Advanced Redis operations (SCAN, pattern matching)
 - 🚧 Transaction support and rollback capabilities
 
 **Note**: UPDATE operations are intentionally not supported due to fundamental differences between Redis data models and SQL UPDATE semantics. Redis operations like HSET, SADD, etc. are inherently insert-or-update operations, making traditional SQL UPDATE behavior problematic.

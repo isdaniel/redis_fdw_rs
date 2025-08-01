@@ -27,3 +27,6 @@ pub mod cluster_integration_tests;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod auth_tests;
 
+#[cfg(any(test, feature = "pg_test"))]
+pub mod stream_test;
+

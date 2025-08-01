@@ -4,7 +4,7 @@ use crate::{
     query::pushdown_types::{ComparisonOperator, PushableCondition},
     tables::{
         implementations::{
-            RedisHashTable, RedisListTable, RedisSetTable, RedisStringTable, RedisZSetTable,
+            RedisHashTable, RedisListTable, RedisSetTable, RedisStreamTable, RedisStringTable, RedisZSetTable,
         },
         interface::RedisTableOperations,
     },
@@ -18,6 +18,7 @@ pub enum RedisTableType {
     List(RedisListTable),
     Set(RedisSetTable),
     ZSet(RedisZSetTable),
+    Stream(RedisStreamTable),
     None,
 }
 
@@ -29,6 +30,7 @@ impl RedisTableType {
             "list" => RedisTableType::List(RedisListTable::new()),
             "set" => RedisTableType::Set(RedisSetTable::new()),
             "zset" => RedisTableType::ZSet(RedisZSetTable::new()),
+            "stream" => RedisTableType::Stream(RedisStreamTable::new()),
             _ => RedisTableType::None,
         }
     }
@@ -45,6 +47,7 @@ impl RedisTableType {
             RedisTableType::List(table) => table.load_data(conn, key_prefix, conditions),
             RedisTableType::Set(table) => table.load_data(conn, key_prefix, conditions),
             RedisTableType::ZSet(table) => table.load_data(conn, key_prefix, conditions),
+            RedisTableType::Stream(table) => table.load_data(conn, key_prefix, conditions),
             RedisTableType::None => Ok(LoadDataResult::Empty),
         }
     }
@@ -56,6 +59,7 @@ impl RedisTableType {
             RedisTableType::List(table) => table.data_len(),
             RedisTableType::Set(table) => table.data_len(),
             RedisTableType::ZSet(table) => table.data_len(),
+            RedisTableType::Stream(table) => table.data_len(),
             RedisTableType::None => 0,
         }
     }
@@ -67,6 +71,7 @@ impl RedisTableType {
             RedisTableType::List(table) => table.get_row(index),
             RedisTableType::Set(table) => table.get_row(index),
             RedisTableType::ZSet(table) => table.get_row(index),
+            RedisTableType::Stream(table) => table.get_row(index),
             RedisTableType::None => None,
         }
     }
@@ -83,6 +88,7 @@ impl RedisTableType {
             RedisTableType::List(table) => table.insert(conn, key_prefix, data),
             RedisTableType::Set(table) => table.insert(conn, key_prefix, data),
             RedisTableType::ZSet(table) => table.insert(conn, key_prefix, data),
+            RedisTableType::Stream(table) => table.insert(conn, key_prefix, data),
             RedisTableType::None => Ok(()),
         }
     }
@@ -99,6 +105,7 @@ impl RedisTableType {
             RedisTableType::List(table) => table.delete(conn, key_prefix, data),
             RedisTableType::Set(table) => table.delete(conn, key_prefix, data),
             RedisTableType::ZSet(table) => table.delete(conn, key_prefix, data),
+            RedisTableType::Stream(table) => table.delete(conn, key_prefix, data),
             RedisTableType::None => Ok(()),
         }
     }
@@ -111,6 +118,7 @@ impl RedisTableType {
             RedisTableType::List(table) => table.supports_pushdown(operator),
             RedisTableType::Set(table) => table.supports_pushdown(operator),
             RedisTableType::ZSet(table) => table.supports_pushdown(operator),
+            RedisTableType::Stream(table) => table.supports_pushdown(operator),
             RedisTableType::None => false,
         }
     }
