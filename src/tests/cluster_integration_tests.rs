@@ -19,8 +19,6 @@
 mod tests {
     use pgrx::prelude::*;
     use std::env;
-    use std::thread;
-    use std::time::Duration;
 
     /// Test configuration constants
     const DEFAULT_CLUSTER_NODES: &str = "127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003,127.0.0.1:7004,127.0.0.1:7005,127.0.0.1:7006";
@@ -28,10 +26,6 @@ mod tests {
     const FDW_NAME: &str = "redis_cluster_test_wrapper";
     const SERVER_NAME: &str = "redis_cluster_test_server";
 
-    /// Connection management constants
-    const OPERATION_DELAY_MS: u64 = 50; // 50ms between operations
-    const BATCH_SIZE: usize = 5; // Process operations in smaller batches for cluster
-    const BATCH_DELAY_MS: u64 = 100; // 100ms between batches
 
     /// Get cluster nodes configuration
     fn get_cluster_nodes() -> String {
@@ -51,8 +45,6 @@ mod tests {
             FDW_NAME
         ));
 
-        // Small delay to ensure cleanup completes
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
 
         // Create FDW
         Spi::run(&format!(
@@ -81,7 +73,7 @@ mod tests {
         ));
 
         // Small delay to ensure cleanup completes
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         log!("Redis cluster FDW cleanup completed");
     }
 
@@ -98,7 +90,7 @@ mod tests {
         log!("Created cluster foreign table: {table_name} of type: {table_type}");
 
         // Small delay after table creation
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
     }
 
     /// Helper to drop a foreign table
@@ -107,7 +99,7 @@ mod tests {
         log!("Dropped cluster foreign table: {table_name}");
 
         // Small delay after table drop
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
     }
 
     /// Test cluster connectivity and basic operations
@@ -125,7 +117,7 @@ mod tests {
 
         // Test basic operations
         Spi::run("INSERT INTO cluster_connectivity_test (value) VALUES ('cluster_value1');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
 
         let result = Spi::get_one::<String>("SELECT value FROM cluster_connectivity_test;")
             .expect("Failed to retrieve value from cluster");
@@ -165,13 +157,13 @@ mod tests {
 
         // Insert values into different string tables (different Redis keys)
         Spi::run("INSERT INTO cluster_string_test1 (value) VALUES ('value1');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         
         Spi::run("INSERT INTO cluster_string_test2 (value) VALUES ('value2');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         
         Spi::run("INSERT INTO cluster_string_test3 (value) VALUES ('value3');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
 
         // Verify all values can be retrieved
         let result1 = Spi::get_one::<String>("SELECT value FROM cluster_string_test1;")
@@ -289,19 +281,19 @@ mod tests {
 
         // Insert list data
         Spi::run("INSERT INTO cluster_list_urgent (element) VALUES ('task1');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         
         Spi::run("INSERT INTO cluster_list_urgent (element) VALUES ('task2');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         
         Spi::run("INSERT INTO cluster_list_normal (element) VALUES ('task3');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         
         Spi::run("INSERT INTO cluster_list_normal (element) VALUES ('task4');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         
         Spi::run("INSERT INTO cluster_list_low (element) VALUES ('task5');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
 
         // Verify list contents
         let urgent_count = Spi::get_one::<i64>(
@@ -347,22 +339,22 @@ mod tests {
 
         // Insert set data
         Spi::run("INSERT INTO cluster_set_frontend (member) VALUES ('javascript');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         
         Spi::run("INSERT INTO cluster_set_frontend (member) VALUES ('react');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         
         Spi::run("INSERT INTO cluster_set_frontend (member) VALUES ('css');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         
         Spi::run("INSERT INTO cluster_set_backend (member) VALUES ('rust');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         
         Spi::run("INSERT INTO cluster_set_backend (member) VALUES ('postgresql');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         
         Spi::run("INSERT INTO cluster_set_backend (member) VALUES ('redis');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
 
         // Verify set contents
         let frontend_count = Spi::get_one::<i64>(
@@ -377,7 +369,7 @@ mod tests {
 
         // Test duplicate insertion (should not increase count)
         Spi::run("INSERT INTO cluster_set_frontend (member) VALUES ('javascript');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
 
         let frontend_count_after = Spi::get_one::<i64>(
             "SELECT COUNT(*) FROM cluster_set_frontend;"
@@ -411,19 +403,19 @@ mod tests {
 
         // Insert sorted set data
         Spi::run("INSERT INTO cluster_zset_game1 (member, score) VALUES ('player1', 1000.0);").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         
         Spi::run("INSERT INTO cluster_zset_game1 (member, score) VALUES ('player2', 950.0);").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         
         Spi::run("INSERT INTO cluster_zset_game1 (member, score) VALUES ('player3', 1100.0);").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         
         Spi::run("INSERT INTO cluster_zset_game2 (member, score) VALUES ('player4', 800.0);").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         
         Spi::run("INSERT INTO cluster_zset_game2 (member, score) VALUES ('player5', 1200.0);").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
 
         // Verify sorted set contents
         let game1_count = Spi::get_one::<i64>(
@@ -476,16 +468,16 @@ mod tests {
 
         // Insert data into all table types
         Spi::run("INSERT INTO cluster_mixed_string (value) VALUES ('production');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
 
         Spi::run("INSERT INTO cluster_mixed_hash (field, value) VALUES ('theme', 'dark');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
 
         Spi::run("INSERT INTO cluster_mixed_set (member) VALUES ('read');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
 
         Spi::run("INSERT INTO cluster_mixed_set (member) VALUES ('write');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
 
         // Verify all data is accessible
         let config_value = Spi::get_one::<String>(
@@ -536,12 +528,6 @@ mod tests {
                 i, i
             )).unwrap();
             
-            // Small delay between insertions to allow cluster distribution
-            if i % BATCH_SIZE == 0 {
-                thread::sleep(Duration::from_millis(BATCH_DELAY_MS));
-            } else {
-                thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
-            }
         }
 
         // Verify all keys are accessible
@@ -574,7 +560,7 @@ mod tests {
 
         // Test successful operation first
         Spi::run("INSERT INTO cluster_error_test (value) VALUES ('valid_value');").unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
 
         let result = Spi::get_one::<String>("SELECT value FROM cluster_error_test;")
             .expect("Failed to retrieve value");

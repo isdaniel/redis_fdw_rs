@@ -8,7 +8,6 @@ use crate::{
         types::{DataSet, LoadDataResult},
     },
 };
-use redis::streams::*;
 
 /// Redis Stream table type supporting large data sets with streaming and pagination
 /// 

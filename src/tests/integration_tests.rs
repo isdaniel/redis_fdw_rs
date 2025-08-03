@@ -18,9 +18,6 @@
 #[pgrx::pg_schema]
 mod tests {
     use pgrx::prelude::*;
-    use std::thread;
-    use std::time::Duration;
-
     /// Test configuration constants
     const REDIS_HOST_PORT: &str = "127.0.0.1:8899";
     const TEST_DATABASE: &str = "15";
@@ -28,9 +25,7 @@ mod tests {
     const SERVER_NAME: &str = "redis_test_server";
 
     /// Connection management constants
-    const OPERATION_DELAY_MS: u64 = 35; // 35ms between operations
     const BATCH_SIZE: usize = 10; // Process operations in smaller batches
-    const BATCH_DELAY_MS: u64 = 60; // 60ms between batches
 
     /// Setup helper to create FDW and server with error handling
     fn setup_redis_fdw() {
@@ -43,7 +38,7 @@ mod tests {
         ));
 
         // Small delay to ensure cleanup completes
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
 
         // Create FDW
         Spi::run(&format!(
@@ -72,7 +67,7 @@ mod tests {
         ));
 
         // Small delay to ensure cleanup completes
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         log!("Redis FDW cleanup completed");
     }
 
@@ -89,7 +84,7 @@ mod tests {
         log!("Created foreign table: {table_name} of type: {table_type}");
 
         // Small delay after table creation
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
     }
 
     /// Helper to drop a foreign table
@@ -98,18 +93,18 @@ mod tests {
         log!("Dropped foreign table: {table_name}");
 
         // Small delay after table drop
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
     }
 
     /// Helper to perform operations with controlled pacing - for single-column tables
     fn controlled_insert_single(table_name: &str, value: &str) {
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         Spi::run(&format!("INSERT INTO {} VALUES ('{}');", table_name, value)).unwrap();
     }
 
     /// Helper to perform operations with controlled pacing - for two-column tables
     fn controlled_insert_pair(table_name: &str, col1: &str, col2: &str) {
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         Spi::run(&format!(
             "INSERT INTO {} VALUES ('{}', '{}');",
             table_name, col1, col2
@@ -119,7 +114,7 @@ mod tests {
 
     /// Helper to perform controlled delete operations
     fn controlled_delete(table_name: &str, where_clause: &str) {
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         Spi::run(&format!(
             "DELETE FROM {} WHERE {};",
             table_name, where_clause
@@ -129,7 +124,7 @@ mod tests {
 
     /// Helper to perform controlled select operations
     fn controlled_select_count(table_name: &str) -> Option<i64> {
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         Spi::get_one::<i64>(&format!("SELECT COUNT(*) FROM {};", table_name)).unwrap()
     }
 
@@ -162,7 +157,7 @@ mod tests {
         log!("Hash table count after INSERT: {:?}", count);
 
         // Test individual record selection
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         let result = Spi::get_one::<String>(&format!(
             "SELECT value FROM {} WHERE field = 'user:1';",
             table_name
@@ -203,8 +198,6 @@ mod tests {
                 let value = format!("bulk_value_{}", index);
                 controlled_insert_pair(table_name, &field, &value);
             }
-            // Pause between batches to prevent overwhelming the connection
-            thread::sleep(Duration::from_millis(BATCH_DELAY_MS));
         }
 
         // Check count
@@ -297,7 +290,7 @@ mod tests {
         assert_eq!(count, Some(3));
 
         // Test simple selection
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         let result =
             Spi::get_one::<String>(&format!("SELECT element FROM {} LIMIT 1;", table_name));
         assert!(result.is_ok());
@@ -343,7 +336,7 @@ mod tests {
         );
 
         // Test membership check
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         let apple_exists = Spi::get_one::<i64>(&format!(
             "SELECT COUNT(*) FROM {} WHERE member = 'apple';",
             table_name
@@ -427,7 +420,7 @@ mod tests {
         log!("String table count after INSERT: {:?}", count);
 
         // Test individual record selection
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         let result = Spi::get_one::<String>(&format!("SELECT value FROM {table_name} WHERE value = 'Another string value';"));
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), "Another string value");
@@ -462,7 +455,7 @@ mod tests {
         controlled_insert_single(table_name, &large_value);
 
         // Verify retrieval
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         let retrieved = Spi::get_one::<String>(&format!(
             "SELECT value FROM {} WHERE LENGTH(value) = 1000;",
             table_name
@@ -503,7 +496,7 @@ mod tests {
         assert_eq!(count, Some(3));
 
         // Test individual record selection
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         let result = Spi::get_one::<String>(&format!(
             "SELECT member FROM {} WHERE score = 150;",
             table_name
@@ -547,7 +540,7 @@ mod tests {
         assert_eq!(count, Some(3));
 
         // Test score-based selection
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
         let high_scorer = Spi::get_one::<String>(&format!(
             "SELECT member FROM {} WHERE score > 400;",
             table_name
@@ -660,7 +653,6 @@ mod tests {
                 controlled_insert_pair(table_name, &field, &value);
             }
             // Longer pause between batches during stress testing
-            thread::sleep(Duration::from_millis(BATCH_DELAY_MS * 2));
             log!("Completed batch {}/5", batch + 1);
         }
 
@@ -707,7 +699,7 @@ mod tests {
             SERVER_NAME
         );
         Spi::run(&sql_db1).unwrap();
-        thread::sleep(Duration::from_millis(OPERATION_DELAY_MS));
+        
 
         // Insert data into both databases
         controlled_insert_pair("db0_table", "db0_key", "db0_value");
