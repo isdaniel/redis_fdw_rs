@@ -1,7 +1,7 @@
 use crate::{
     query::{
         pushdown_types::{ComparisonOperator, PushableCondition},
-        scan_ops::{extract_scan_conditions},
+        scan_ops::extract_scan_conditions,
     },
     tables::{
         interface::RedisTableOperations,
@@ -10,7 +10,7 @@ use crate::{
 };
 
 /// Redis Stream table type supporting large data sets with streaming and pagination
-/// 
+///
 /// Redis Streams are append-only log data structures that support:
 /// - Time-ordered entry IDs (timestamp-sequence format)
 /// - Field-value pairs per entry (like hash fields)
@@ -54,12 +54,22 @@ impl RedisStreamTable {
         count: Option<usize>,
     ) -> Result<LoadDataResult, redis::RedisError> {
         let count = count.unwrap_or(self.batch_size);
-        
+
         // Use XRANGE to get stream entries
         let entries: Vec<(String, Vec<(String, String)>)> = if let Some(c) = Some(count) {
-            redis::cmd("XRANGE").arg(key_prefix).arg(start_id).arg(end_id).arg("COUNT").arg(c).query(conn)?
+            redis::cmd("XRANGE")
+                .arg(key_prefix)
+                .arg(start_id)
+                .arg(end_id)
+                .arg("COUNT")
+                .arg(c)
+                .query(conn)?
         } else {
-            redis::cmd("XRANGE").arg(key_prefix).arg(start_id).arg(end_id).query(conn)?
+            redis::cmd("XRANGE")
+                .arg(key_prefix)
+                .arg(start_id)
+                .arg(end_id)
+                .query(conn)?
         };
 
         if entries.is_empty() {
@@ -99,7 +109,7 @@ impl RedisStreamTable {
     ) -> Result<LoadDataResult, redis::RedisError> {
         // Extract time-based conditions for ID range queries
         let mut start_id = "-".to_string(); // Start from beginning
-        let mut end_id = "+".to_string();   // Go to end
+        let mut end_id = "+".to_string(); // Go to end
         let mut count = Some(self.batch_size);
 
         // Check for time-based or ID-based conditions
@@ -148,12 +158,12 @@ impl RedisStreamTable {
     ) -> Result<String, redis::RedisError> {
         let mut cmd = redis::cmd("XADD");
         cmd.arg(key_prefix).arg(id);
-        
+
         // Add field-value pairs
         for (field, value) in fields {
             cmd.arg(field).arg(value);
         }
-        
+
         let stream_id: String = cmd.query(conn)?;
         Ok(stream_id)
     }
@@ -264,9 +274,7 @@ impl RedisTableOperations for RedisStreamTable {
         // Redis Streams support range queries based on stream IDs (timestamps)
         matches!(
             operator,
-            ComparisonOperator::Equal
-                | ComparisonOperator::NotEqual
-                | ComparisonOperator::Like
+            ComparisonOperator::Equal | ComparisonOperator::NotEqual | ComparisonOperator::Like
         )
     }
 }

@@ -21,7 +21,7 @@ pg_test = []
 [dependencies]
 pgrx = "=0.15.0"
 redis = { version = "0.32.4", features = ["cluster", "streams","r2d2"] }
-thiserror = "1.0.69"
+thiserror = "2.0.12"
 rand = "0.9.2"
 r2d2 = "0.8.10"
 

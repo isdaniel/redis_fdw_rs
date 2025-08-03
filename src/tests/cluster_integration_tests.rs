@@ -21,16 +21,15 @@ mod tests {
     use std::env;
 
     /// Test configuration constants
-    const DEFAULT_CLUSTER_NODES: &str = "127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003,127.0.0.1:7004,127.0.0.1:7005,127.0.0.1:7006";
+    const DEFAULT_CLUSTER_NODES: &str =
+        "127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003,127.0.0.1:7004,127.0.0.1:7005,127.0.0.1:7006";
     const TEST_DATABASE: &str = "0";
     const FDW_NAME: &str = "redis_cluster_test_wrapper";
     const SERVER_NAME: &str = "redis_cluster_test_server";
 
-
     /// Get cluster nodes configuration
     fn get_cluster_nodes() -> String {
-        env::var("REDIS_CLUSTER_NODES")
-            .unwrap_or_else(|_| DEFAULT_CLUSTER_NODES.to_string())
+        env::var("REDIS_CLUSTER_NODES").unwrap_or_else(|_| DEFAULT_CLUSTER_NODES.to_string())
     }
 
     /// Setup helper to create FDW and server for cluster with error handling
@@ -44,7 +43,6 @@ mod tests {
             "DROP FOREIGN DATA WRAPPER IF EXISTS {} CASCADE;",
             FDW_NAME
         ));
-
 
         // Create FDW
         Spi::run(&format!(
@@ -60,7 +58,10 @@ mod tests {
         ))
         .unwrap();
 
-        log!("Redis cluster FDW setup completed successfully with nodes: {}", cluster_nodes);
+        log!(
+            "Redis cluster FDW setup completed successfully with nodes: {}",
+            cluster_nodes
+        );
     }
 
     /// Cleanup helper to remove FDW and server
@@ -73,12 +74,17 @@ mod tests {
         ));
 
         // Small delay to ensure cleanup completes
-        
+
         log!("Redis cluster FDW cleanup completed");
     }
 
     /// Helper to create a foreign table with specified options for cluster
-    fn create_cluster_foreign_table(table_name: &str, columns: &str, table_type: &str, key_prefix: &str) {
+    fn create_cluster_foreign_table(
+        table_name: &str,
+        columns: &str,
+        table_type: &str,
+        key_prefix: &str,
+    ) {
         let sql = format!(
             "CREATE FOREIGN TABLE {table_name} ({columns}) SERVER {SERVER_NAME} OPTIONS (
                 database '{TEST_DATABASE}',
@@ -90,7 +96,6 @@ mod tests {
         log!("Created cluster foreign table: {table_name} of type: {table_type}");
 
         // Small delay after table creation
-        
     }
 
     /// Helper to drop a foreign table
@@ -99,7 +104,6 @@ mod tests {
         log!("Dropped cluster foreign table: {table_name}");
 
         // Small delay after table drop
-        
     }
 
     /// Test cluster connectivity and basic operations
@@ -112,12 +116,12 @@ mod tests {
             "cluster_connectivity_test",
             "value TEXT",
             "string",
-            "conn_test:test1"
+            "conn_test:test1",
         );
 
         // Test basic operations
-        Spi::run("INSERT INTO cluster_connectivity_test (value) VALUES ('cluster_value1');").unwrap();
-        
+        Spi::run("INSERT INTO cluster_connectivity_test (value) VALUES ('cluster_value1');")
+            .unwrap();
 
         let result = Spi::get_one::<String>("SELECT value FROM cluster_connectivity_test;")
             .expect("Failed to retrieve value from cluster");
@@ -138,42 +142,39 @@ mod tests {
             "cluster_string_test1",
             "value TEXT",
             "string",
-            "str_cluster:key1"
+            "str_cluster:key1",
         );
-        
+
         create_cluster_foreign_table(
             "cluster_string_test2",
             "value TEXT",
             "string",
-            "str_cluster:key2"
+            "str_cluster:key2",
         );
-        
+
         create_cluster_foreign_table(
             "cluster_string_test3",
             "value TEXT",
             "string",
-            "str_cluster:key3"
+            "str_cluster:key3",
         );
 
         // Insert values into different string tables (different Redis keys)
         Spi::run("INSERT INTO cluster_string_test1 (value) VALUES ('value1');").unwrap();
-        
-        
+
         Spi::run("INSERT INTO cluster_string_test2 (value) VALUES ('value2');").unwrap();
-        
-        
+
         Spi::run("INSERT INTO cluster_string_test3 (value) VALUES ('value3');").unwrap();
-        
 
         // Verify all values can be retrieved
         let result1 = Spi::get_one::<String>("SELECT value FROM cluster_string_test1;")
             .expect("Failed to retrieve value from cluster");
         assert_eq!(result1, Some("value1".to_string()));
-        
+
         let result2 = Spi::get_one::<String>("SELECT value FROM cluster_string_test2;")
             .expect("Failed to retrieve value from cluster");
         assert_eq!(result2, Some("value2".to_string()));
-        
+
         let result3 = Spi::get_one::<String>("SELECT value FROM cluster_string_test3;")
             .expect("Failed to retrieve value from cluster");
         assert_eq!(result3, Some("value3".to_string()));
@@ -194,50 +195,51 @@ mod tests {
             "cluster_hash_user1",
             "field TEXT, value TEXT",
             "hash",
-            "hash_cluster:user:1"
+            "hash_cluster:user:1",
         );
-        
+
         create_cluster_foreign_table(
             "cluster_hash_user2",
             "field TEXT, value TEXT",
             "hash",
-            "hash_cluster:user:2"
+            "hash_cluster:user:2",
         );
-        
+
         create_cluster_foreign_table(
             "cluster_hash_user3",
             "field TEXT, value TEXT",
             "hash",
-            "hash_cluster:user:3"
+            "hash_cluster:user:3",
         );
 
         // Insert hash data for user:1
-        Spi::run("INSERT INTO cluster_hash_user1 (field, value) VALUES ('name', 'Alice');").unwrap();
+        Spi::run("INSERT INTO cluster_hash_user1 (field, value) VALUES ('name', 'Alice');")
+            .unwrap();
         Spi::run("INSERT INTO cluster_hash_user1 (field, value) VALUES ('age', '30');").unwrap();
-        
+
         // Insert hash data for user:2
         Spi::run("INSERT INTO cluster_hash_user2 (field, value) VALUES ('name', 'Bob');").unwrap();
         Spi::run("INSERT INTO cluster_hash_user2 (field, value) VALUES ('age', '25');").unwrap();
-        
+
         // Insert hash data for user:3
-        Spi::run("INSERT INTO cluster_hash_user3 (field, value) VALUES ('name', 'Charlie');").unwrap();
+        Spi::run("INSERT INTO cluster_hash_user3 (field, value) VALUES ('name', 'Charlie');")
+            .unwrap();
         Spi::run("INSERT INTO cluster_hash_user3 (field, value) VALUES ('age', '35');").unwrap();
 
         // Verify hash values
-        let alice_name = Spi::get_one::<String>(
-            "SELECT value FROM cluster_hash_user1 WHERE field = 'name';"
-        ).expect("Failed to retrieve hash value");
+        let alice_name =
+            Spi::get_one::<String>("SELECT value FROM cluster_hash_user1 WHERE field = 'name';")
+                .expect("Failed to retrieve hash value");
         assert_eq!(alice_name, Some("Alice".to_string()));
 
-        let bob_age = Spi::get_one::<String>(
-            "SELECT value FROM cluster_hash_user2 WHERE field = 'age';"
-        ).expect("Failed to retrieve hash value");
+        let bob_age =
+            Spi::get_one::<String>("SELECT value FROM cluster_hash_user2 WHERE field = 'age';")
+                .expect("Failed to retrieve hash value");
         assert_eq!(bob_age, Some("25".to_string()));
 
         // Test retrieving all fields for a user
-        let user1_count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM cluster_hash_user1;"
-        ).expect("Failed to count hash fields");
+        let user1_count = Spi::get_one::<i64>("SELECT COUNT(*) FROM cluster_hash_user1;")
+            .expect("Failed to count hash fields");
         assert_eq!(user1_count, Some(2));
 
         drop_cluster_foreign_table("cluster_hash_user1");
@@ -256,59 +258,54 @@ mod tests {
             "cluster_list_urgent",
             "element TEXT",
             "list",
-            "list_cluster:tasks:urgent"
+            "list_cluster:tasks:urgent",
         );
-        
+
         create_cluster_foreign_table(
             "cluster_list_normal",
             "element TEXT",
             "list",
-            "list_cluster:tasks:normal"
+            "list_cluster:tasks:normal",
         );
-        
+
         create_cluster_foreign_table(
             "cluster_list_low",
             "element TEXT",
             "list",
-            "list_cluster:tasks:low"
+            "list_cluster:tasks:low",
         );
 
-        Spi::run("
+        Spi::run(
+            "
         DELETE FROM cluster_list_urgent;
         DELETE FROM cluster_list_normal;
         DELETE FROM cluster_list_low;
-        ").unwrap();
+        ",
+        )
+        .unwrap();
 
         // Insert list data
         Spi::run("INSERT INTO cluster_list_urgent (element) VALUES ('task1');").unwrap();
-        
-        
+
         Spi::run("INSERT INTO cluster_list_urgent (element) VALUES ('task2');").unwrap();
-        
-        
+
         Spi::run("INSERT INTO cluster_list_normal (element) VALUES ('task3');").unwrap();
-        
-        
+
         Spi::run("INSERT INTO cluster_list_normal (element) VALUES ('task4');").unwrap();
-        
-        
+
         Spi::run("INSERT INTO cluster_list_low (element) VALUES ('task5');").unwrap();
-        
 
         // Verify list contents
-        let urgent_count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM cluster_list_urgent;"
-        ).expect("Failed to count list items");
+        let urgent_count = Spi::get_one::<i64>("SELECT COUNT(*) FROM cluster_list_urgent;")
+            .expect("Failed to count list items");
         assert_eq!(urgent_count, Some(2));
 
-        let normal_count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM cluster_list_normal;"
-        ).expect("Failed to count list items");
+        let normal_count = Spi::get_one::<i64>("SELECT COUNT(*) FROM cluster_list_normal;")
+            .expect("Failed to count list items");
         assert_eq!(normal_count, Some(2));
-        
-        let low_count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM cluster_list_low;"
-        ).expect("Failed to count list items");
+
+        let low_count = Spi::get_one::<i64>("SELECT COUNT(*) FROM cluster_list_low;")
+            .expect("Failed to count list items");
         assert_eq!(low_count, Some(1));
 
         drop_cluster_foreign_table("cluster_list_urgent");
@@ -327,53 +324,44 @@ mod tests {
             "cluster_set_frontend",
             "member TEXT",
             "set",
-            "set_cluster:tags:frontend"
+            "set_cluster:tags:frontend",
         );
-        
+
         create_cluster_foreign_table(
             "cluster_set_backend",
             "member TEXT",
             "set",
-            "set_cluster:tags:backend"
+            "set_cluster:tags:backend",
         );
 
         // Insert set data
         Spi::run("INSERT INTO cluster_set_frontend (member) VALUES ('javascript');").unwrap();
-        
-        
+
         Spi::run("INSERT INTO cluster_set_frontend (member) VALUES ('react');").unwrap();
-        
-        
+
         Spi::run("INSERT INTO cluster_set_frontend (member) VALUES ('css');").unwrap();
-        
-        
+
         Spi::run("INSERT INTO cluster_set_backend (member) VALUES ('rust');").unwrap();
-        
-        
+
         Spi::run("INSERT INTO cluster_set_backend (member) VALUES ('postgresql');").unwrap();
-        
-        
+
         Spi::run("INSERT INTO cluster_set_backend (member) VALUES ('redis');").unwrap();
-        
 
         // Verify set contents
-        let frontend_count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM cluster_set_frontend;"
-        ).expect("Failed to count set members");
+        let frontend_count = Spi::get_one::<i64>("SELECT COUNT(*) FROM cluster_set_frontend;")
+            .expect("Failed to count set members");
         assert_eq!(frontend_count, Some(3));
 
-        let backend_count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM cluster_set_backend;"
-        ).expect("Failed to count set members");
+        let backend_count = Spi::get_one::<i64>("SELECT COUNT(*) FROM cluster_set_backend;")
+            .expect("Failed to count set members");
         assert_eq!(backend_count, Some(3));
 
         // Test duplicate insertion (should not increase count)
         Spi::run("INSERT INTO cluster_set_frontend (member) VALUES ('javascript');").unwrap();
-        
 
-        let frontend_count_after = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM cluster_set_frontend;"
-        ).expect("Failed to count set members");
+        let frontend_count_after =
+            Spi::get_one::<i64>("SELECT COUNT(*) FROM cluster_set_frontend;")
+                .expect("Failed to count set members");
         assert_eq!(frontend_count_after, Some(3)); // Should still be 3
 
         drop_cluster_foreign_table("cluster_set_frontend");
@@ -391,47 +379,45 @@ mod tests {
             "cluster_zset_game1",
             "member TEXT, score FLOAT8",
             "zset",
-            "zset_cluster:leaderboard:game1"
+            "zset_cluster:leaderboard:game1",
         );
-        
+
         create_cluster_foreign_table(
             "cluster_zset_game2",
             "member TEXT, score FLOAT8",
             "zset",
-            "zset_cluster:leaderboard:game2"
+            "zset_cluster:leaderboard:game2",
         );
 
         // Insert sorted set data
-        Spi::run("INSERT INTO cluster_zset_game1 (member, score) VALUES ('player1', 1000.0);").unwrap();
-        
-        
-        Spi::run("INSERT INTO cluster_zset_game1 (member, score) VALUES ('player2', 950.0);").unwrap();
-        
-        
-        Spi::run("INSERT INTO cluster_zset_game1 (member, score) VALUES ('player3', 1100.0);").unwrap();
-        
-        
-        Spi::run("INSERT INTO cluster_zset_game2 (member, score) VALUES ('player4', 800.0);").unwrap();
-        
-        
-        Spi::run("INSERT INTO cluster_zset_game2 (member, score) VALUES ('player5', 1200.0);").unwrap();
-        
+        Spi::run("INSERT INTO cluster_zset_game1 (member, score) VALUES ('player1', 1000.0);")
+            .unwrap();
+
+        Spi::run("INSERT INTO cluster_zset_game1 (member, score) VALUES ('player2', 950.0);")
+            .unwrap();
+
+        Spi::run("INSERT INTO cluster_zset_game1 (member, score) VALUES ('player3', 1100.0);")
+            .unwrap();
+
+        Spi::run("INSERT INTO cluster_zset_game2 (member, score) VALUES ('player4', 800.0);")
+            .unwrap();
+
+        Spi::run("INSERT INTO cluster_zset_game2 (member, score) VALUES ('player5', 1200.0);")
+            .unwrap();
 
         // Verify sorted set contents
-        let game1_count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM cluster_zset_game1;"
-        ).expect("Failed to count zset members");
+        let game1_count = Spi::get_one::<i64>("SELECT COUNT(*) FROM cluster_zset_game1;")
+            .expect("Failed to count zset members");
         assert_eq!(game1_count, Some(3));
 
-        let game2_count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM cluster_zset_game2;"
-        ).expect("Failed to count zset members");
+        let game2_count = Spi::get_one::<i64>("SELECT COUNT(*) FROM cluster_zset_game2;")
+            .expect("Failed to count zset members");
         assert_eq!(game2_count, Some(2));
 
         // Test that scores are stored correctly
-        let player3_score = Spi::get_one::<f64>(
-            "SELECT score FROM cluster_zset_game1 WHERE member = 'player3';"
-        ).expect("Failed to retrieve score");
+        let player3_score =
+            Spi::get_one::<f64>("SELECT score FROM cluster_zset_game1 WHERE member = 'player3';")
+                .expect("Failed to retrieve score");
         assert_eq!(player3_score, Some(1100.0));
 
         drop_cluster_foreign_table("cluster_zset_game1");
@@ -449,50 +435,45 @@ mod tests {
             "cluster_mixed_string",
             "value TEXT",
             "string",
-            "mixed_str:config:app"
+            "mixed_str:config:app",
         );
 
         create_cluster_foreign_table(
             "cluster_mixed_hash",
             "field TEXT, value TEXT",
             "hash",
-            "mixed_hash:user:settings"
+            "mixed_hash:user:settings",
         );
 
         create_cluster_foreign_table(
             "cluster_mixed_set",
             "member TEXT",
             "set",
-            "mixed_set:permissions:admin"
+            "mixed_set:permissions:admin",
         );
 
         // Insert data into all table types
         Spi::run("INSERT INTO cluster_mixed_string (value) VALUES ('production');").unwrap();
-        
 
-        Spi::run("INSERT INTO cluster_mixed_hash (field, value) VALUES ('theme', 'dark');").unwrap();
-        
+        Spi::run("INSERT INTO cluster_mixed_hash (field, value) VALUES ('theme', 'dark');")
+            .unwrap();
 
         Spi::run("INSERT INTO cluster_mixed_set (member) VALUES ('read');").unwrap();
-        
 
         Spi::run("INSERT INTO cluster_mixed_set (member) VALUES ('write');").unwrap();
-        
 
         // Verify all data is accessible
-        let config_value = Spi::get_one::<String>(
-            "SELECT value FROM cluster_mixed_string;"
-        ).expect("Failed to retrieve string value");
+        let config_value = Spi::get_one::<String>("SELECT value FROM cluster_mixed_string;")
+            .expect("Failed to retrieve string value");
         assert_eq!(config_value, Some("production".to_string()));
 
-        let theme_value = Spi::get_one::<String>(
-            "SELECT value FROM cluster_mixed_hash WHERE field = 'theme';"
-        ).expect("Failed to retrieve hash value");
+        let theme_value =
+            Spi::get_one::<String>("SELECT value FROM cluster_mixed_hash WHERE field = 'theme';")
+                .expect("Failed to retrieve hash value");
         assert_eq!(theme_value, Some("dark".to_string()));
 
-        let permission_count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM cluster_mixed_set;"
-        ).expect("Failed to count set members");
+        let permission_count = Spi::get_one::<i64>("SELECT COUNT(*) FROM cluster_mixed_set;")
+            .expect("Failed to count set members");
         assert_eq!(permission_count, Some(2));
 
         // Cleanup
@@ -511,30 +492,30 @@ mod tests {
         // Each table represents a different Redis key that will be distributed across nodes
         let table_count = 10;
         let mut table_names = Vec::new();
-        
+
         for i in 1..=table_count {
             let table_name = format!("cluster_dist_test_{}", i);
             create_cluster_foreign_table(
                 &table_name,
                 "value TEXT",
                 "string",
-                &format!("dist:key{}", i)
+                &format!("dist:key{}", i),
             );
             table_names.push(table_name);
-            
+
             // Insert value into each table
             Spi::run(&format!(
                 "INSERT INTO cluster_dist_test_{} (value) VALUES ('value{}');",
                 i, i
-            )).unwrap();
-            
+            ))
+            .unwrap();
         }
 
         // Verify all keys are accessible
         for i in 1..=table_count {
-            let result = Spi::get_one::<String>(&format!(
-                "SELECT value FROM cluster_dist_test_{};", i
-            )).expect("Failed to retrieve distributed key");
+            let result =
+                Spi::get_one::<String>(&format!("SELECT value FROM cluster_dist_test_{};", i))
+                    .expect("Failed to retrieve distributed key");
             assert_eq!(result, Some(format!("value{}", i)));
         }
 
@@ -542,7 +523,7 @@ mod tests {
         for table_name in table_names {
             drop_cluster_foreign_table(&table_name);
         }
-        
+
         cleanup_redis_cluster_fdw();
     }
 
@@ -555,12 +536,11 @@ mod tests {
             "cluster_error_test",
             "value TEXT",
             "string",
-            "error_test:valid_key"
+            "error_test:valid_key",
         );
 
         // Test successful operation first
         Spi::run("INSERT INTO cluster_error_test (value) VALUES ('valid_value');").unwrap();
-        
 
         let result = Spi::get_one::<String>("SELECT value FROM cluster_error_test;")
             .expect("Failed to retrieve value");
@@ -571,7 +551,7 @@ mod tests {
             "cluster_error_empty",
             "value TEXT",
             "string",
-            "error_test:non_existent_key"
+            "error_test:non_existent_key",
         );
 
         // Query empty table should return None, not error

@@ -1,7 +1,10 @@
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 mod tests {
-    use crate::{query::ComparisonOperator, tables::{DataSet, RedisStreamTable, RedisTableOperations}};
+    use crate::{
+        query::ComparisonOperator,
+        tables::{DataSet, RedisStreamTable, RedisTableOperations},
+    };
 
     #[test]
     fn test_stream_table_creation() {
@@ -29,9 +32,10 @@ mod tests {
 
     // Integration tests with real Redis server
     fn setup_redis_connection() -> redis::Connection {
-        let client = redis::Client::open("redis://127.0.0.1:8899/")
-            .expect("Failed to create Redis client");
-        client.get_connection()
+        let client =
+            redis::Client::open("redis://127.0.0.1:8899/").expect("Failed to create Redis client");
+        client
+            .get_connection()
             .expect("Failed to connect to Redis server")
     }
 
@@ -44,7 +48,7 @@ mod tests {
         let mut conn = setup_redis_connection();
         let mut table = RedisStreamTable::new();
         let test_key = "test:stream:add_entry";
-        
+
         // Cleanup any existing test data
         cleanup_test_stream(&mut conn, test_key);
 
@@ -57,7 +61,7 @@ mod tests {
 
         let result = table.add_entry(&mut conn, test_key, "*", &fields);
         assert!(result.is_ok());
-        
+
         let stream_id = result.unwrap();
         assert!(!stream_id.is_empty());
         assert!(stream_id.contains('-')); // Redis stream ID format: timestamp-sequence
@@ -74,12 +78,16 @@ mod tests {
         let (id, stream_fields) = &entries[0];
         assert_eq!(id, &stream_id);
         assert_eq!(stream_fields.len(), 3);
-        
+
         // Verify field values
-        let field_map: std::collections::HashMap<String, String> = stream_fields.iter().cloned().collect();
+        let field_map: std::collections::HashMap<String, String> =
+            stream_fields.iter().cloned().collect();
         assert_eq!(field_map.get("user_id"), Some(&"123".to_string()));
         assert_eq!(field_map.get("action"), Some(&"login".to_string()));
-        assert_eq!(field_map.get("timestamp"), Some(&"2024-01-01T10:00:00Z".to_string()));
+        assert_eq!(
+            field_map.get("timestamp"),
+            Some(&"2024-01-01T10:00:00Z".to_string())
+        );
 
         // Cleanup
         cleanup_test_stream(&mut conn, test_key);
@@ -90,7 +98,7 @@ mod tests {
         let mut conn = setup_redis_connection();
         let mut table = RedisStreamTable::new();
         let test_key = "test:stream:load_data";
-        
+
         // Cleanup any existing test data
         cleanup_test_stream(&mut conn, test_key);
 
@@ -98,27 +106,36 @@ mod tests {
         let _: String = redis::cmd("XADD")
             .arg(test_key)
             .arg("*")
-            .arg("event_type").arg("user_login")
-            .arg("user_id").arg("123")
-            .arg("ip").arg("192.168.1.1")
+            .arg("event_type")
+            .arg("user_login")
+            .arg("user_id")
+            .arg("123")
+            .arg("ip")
+            .arg("192.168.1.1")
             .query(&mut conn)
             .expect("Failed to add test entry 1");
 
         let _: String = redis::cmd("XADD")
             .arg(test_key)
             .arg("*")
-            .arg("event_type").arg("page_view")
-            .arg("user_id").arg("123")
-            .arg("page").arg("/dashboard")
+            .arg("event_type")
+            .arg("page_view")
+            .arg("user_id")
+            .arg("123")
+            .arg("page")
+            .arg("/dashboard")
             .query(&mut conn)
             .expect("Failed to add test entry 2");
 
         let _: String = redis::cmd("XADD")
             .arg(test_key)
             .arg("*")
-            .arg("event_type").arg("user_logout")
-            .arg("user_id").arg("123")
-            .arg("session_duration").arg("45m")
+            .arg("event_type")
+            .arg("user_logout")
+            .arg("user_id")
+            .arg("123")
+            .arg("session_duration")
+            .arg("45m")
             .query(&mut conn)
             .expect("Failed to add test entry 3");
 
@@ -129,16 +146,20 @@ mod tests {
         match result.unwrap() {
             crate::tables::types::LoadDataResult::LoadedToInternal => {
                 assert_eq!(table.data_len(), 3);
-                
+
                 // Verify we can get rows
                 let row1 = table.get_row(0);
                 assert!(row1.is_some());
                 let row1_data = row1.unwrap();
                 assert!(row1_data.len() >= 4); // stream_id + at least 3 field/value pairs
-                
+
                 // Verify the row contains expected data
                 let row1_str = row1_data.join(",");
-                assert!(row1_str.contains("user_login") || row1_str.contains("page_view") || row1_str.contains("user_logout"));
+                assert!(
+                    row1_str.contains("user_login")
+                        || row1_str.contains("page_view")
+                        || row1_str.contains("user_logout")
+                );
             }
             _ => panic!("Expected LoadedToInternal result"),
         }
@@ -152,7 +173,7 @@ mod tests {
         let mut conn = setup_redis_connection();
         let mut table = RedisStreamTable::with_batch_size(5); // Small batch for testing
         let test_key = "test:stream:batch_processing";
-        
+
         // Cleanup any existing test data
         cleanup_test_stream(&mut conn, test_key);
 
@@ -161,9 +182,12 @@ mod tests {
             let _: String = redis::cmd("XADD")
                 .arg(test_key)
                 .arg("*")
-                .arg("event_id").arg(i.to_string())
-                .arg("event_type").arg("test_event")
-                .arg("data").arg(format!("test_data_{}", i))
+                .arg("event_id")
+                .arg(i.to_string())
+                .arg("event_type")
+                .arg("test_event")
+                .arg("data")
+                .arg(format!("test_data_{}", i))
                 .query(&mut conn)
                 .expect(&format!("Failed to add test entry {}", i));
         }
@@ -194,7 +218,7 @@ mod tests {
         let mut conn = setup_redis_connection();
         let mut table = RedisStreamTable::new();
         let test_key = "test:stream:insert_delete";
-        
+
         // Cleanup any existing test data
         cleanup_test_stream(&mut conn, test_key);
 
@@ -245,7 +269,7 @@ mod tests {
         let mut conn = setup_redis_connection();
         let mut table = RedisStreamTable::new();
         let test_key = "test:stream:range_queries";
-        
+
         // Cleanup any existing test data
         cleanup_test_stream(&mut conn, test_key);
 
@@ -253,26 +277,29 @@ mod tests {
         let _: String = redis::cmd("XADD")
             .arg(test_key)
             .arg("1000000000000-0")
-            .arg("event").arg("first")
+            .arg("event")
+            .arg("first")
             .query(&mut conn)
             .expect("Failed to add first entry");
 
         let _: String = redis::cmd("XADD")
             .arg(test_key)
             .arg("2000000000000-0")
-            .arg("event").arg("second")
+            .arg("event")
+            .arg("second")
             .query(&mut conn)
             .expect("Failed to add second entry");
 
         let _: String = redis::cmd("XADD")
             .arg(test_key)
             .arg("3000000000000-0")
-            .arg("event").arg("third")
+            .arg("event")
+            .arg("third")
             .query(&mut conn)
             .expect("Failed to add third entry");
 
         // Test range query using pushdown conditions
-        use crate::query::pushdown_types::{PushableCondition, ComparisonOperator};
+        use crate::query::pushdown_types::{ComparisonOperator, PushableCondition};
         let condition = PushableCondition {
             column_name: "stream_id".to_string(),
             operator: ComparisonOperator::Equal,
@@ -299,7 +326,7 @@ mod tests {
         let mut conn = setup_redis_connection();
         let table = RedisStreamTable::new();
         let test_key = "test:stream:length";
-        
+
         // Cleanup any existing test data
         cleanup_test_stream(&mut conn, test_key);
 
@@ -313,7 +340,8 @@ mod tests {
             let _: String = redis::cmd("XADD")
                 .arg(test_key)
                 .arg("*")
-                .arg("index").arg(i.to_string())
+                .arg("index")
+                .arg(i.to_string())
                 .query(&mut conn)
                 .expect(&format!("Failed to add entry {}", i));
         }
@@ -331,11 +359,11 @@ mod tests {
     fn test_stream_error_handling() {
         let mut conn = setup_redis_connection();
         let mut table = RedisStreamTable::new();
-        
+
         // Test with non-existent stream
         let result = table.load_data(&mut conn, "non:existent:stream", None);
         assert!(result.is_ok());
-        
+
         match result.unwrap() {
             crate::tables::types::LoadDataResult::Empty => {
                 assert_eq!(table.data_len(), 0);

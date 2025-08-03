@@ -7,14 +7,17 @@
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 mod tests {
-    use crate::{auth::RedisAuthConfig, core::connection_factory::{ConnectionFactoryError, RedisConnectionConfig}};
+    use crate::{
+        auth::RedisAuthConfig,
+        core::connection_factory::{ConnectionFactoryError, RedisConnectionConfig},
+    };
     use std::collections::HashMap;
 
     #[test]
     fn test_auth_config_creation() {
         let mut opts = HashMap::new();
         opts.insert("password".to_string(), "secret123".to_string());
-        
+
         let config = RedisAuthConfig::from_user_mapping_options(&opts);
         assert!(config.is_auth_required());
         assert_eq!(config.password, Some("secret123".to_string()));
@@ -26,7 +29,7 @@ mod tests {
         let mut opts = HashMap::new();
         opts.insert("password".to_string(), "secret123".to_string());
         opts.insert("username".to_string(), "redis_user".to_string());
-        
+
         let config = RedisAuthConfig::from_user_mapping_options(&opts);
         assert!(config.is_auth_required());
         assert_eq!(config.password, Some("secret123".to_string()));
@@ -87,7 +90,7 @@ mod tests {
     #[test]
     fn test_no_auth_required() {
         let config = RedisAuthConfig::default();
-        
+
         let url = "redis://127.0.0.1:6379/0";
         let result = config.apply_to_url(url);
         assert_eq!(result, url);
@@ -207,7 +210,6 @@ mod tests {
 
     #[test]
     fn test_authentication_single_node() {
-
         let mut opts = HashMap::new();
         opts.insert("host_port".to_string(), "127.0.0.1:6379".to_string());
         opts.insert("database".to_string(), "0".to_string());
@@ -221,7 +223,6 @@ mod tests {
 
     #[test]
     fn test_authentication_with_username() {
-        
         let mut opts = HashMap::new();
         opts.insert("host_port".to_string(), "127.0.0.1:6379".to_string());
         opts.insert("database".to_string(), "0".to_string());
@@ -236,7 +237,6 @@ mod tests {
 
     #[test]
     fn test_authentication_cluster() {
-        
         let mut opts = HashMap::new();
         opts.insert(
             "host_port".to_string(),

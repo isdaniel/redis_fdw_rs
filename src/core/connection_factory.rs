@@ -1,7 +1,4 @@
-use crate::{
-    auth::RedisAuthConfig,
-    core::connection::RedisConnectionType,
-};
+use crate::{auth::RedisAuthConfig, core::connection::RedisConnectionType};
 /// Redis connection factory module
 ///
 /// This module provides a clean interface for creating Redis connections
@@ -72,7 +69,7 @@ impl RedisConnectionConfig {
             database,
             retry_attempts: Some(3),
             retry_delay: Some(Duration::from_millis(100)),
-            auth_config: RedisAuthConfig::from_user_mapping_options(&opts)
+            auth_config: RedisAuthConfig::from_user_mapping_options(&opts),
         };
 
         config.validate()?;
@@ -163,13 +160,17 @@ pub struct RedisConnectionFactory;
 impl RedisConnectionFactory {
     const MAX_SIZE: u32 = 96;
     /// Create a Redis client based on configuration
-    fn create_client_pool(config: &RedisConnectionConfig) -> ConnectionFactoryResult<r2d2::PooledConnection<Client>> {
+    fn create_client_pool(
+        config: &RedisConnectionConfig,
+    ) -> ConnectionFactoryResult<r2d2::PooledConnection<Client>> {
         let url = config.get_single_node_url()?;
         log!("Creating single Redis node connection: {}", url);
         let pool = r2d2::Pool::builder()
             .max_size(Self::MAX_SIZE)
             .build(Client::open(url)?)?;
-        let connection = pool.get().map_err(|e| ConnectionFactoryError::ConnectionFailed(e.to_string()))?;
+        let connection = pool
+            .get()
+            .map_err(|e| ConnectionFactoryError::ConnectionFailed(e.to_string()))?;
         Ok(connection)
     }
 
@@ -182,8 +183,9 @@ impl RedisConnectionFactory {
         let pool = r2d2::Pool::builder()
             .max_size(Self::MAX_SIZE)
             .build(ClusterClient::new(nodes)?)?;
-        let cluster_connection = pool.get()
-                .map_err(|e| ConnectionFactoryError::ConnectionFailed(e.to_string()))?;
+        let cluster_connection = pool
+            .get()
+            .map_err(|e| ConnectionFactoryError::ConnectionFailed(e.to_string()))?;
         Ok(cluster_connection)
     }
 

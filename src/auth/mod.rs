@@ -1,9 +1,8 @@
 /// Redis Authentication Module
-/// 
+///
 /// This module provides authentication functionality for Redis FDW connections.
 /// It supports retrieving password credentials from PostgreSQL user mappings
 /// and properly formatting them for both single-node and cluster Redis connections.
-
 use std::collections::HashMap;
 
 /// Authentication configuration for Redis connections
@@ -20,7 +19,7 @@ impl RedisAuthConfig {
     pub fn from_user_mapping_options(opts: &HashMap<String, String>) -> Self {
         let password = opts.get("password").cloned();
         let username = opts.get("username").cloned();
-        
+
         RedisAuthConfig { password, username }
     }
 
@@ -34,7 +33,7 @@ impl RedisAuthConfig {
     pub fn get_auth_url_component(&self) -> String {
         match (&self.username, &self.password) {
             (Some(username), Some(password)) => format!("{}:{}@", username, password),
-            (None, Some(password)) => format!(":{}@", password), 
+            (None, Some(password)) => format!(":{}@", password),
             _ => String::new(),
         }
     }
@@ -47,7 +46,7 @@ impl RedisAuthConfig {
         }
 
         let auth_component = self.get_auth_url_component();
-        
+
         // Handle different URL formats
         if url.starts_with("redis://") {
             // Remove existing auth if present
@@ -61,7 +60,7 @@ impl RedisAuthConfig {
             } else {
                 url.to_string()
             };
-            
+
             // Insert auth component
             format!("redis://{}{}", auth_component, &url_without_auth[8..])
         } else {

@@ -4,7 +4,8 @@ use crate::{
     query::pushdown_types::{ComparisonOperator, PushableCondition},
     tables::{
         implementations::{
-            RedisHashTable, RedisListTable, RedisSetTable, RedisStreamTable, RedisStringTable, RedisZSetTable,
+            RedisHashTable, RedisListTable, RedisSetTable, RedisStreamTable, RedisStringTable,
+            RedisZSetTable,
         },
         interface::RedisTableOperations,
     },

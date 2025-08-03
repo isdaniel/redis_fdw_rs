@@ -38,7 +38,6 @@ mod tests {
         ));
 
         // Small delay to ensure cleanup completes
-        
 
         // Create FDW
         Spi::run(&format!(
@@ -67,7 +66,7 @@ mod tests {
         ));
 
         // Small delay to ensure cleanup completes
-        
+
         log!("Redis FDW cleanup completed");
     }
 
@@ -84,7 +83,6 @@ mod tests {
         log!("Created foreign table: {table_name} of type: {table_type}");
 
         // Small delay after table creation
-        
     }
 
     /// Helper to drop a foreign table
@@ -93,18 +91,15 @@ mod tests {
         log!("Dropped foreign table: {table_name}");
 
         // Small delay after table drop
-        
     }
 
     /// Helper to perform operations with controlled pacing - for single-column tables
     fn controlled_insert_single(table_name: &str, value: &str) {
-        
         Spi::run(&format!("INSERT INTO {} VALUES ('{}');", table_name, value)).unwrap();
     }
 
     /// Helper to perform operations with controlled pacing - for two-column tables
     fn controlled_insert_pair(table_name: &str, col1: &str, col2: &str) {
-        
         Spi::run(&format!(
             "INSERT INTO {} VALUES ('{}', '{}');",
             table_name, col1, col2
@@ -114,7 +109,6 @@ mod tests {
 
     /// Helper to perform controlled delete operations
     fn controlled_delete(table_name: &str, where_clause: &str) {
-        
         Spi::run(&format!(
             "DELETE FROM {} WHERE {};",
             table_name, where_clause
@@ -124,7 +118,6 @@ mod tests {
 
     /// Helper to perform controlled select operations
     fn controlled_select_count(table_name: &str) -> Option<i64> {
-        
         Spi::get_one::<i64>(&format!("SELECT COUNT(*) FROM {};", table_name)).unwrap()
     }
 
@@ -157,7 +150,7 @@ mod tests {
         log!("Hash table count after INSERT: {:?}", count);
 
         // Test individual record selection
-        
+
         let result = Spi::get_one::<String>(&format!(
             "SELECT value FROM {} WHERE field = 'user:1';",
             table_name
@@ -290,7 +283,7 @@ mod tests {
         assert_eq!(count, Some(3));
 
         // Test simple selection
-        
+
         let result =
             Spi::get_one::<String>(&format!("SELECT element FROM {} LIMIT 1;", table_name));
         assert!(result.is_ok());
@@ -336,7 +329,7 @@ mod tests {
         );
 
         // Test membership check
-        
+
         let apple_exists = Spi::get_one::<i64>(&format!(
             "SELECT COUNT(*) FROM {} WHERE member = 'apple';",
             table_name
@@ -402,12 +395,7 @@ mod tests {
         let table_name = "test_string_crud";
         let key_prefix = "integration:string:crud";
 
-        create_foreign_table(
-            table_name,
-            "value text",
-            "string",
-            key_prefix,
-        );
+        create_foreign_table(table_name, "value text", "string", key_prefix);
 
         // Test INSERT operations with pacing
         log!("Testing INSERT operations...");
@@ -420,8 +408,10 @@ mod tests {
         log!("String table count after INSERT: {:?}", count);
 
         // Test individual record selection
-        
-        let result = Spi::get_one::<String>(&format!("SELECT value FROM {table_name} WHERE value = 'Another string value';"));
+
+        let result = Spi::get_one::<String>(&format!(
+            "SELECT value FROM {table_name} WHERE value = 'Another string value';"
+        ));
         assert!(result.is_ok());
         assert_eq!(result.unwrap().unwrap(), "Another string value");
 
@@ -455,7 +445,7 @@ mod tests {
         controlled_insert_single(table_name, &large_value);
 
         // Verify retrieval
-        
+
         let retrieved = Spi::get_one::<String>(&format!(
             "SELECT value FROM {} WHERE LENGTH(value) = 1000;",
             table_name
@@ -496,7 +486,7 @@ mod tests {
         assert_eq!(count, Some(3));
 
         // Test individual record selection
-        
+
         let result = Spi::get_one::<String>(&format!(
             "SELECT member FROM {} WHERE score = 150;",
             table_name
@@ -540,7 +530,7 @@ mod tests {
         assert_eq!(count, Some(3));
 
         // Test score-based selection
-        
+
         let high_scorer = Spi::get_one::<String>(&format!(
             "SELECT member FROM {} WHERE score > 400;",
             table_name
@@ -699,7 +689,6 @@ mod tests {
             SERVER_NAME
         );
         Spi::run(&sql_db1).unwrap();
-        
 
         // Insert data into both databases
         controlled_insert_pair("db0_table", "db0_key", "db0_value");
