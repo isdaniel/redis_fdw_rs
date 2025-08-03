@@ -6,6 +6,7 @@ A high-performance Redis Foreign Data Wrapper (FDW) for PostgreSQL written in Ru
 
 - **High-performance data access** from Redis to PostgreSQL
 - **Redis Cluster support** with automatic failover and sharding across multiple nodes
+- **Connection pooling** with R2D2 for efficient connection reuse and resource management
 - **WHERE clause pushdown optimization** for significantly improved query performance
 - **Redis data types support**: Hash, List, Set, ZSet, String, and Stream (with varying levels of implementation)
 - **Redis Streams support**: Full implementation with large data set handling, pagination, and time-based queries
@@ -105,6 +106,36 @@ SELECT * FROM event_log ORDER BY stream_id;
 ```
 
 ## Configuration
+
+### Connection Pooling
+
+Redis FDW now includes built-in connection pooling using the R2D2 library, providing significant performance improvements and better resource management. The connection pool is automatically configured with sensible defaults but can be customized if needed.
+
+#### Connection Pool Benefits
+- **Performance**: Eliminates the overhead of establishing new Redis connections for each operation
+- **Resource Efficiency**: Maintains a controlled number of connections, preventing resource exhaustion
+- **Reliability**: Automatic connection health checks and recovery from network issues
+- **Thread Safety**: Safe concurrent access from multiple PostgreSQL worker processes
+
+#### Default Pool Configuration
+```rust
+// Default R2D2 pool settings (automatically applied)
+Pool::builder()
+    .max_size(10)                    // Maximum 10 connections
+    .min_idle(None)                  // Minimum idle connections (defaults to max_size)
+    .connection_timeout(Duration::from_secs(30))  // 30 second connection timeout
+    .idle_timeout(Some(Duration::from_secs(600))) // 10 minute idle timeout
+    .max_lifetime(Some(Duration::from_secs(1800))) // 30 minute max lifetime
+    .test_on_check_out(true)         // Validate connections before use
+    .build(redis_client)
+```
+
+#### Pool Behavior
+- **Connection Reuse**: Connections are automatically returned to the pool after each operation
+- **Health Monitoring**: Connections are validated before use and replaced if unhealthy
+- **Automatic Cleanup**: Idle connections are closed after timeout to free resources
+- **Graceful Degradation**: Pool handles connection failures transparently
+- **Thread Safe**: Multiple PostgreSQL backends can safely share the connection pool
 
 ### 1. Create Foreign Data Wrapper
 ```sql
@@ -449,57 +480,11 @@ INSERT INTO redis_list_table VALUES
 | ZSet       | ✅     | ✅     | ❌     | ✅     | **Partial** (UPDATE not supported) |
 | String     | ✅     | ✅     | ❌     | ✅     | **Partial** (UPDATE not supported) |
 
-## Recent Changes (v0.3.0)
-
-### 🏗️ Major Object-Oriented Refactoring
-- **Complete architectural restructuring** with object-oriented design principles
-- **Unified trait interface**: All Redis table types now implement a consistent `RedisTableOperations` trait
-- **Method consolidation**: Eliminated duplicate methods by merging similar functionality:
-  - `load_data_with_pushdown` + `load_data` → **unified `load_data`** (with optional pushdown conditions)
-  - `get_row_from_filtered_data` + `get_row` → **unified `get_row`** (with optional filtered data)
-  - `filtered_data_len` + `data_len` → **unified `data_len`** (with optional filtered data)
-
-### Enhanced Code Organization
-- **Encapsulated table-specific logic**: Each Redis table type now manages its own optimization strategies
-- **Simplified state management**: The `state.rs` file now delegates to table implementations instead of containing type-specific logic
-- **Consistent interface**: All table operations follow the same pattern with optional parameters for flexibility
-- **Better maintainability**: Reduced code duplication and improved separation of concerns
-
-### Performance Optimizations
-- **Table-specific optimizations**: Each table type can implement its own optimization strategies:
-  - Hash tables: HGET/HMGET optimizations for field-specific queries
-  - Set tables: SISMEMBER for membership testing
-  - String tables: Direct value access without unnecessary transfers
-- **Unified pushdown logic**: Consolidated pushdown optimization handling across all table types
-- **Memory efficiency**: Improved memory allocation and data handling patterns
-
-## Previous Changes (v0.2.0)
-
-### Code Restructuring
-- **Modular Architecture**: Reorganized Redis table implementations into a dedicated `tables/` module
-- **Improved Organization**: 
-  - `src/redis_fdw/tables/` - Contains all table type implementations
-  - `src/redis_fdw/tables/interface.rs` - Common trait definitions
-  - `src/redis_fdw/tables/mod.rs` - Module exports and re-exports
-- **Better Maintainability**: Cleaner separation of concerns between different Redis data types
-
-### Enhanced Error Handling
-- **Robust DELETE Operations**: Improved `exec_foreign_delete` function with comprehensive error handling
-- **Key Validation**: Added proper validation for deletion keys (null checks, empty string handling)
-- **Graceful Degradation**: Better error recovery to maintain PostgreSQL stability
-- **Enhanced Logging**: More detailed logging for debugging and monitoring
-
-### Technical Improvements
-- **Memory Safety**: Enhanced unsafe code blocks with better validation
-- **Code Quality**: Reduced code duplication and improved maintainability
-- **Performance**: Optimized memory allocation and connection handling
-
 ## Current Limitations
 
 - **Transactions**: Redis operations are not transactional with PostgreSQL
 - **Complex WHERE clauses**: Filtering happens at PostgreSQL level, not pushed down to Redis
 - **Large Data Sets**: All data for a table is loaded at scan initialization (not suitable for very large Redis keys)
-- **Connection Pooling**: Each operation creates a new Redis connection (connection pooling planned)
 
 ## Development
 
@@ -581,9 +566,15 @@ See [TESTING.md](TESTING.md) for detailed testing documentation.
 
 ## Architecture Overview
 
-### Object-Oriented Design
+### Object-Oriented Design with Connection Pooling
 
-The Redis FDW now follows a clean object-oriented architecture with the following key components:
+The Redis FDW follows a clean object-oriented architecture with integrated connection pooling for optimal performance:
+
+#### Connection Management
+- **R2D2 Connection Pool**: Centralized connection pool management using the industry-standard R2D2 library
+- **Connection Reuse**: Automatic connection lifecycle management with pooling, validation, and cleanup
+- **Thread Safety**: Safe concurrent access from multiple PostgreSQL worker processes
+- **Health Monitoring**: Automatic detection and replacement of failed connections
 
 #### `RedisTableOperations` Trait
 All Redis table types implement this unified interface providing:
@@ -629,7 +620,12 @@ match &mut self.table_type {
 ## Performance Considerations
 
 - **Memory Management**: The extension uses PostgreSQL's memory contexts for efficient memory allocation
-- **Connection Management**: Redis connections are established per query execution
+- **Connection Pooling**: Integrated R2D2 connection pooling provides:
+  - **Efficient connection reuse**: Eliminates overhead of creating new Redis connections for each operation
+  - **Configurable pool sizing**: Customizable maximum connections (default: 10) and minimum idle connections
+  - **Connection health monitoring**: Automatic validation and cleanup of stale connections
+  - **Connection timeouts**: Configurable connection acquisition timeout (default: 30 seconds)
+  - **Resource management**: Automatic connection lifecycle management with idle timeout (default: 10 minutes) and maximum lifetime (default: 30 minutes)
 - **WHERE Clause Pushdown**: Supported conditions are executed directly in Redis for optimal performance
   - Hash tables: `field = 'value'` and `field IN (...)` use `HGET`/`HMGET`
   - Set tables: `member = 'value'` uses `SISMEMBER` for direct membership testing
@@ -674,9 +670,29 @@ SELECT EXISTS(SELECT 1 FROM user_roles WHERE member = 'admin');
 
 5. **Unsupported table type**: All Redis table types (`hash`, `list`, `set`, `zset`, `string`) are supported for SELECT and INSERT operations
 
-5. **UPDATE operations failing**: UPDATE operations are not supported by design and will not work with Redis FDW
+6. **UPDATE operations failing**: UPDATE operations are not supported by design and will not work with Redis FDW
 
-6. **DELETE operations failing on Lists**: DELETE operations for List type are not yet fully implemented
+7. **DELETE operations failing on Lists**: DELETE operations for List type are not yet fully implemented
+
+8. **Connection pool exhaustion**: If you encounter connection timeout errors:
+   - Check Redis server connection limits (`redis-cli CONFIG GET maxclients`)
+   - Monitor connection pool usage in PostgreSQL logs
+   - Consider increasing Redis server connection limits if needed
+   - Default pool size is 10 connections per PostgreSQL backend
+
+9. **Connection timeouts**: If operations timeout frequently:
+   - Verify network connectivity to Redis server
+   - Check Redis server response times
+   - Monitor PostgreSQL logs for connection pool events
+   - Consider adjusting connection timeout settings if needed
+
+### Connection Pool Monitoring
+
+Monitor connection pool health through PostgreSQL logs:
+```
+# Look for connection pool events in PostgreSQL logs
+grep "redis_fdw" /var/log/postgresql/postgresql-*.log
+```
 
 ### Debug Logging
 
@@ -759,6 +775,7 @@ cargo pgrx test pg14
 - ✅ **Method consolidation** eliminating duplicate functionality 
 - ✅ **Enhanced encapsulation** with table-specific optimization logic
 - ✅ **Simplified state management** using clean delegation patterns
+- ✅ **Connection pooling and reuse** with R2D2 for improved performance and resource management
 - ✅ Code restructuring and modular architecture
 - ✅ Enhanced error handling for DELETE operations
 - ✅ Implementation of SELECT and INSERT operations for all Redis data types
@@ -767,7 +784,6 @@ cargo pgrx test pg14
 - ✅ **WHERE clause pushdown optimization** for Hash, Set, and String table types
 
 ### Planned Features
-- 🚧 Connection pooling and reuse
 - 🚧 Async operations support
 - 🚧 Streaming support for large data sets
 - 🚧 Transaction support and rollback capabilities
@@ -796,4 +812,5 @@ This project is licensed under the terms specified in the LICENSE file.
 ## Dependencies
 
 - **pgrx**: PostgreSQL extension framework for Rust
-- **redis**: Redis client library for Rust
+- **redis**: Redis client library for Rust with integrated R2D2 connection pooling support
+- **r2d2**: Generic connection pool library providing efficient connection management and reuse

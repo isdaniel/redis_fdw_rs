@@ -32,6 +32,9 @@ pub enum ConnectionFactoryError {
 
     #[error("Configuration validation failed: {0}")]
     ValidationFailed(String),
+
+    #[error("Connection pool error: {0}")]
+    PoolError(#[from] r2d2::Error),
 }
 
 pub type ConnectionFactoryResult<T> = Result<T, ConnectionFactoryError>;
@@ -158,22 +161,30 @@ impl RedisConnectionConfig {
 pub struct RedisConnectionFactory;
 
 impl RedisConnectionFactory {
+    const MAX_SIZE: u32 = 96;
     /// Create a Redis client based on configuration
-    fn create_client(config: &RedisConnectionConfig) -> ConnectionFactoryResult<Client> {
+    fn create_client_pool(config: &RedisConnectionConfig) -> ConnectionFactoryResult<r2d2::PooledConnection<Client>> {
         let url = config.get_single_node_url()?;
         log!("Creating single Redis node connection: {}", url);
-        let client = Client::open(url)?;
-        Ok(client)
+        let pool = r2d2::Pool::builder()
+            .max_size(Self::MAX_SIZE)
+            .build(Client::open(url)?)?;
+        let connection = pool.get().map_err(|e| ConnectionFactoryError::ConnectionFailed(e.to_string()))?;
+        Ok(connection)
     }
 
     /// Create a Redis cluster client based on configuration
-    fn create_cluster_client(
+    fn create_cluster_client_pool(
         config: &RedisConnectionConfig,
-    ) -> ConnectionFactoryResult<ClusterClient> {
+    ) -> ConnectionFactoryResult<r2d2::PooledConnection<ClusterClient>> {
         let nodes = config.parse_cluster_nodes()?;
         log!("Creating Redis cluster connection with nodes: {:?}", nodes);
-        let cluster_client = ClusterClient::new(nodes)?;
-        Ok(cluster_client)
+        let pool = r2d2::Pool::builder()
+            .max_size(Self::MAX_SIZE)
+            .build(ClusterClient::new(nodes)?)?;
+        let cluster_connection = pool.get()
+                .map_err(|e| ConnectionFactoryError::ConnectionFailed(e.to_string()))?;
+        Ok(cluster_connection)
     }
 
     /// Create a connection with retry logic
@@ -218,19 +229,11 @@ impl RedisConnectionFactory {
         config: &RedisConnectionConfig,
     ) -> ConnectionFactoryResult<RedisConnectionType> {
         if config.is_cluster_mode() {
-            let cluster_client = Self::create_cluster_client(config)?;
-            let cluster_connection = cluster_client
-                .get_connection()
-                .map_err(|e| ConnectionFactoryError::ConnectionFailed(e.to_string()))?;
-
-            Ok(RedisConnectionType::Cluster(cluster_connection))
+            let cluster_connetion_pool = Self::create_cluster_client_pool(config)?;
+            Ok(RedisConnectionType::Cluster(cluster_connetion_pool))
         } else {
-            let client = Self::create_client(config)?;
-            let connection = client
-                .get_connection()
-                .map_err(|e| ConnectionFactoryError::ConnectionFailed(e.to_string()))?;
-
-            Ok(RedisConnectionType::Single(connection))
+            let client_pool = Self::create_client_pool(config)?;
+            Ok(RedisConnectionType::Single(client_pool))
         }
     }
 }
