@@ -4,7 +4,7 @@
 use crate::{
     query::pushdown_types::{ComparisonOperator, PushableCondition, PushdownAnalysis},
     tables::types::RedisTableType,
-    utils::cell::Cell,
+    utils::{cell::Cell, utils::{relation_get_descr, tuple_desc_attr}},
 };
 use pgrx::{pg_sys, prelude::*};
 
@@ -16,6 +16,7 @@ impl WhereClausePushdown {
     pub unsafe fn analyze_scan_clauses(
         scan_clauses: *mut pg_sys::List,
         table_type: &RedisTableType,
+        relation: pg_sys::Relation, 
     ) -> PushdownAnalysis {
         let mut analysis = PushdownAnalysis {
             pushable_conditions: Vec::new(),
@@ -31,7 +32,7 @@ impl WhereClausePushdown {
         let clauses = Self::extract_clauses_from_list(scan_clauses);
 
         for clause in clauses {
-            if let Some(condition) = Self::analyze_expression(clause, table_type) {
+            if let Some(condition) = Self::analyze_expression(clause, table_type,relation) {
                 analysis.pushable_conditions.push(condition);
                 analysis.can_optimize = true;
             } else {
@@ -68,6 +69,7 @@ impl WhereClausePushdown {
     unsafe fn analyze_expression(
         node: *mut pg_sys::Node,
         table_type: &RedisTableType,
+        relation: pg_sys::Relation, 
     ) -> Option<PushableCondition> {
         if node.is_null() {
             return None;
@@ -75,14 +77,15 @@ impl WhereClausePushdown {
         //info!("Analyzing expression (*node).type_: {:?}", (*node).type_);
         match (*node).type_ {
             pg_sys::NodeTag::T_OpExpr => {
-                Self::analyze_op_expr(node as *mut pg_sys::OpExpr, table_type)
+                Self::analyze_op_expr(node as *mut pg_sys::OpExpr, table_type,relation)
             }
             pg_sys::NodeTag::T_ScalarArrayOpExpr => Self::analyze_scalar_array_op_expr(
                 node as *mut pg_sys::ScalarArrayOpExpr,
                 table_type,
+                relation,
             ),
             pg_sys::NodeTag::T_RestrictInfo => {
-                Self::analyze_restrict_info(node as *mut pg_sys::RestrictInfo, table_type)
+                Self::analyze_restrict_info(node as *mut pg_sys::RestrictInfo, table_type,relation)
             }
             _ => {
                 // Other expression types are not supported for pushdown yet
@@ -95,6 +98,7 @@ impl WhereClausePushdown {
     unsafe fn analyze_op_expr(
         op_expr: *mut pg_sys::OpExpr,
         table_type: &RedisTableType,
+        relation: pg_sys::Relation,
     ) -> Option<PushableCondition> {
         if op_expr.is_null() {
             return None;
@@ -111,7 +115,7 @@ impl WhereClausePushdown {
         let right_arg = pg_sys::list_nth(op_expr.args, 1) as *mut pg_sys::Node;
 
         // Extract column name and value
-        let (column_name, value) = Self::extract_column_and_value(left_arg, right_arg)?;
+        let (column_name, value) = Self::extract_column_and_value(left_arg, right_arg, relation)?;
         // Determine operator type based on operator OID
         let operator = Self::get_operator_from_oid(op_expr.opno)?;
 
@@ -131,6 +135,7 @@ impl WhereClausePushdown {
     unsafe fn analyze_restrict_info(
         restrict_info: *mut pg_sys::RestrictInfo,
         table_type: &RedisTableType,
+        relation: pg_sys::Relation,
     ) -> Option<PushableCondition> {
         if restrict_info.is_null() {
             return None;
@@ -147,13 +152,14 @@ impl WhereClausePushdown {
         }
 
         // Recursively analyze the wrapped clause
-        Self::analyze_expression(clause, table_type)
+        Self::analyze_expression(clause, table_type,relation)
     }
 
     /// Analyze scalar array operator expressions (IN, NOT IN)
     unsafe fn analyze_scalar_array_op_expr(
         array_op_expr: *mut pg_sys::ScalarArrayOpExpr,
         table_type: &RedisTableType,
+        relation:pg_sys::Relation,
     ) -> Option<PushableCondition> {
         if array_op_expr.is_null() {
             return None;
@@ -170,7 +176,7 @@ impl WhereClausePushdown {
         let right_arg = pg_sys::list_nth(array_op_expr.args, 1) as *mut pg_sys::Node;
 
         // Extract column name
-        let column_name = Self::extract_column_name(left_arg)?;
+        let column_name = Self::extract_column_name(left_arg,relation)?;
 
         // Determine if it's IN or NOT IN
         let operator = if array_op_expr.useOr {
@@ -353,10 +359,11 @@ impl WhereClausePushdown {
     unsafe fn extract_column_and_value(
         left_arg: *mut pg_sys::Node,
         right_arg: *mut pg_sys::Node,
+        relation: pg_sys::Relation,
     ) -> Option<(String, String)> {
         // Try left as column, right as value
         if let (Some(column), Some(value)) = (
-            Self::extract_column_name(left_arg),
+            Self::extract_column_name(left_arg,relation),
             Self::extract_constant_value(right_arg),
         ) {
             return Some((column, value));
@@ -364,7 +371,7 @@ impl WhereClausePushdown {
 
         // Try right as column, left as value (for cases like '5' = column)
         if let (Some(column), Some(value)) = (
-            Self::extract_column_name(right_arg),
+            Self::extract_column_name(right_arg,relation),
             Self::extract_constant_value(left_arg),
         ) {
             return Some((column, value));
@@ -374,25 +381,36 @@ impl WhereClausePushdown {
     }
 
     /// Extract column name from a Var node
-    unsafe fn extract_column_name(node: *mut pg_sys::Node) -> Option<String> {
+    unsafe fn extract_column_name(
+        node: *mut pg_sys::Node, 
+        relation: pg_sys::Relation
+    ) -> Option<String> {
         if node.is_null() {
             return None;
         }
-
+      
         match (*node).type_ {
             pg_sys::NodeTag::T_Var => {
                 let var = node as *mut pg_sys::Var;
-                let var_ref = &*var;
-
-                // Get the attribute name from the relation
-                // This is a simplified version - in practice, you'd need to look up
-                // the actual column name from the tuple descriptor
-                match var_ref.varattno {
-                    1 => Some("key".to_string()),   // First column is typically key/field
-                    2 => Some("value".to_string()), // Second column is typically value
-                    3 => Some("score".to_string()), // Third column (for zset) is typically score
-                    _ => Some(format!("col_{}", var_ref.varattno)),
+                let var_ref = *var;
+                
+                let tupdesc = relation_get_descr(relation);
+                if !tupdesc.is_null() {
+                    let attr_no = var_ref.varattno;
+                    // PostgreSQL attribute numbers are 1-based, but our array access is 0-based
+                    if attr_no > 0 && (attr_no as usize) <= (*tupdesc).natts as usize {
+                        let attr_idx = (attr_no - 1) as usize;
+                        let attr = tuple_desc_attr(tupdesc, attr_idx);
+                        if !attr.is_null() {
+                            let attr_ref = &*attr;
+                            let column_name = pgrx::name_data_to_str(&attr_ref.attname);
+                            return Some(column_name.to_string());
+                        }
+                    }
                 }
+                
+
+                None
             }
             _ => None,
         }

@@ -27,16 +27,7 @@ pub struct RedisStreamTable {
 }
 
 impl RedisStreamTable {
-    pub fn new() -> Self {
-        Self {
-            dataset: DataSet::Empty,
-            last_id: None,
-            batch_size: 1000, // Default batch size for large data sets
-        }
-    }
-
-    /// Create a new stream table with custom batch size for large data set handling
-    pub fn with_batch_size(batch_size: usize) -> Self {
+    pub fn new(batch_size: usize) -> Self {
         Self {
             dataset: DataSet::Empty,
             last_id: None,

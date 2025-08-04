@@ -157,8 +157,9 @@ impl RedisConnectionConfig {
 /// Redis connection factory for creating properly configured connections
 pub struct RedisConnectionFactory;
 
+//todo could be configured from options
 impl RedisConnectionFactory {
-    const MAX_SIZE: u32 = 96;
+    const MAX_SIZE: u32 = 64;
     /// Create a Redis client based on configuration
     fn create_client_pool(
         config: &RedisConnectionConfig,
@@ -166,7 +167,7 @@ impl RedisConnectionFactory {
         let url = config.get_single_node_url()?;
         log!("Creating single Redis node connection: {}", url);
         let pool = r2d2::Pool::builder()
-            .max_size(Self::MAX_SIZE)
+            .max_size(Self::MAX_SIZE) 
             .build(Client::open(url)?)?;
         let connection = pool
             .get()
@@ -181,7 +182,7 @@ impl RedisConnectionFactory {
         let nodes = config.parse_cluster_nodes()?;
         log!("Creating Redis cluster connection with nodes: {:?}", nodes);
         let pool = r2d2::Pool::builder()
-            .max_size(Self::MAX_SIZE)
+            .max_size(Self::MAX_SIZE) 
             .build(ClusterClient::new(nodes)?)?;
         let cluster_connection = pool
             .get()

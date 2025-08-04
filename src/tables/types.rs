@@ -31,7 +31,7 @@ impl RedisTableType {
             "list" => RedisTableType::List(RedisListTable::new()),
             "set" => RedisTableType::Set(RedisSetTable::new()),
             "zset" => RedisTableType::ZSet(RedisZSetTable::new()),
-            "stream" => RedisTableType::Stream(RedisStreamTable::new()),
+            "stream" => RedisTableType::Stream(RedisStreamTable::new(1000)),
             _ => RedisTableType::None,
         }
     }

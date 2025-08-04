@@ -8,7 +8,7 @@ mod tests {
 
     #[test]
     fn test_stream_table_creation() {
-        let table = RedisStreamTable::new();
+        let table = RedisStreamTable::new(1000);
         assert_eq!(table.batch_size, 1000);
         assert!(table.last_id.is_none());
         assert!(matches!(table.dataset, DataSet::Empty));
@@ -16,13 +16,13 @@ mod tests {
 
     #[test]
     fn test_stream_table_with_batch_size() {
-        let table = RedisStreamTable::with_batch_size(500);
+        let table = RedisStreamTable::new(500);
         assert_eq!(table.batch_size, 500);
     }
 
     #[test]
     fn test_supports_pushdown() {
-        let table = RedisStreamTable::new();
+        let table = RedisStreamTable::new(1000);
         assert!(table.supports_pushdown(&ComparisonOperator::Equal));
         assert!(table.supports_pushdown(&ComparisonOperator::NotEqual));
         assert!(table.supports_pushdown(&ComparisonOperator::Like));
@@ -46,7 +46,7 @@ mod tests {
     #[test]
     fn test_stream_add_entry_integration() {
         let mut conn = setup_redis_connection();
-        let mut table = RedisStreamTable::new();
+        let mut table = RedisStreamTable::new(1000);
         let test_key = "test:stream:add_entry";
 
         // Cleanup any existing test data
@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn test_stream_load_data_integration() {
         let mut conn = setup_redis_connection();
-        let mut table = RedisStreamTable::new();
+        let mut table = RedisStreamTable::new(1000);
         let test_key = "test:stream:load_data";
 
         // Cleanup any existing test data
@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn test_stream_large_data_batch_processing() {
         let mut conn = setup_redis_connection();
-        let mut table = RedisStreamTable::with_batch_size(5); // Small batch for testing
+        let mut table = RedisStreamTable::new(5); // Small batch for testing
         let test_key = "test:stream:batch_processing";
 
         // Cleanup any existing test data
@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn test_stream_insert_delete_operations() {
         let mut conn = setup_redis_connection();
-        let mut table = RedisStreamTable::new();
+        let mut table = RedisStreamTable::new(1000);
         let test_key = "test:stream:insert_delete";
 
         // Cleanup any existing test data
@@ -267,7 +267,7 @@ mod tests {
     #[test]
     fn test_stream_range_queries() {
         let mut conn = setup_redis_connection();
-        let mut table = RedisStreamTable::new();
+        let mut table = RedisStreamTable::new(1000);
         let test_key = "test:stream:range_queries";
 
         // Cleanup any existing test data
@@ -324,7 +324,7 @@ mod tests {
     #[test]
     fn test_stream_get_length() {
         let mut conn = setup_redis_connection();
-        let table = RedisStreamTable::new();
+        let table = RedisStreamTable::new(1000);
         let test_key = "test:stream:length";
 
         // Cleanup any existing test data
@@ -358,7 +358,7 @@ mod tests {
     #[test]
     fn test_stream_error_handling() {
         let mut conn = setup_redis_connection();
-        let mut table = RedisStreamTable::new();
+        let mut table = RedisStreamTable::new(1000);
 
         // Test with non-existent stream
         let result = table.load_data(&mut conn, "non:existent:stream", None);
