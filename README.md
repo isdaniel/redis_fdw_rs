@@ -811,6 +811,7 @@ cargo pgrx test pg14
 
 ### Planned Features
 - 🚧 Async operations support
+- 🚧 Custom connection-pool on option.
 - 🚧 Transaction support and rollback capabilities
 
 **Note**: UPDATE operations are intentionally not supported due to fundamental differences between Redis data models and SQL UPDATE semantics. Redis operations like HSET, SADD, etc. are inherently insert-or-update operations, making traditional SQL UPDATE behavior problematic.

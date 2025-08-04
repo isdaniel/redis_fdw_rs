@@ -119,8 +119,11 @@ unsafe extern "C-unwind" fn get_foreign_plan(
     PgMemoryContexts::For(state.tmp_ctx).switch_to(|_| {
         let relation = pg_sys::relation_open(foreigntableid, pg_sys::AccessShareLock as _);
         // Analyze WHERE clauses for pushdown opportunities
-        let pushdown_analysis =
-            WhereClausePushdown::analyze_scan_clauses(scan_clauses, &state.table_type, relation as _);
+        let pushdown_analysis = WhereClausePushdown::analyze_scan_clauses(
+            scan_clauses,
+            &state.table_type,
+            relation as _,
+        );
         log!("Pushdown analysis result: {:?}", pushdown_analysis);
         if pushdown_analysis.can_optimize {
             log!(

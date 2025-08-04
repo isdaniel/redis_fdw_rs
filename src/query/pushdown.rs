@@ -4,7 +4,10 @@
 use crate::{
     query::pushdown_types::{ComparisonOperator, PushableCondition, PushdownAnalysis},
     tables::types::RedisTableType,
-    utils::{cell::Cell, utils::{relation_get_descr, tuple_desc_attr}},
+    utils::{
+        cell::Cell,
+        utils::{relation_get_descr, tuple_desc_attr},
+    },
 };
 use pgrx::{pg_sys, prelude::*};
 
@@ -16,7 +19,7 @@ impl WhereClausePushdown {
     pub unsafe fn analyze_scan_clauses(
         scan_clauses: *mut pg_sys::List,
         table_type: &RedisTableType,
-        relation: pg_sys::Relation, 
+        relation: pg_sys::Relation,
     ) -> PushdownAnalysis {
         let mut analysis = PushdownAnalysis {
             pushable_conditions: Vec::new(),
@@ -32,7 +35,7 @@ impl WhereClausePushdown {
         let clauses = Self::extract_clauses_from_list(scan_clauses);
 
         for clause in clauses {
-            if let Some(condition) = Self::analyze_expression(clause, table_type,relation) {
+            if let Some(condition) = Self::analyze_expression(clause, table_type, relation) {
                 analysis.pushable_conditions.push(condition);
                 analysis.can_optimize = true;
             } else {
@@ -69,7 +72,7 @@ impl WhereClausePushdown {
     unsafe fn analyze_expression(
         node: *mut pg_sys::Node,
         table_type: &RedisTableType,
-        relation: pg_sys::Relation, 
+        relation: pg_sys::Relation,
     ) -> Option<PushableCondition> {
         if node.is_null() {
             return None;
@@ -77,7 +80,7 @@ impl WhereClausePushdown {
         //info!("Analyzing expression (*node).type_: {:?}", (*node).type_);
         match (*node).type_ {
             pg_sys::NodeTag::T_OpExpr => {
-                Self::analyze_op_expr(node as *mut pg_sys::OpExpr, table_type,relation)
+                Self::analyze_op_expr(node as *mut pg_sys::OpExpr, table_type, relation)
             }
             pg_sys::NodeTag::T_ScalarArrayOpExpr => Self::analyze_scalar_array_op_expr(
                 node as *mut pg_sys::ScalarArrayOpExpr,
@@ -85,7 +88,7 @@ impl WhereClausePushdown {
                 relation,
             ),
             pg_sys::NodeTag::T_RestrictInfo => {
-                Self::analyze_restrict_info(node as *mut pg_sys::RestrictInfo, table_type,relation)
+                Self::analyze_restrict_info(node as *mut pg_sys::RestrictInfo, table_type, relation)
             }
             _ => {
                 // Other expression types are not supported for pushdown yet
@@ -152,14 +155,14 @@ impl WhereClausePushdown {
         }
 
         // Recursively analyze the wrapped clause
-        Self::analyze_expression(clause, table_type,relation)
+        Self::analyze_expression(clause, table_type, relation)
     }
 
     /// Analyze scalar array operator expressions (IN, NOT IN)
     unsafe fn analyze_scalar_array_op_expr(
         array_op_expr: *mut pg_sys::ScalarArrayOpExpr,
         table_type: &RedisTableType,
-        relation:pg_sys::Relation,
+        relation: pg_sys::Relation,
     ) -> Option<PushableCondition> {
         if array_op_expr.is_null() {
             return None;
@@ -176,7 +179,7 @@ impl WhereClausePushdown {
         let right_arg = pg_sys::list_nth(array_op_expr.args, 1) as *mut pg_sys::Node;
 
         // Extract column name
-        let column_name = Self::extract_column_name(left_arg,relation)?;
+        let column_name = Self::extract_column_name(left_arg, relation)?;
 
         // Determine if it's IN or NOT IN
         let operator = if array_op_expr.useOr {
@@ -363,7 +366,7 @@ impl WhereClausePushdown {
     ) -> Option<(String, String)> {
         // Try left as column, right as value
         if let (Some(column), Some(value)) = (
-            Self::extract_column_name(left_arg,relation),
+            Self::extract_column_name(left_arg, relation),
             Self::extract_constant_value(right_arg),
         ) {
             return Some((column, value));
@@ -371,7 +374,7 @@ impl WhereClausePushdown {
 
         // Try right as column, left as value (for cases like '5' = column)
         if let (Some(column), Some(value)) = (
-            Self::extract_column_name(right_arg,relation),
+            Self::extract_column_name(right_arg, relation),
             Self::extract_constant_value(left_arg),
         ) {
             return Some((column, value));
@@ -382,18 +385,18 @@ impl WhereClausePushdown {
 
     /// Extract column name from a Var node
     unsafe fn extract_column_name(
-        node: *mut pg_sys::Node, 
-        relation: pg_sys::Relation
+        node: *mut pg_sys::Node,
+        relation: pg_sys::Relation,
     ) -> Option<String> {
         if node.is_null() {
             return None;
         }
-      
+
         match (*node).type_ {
             pg_sys::NodeTag::T_Var => {
                 let var = node as *mut pg_sys::Var;
                 let var_ref = *var;
-                
+
                 let tupdesc = relation_get_descr(relation);
                 if !tupdesc.is_null() {
                     let attr_no = var_ref.varattno;
@@ -408,7 +411,6 @@ impl WhereClausePushdown {
                         }
                     }
                 }
-                
 
                 None
             }
