@@ -269,11 +269,6 @@ help-build:
 	@echo "  make build        # Build for all versions"
 	@echo "  make install-pg15 # Install for PostgreSQL 15"
 
-# Advanced targets for maintainers
-security-audit:
-	@echo "Running security audit..."
-	cargo audit
-
 dependencies:
 	@echo "Updating dependencies..."
 	cargo update

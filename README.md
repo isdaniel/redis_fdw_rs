@@ -479,12 +479,12 @@ INSERT INTO redis_list_table VALUES
 | Set        | ✅     | ✅     | ❌     | ✅     | **Partial** (UPDATE not supported) |
 | ZSet       | ✅     | ✅     | ❌     | ✅     | **Partial** (UPDATE not supported) |
 | String     | ✅     | ✅     | ❌     | ✅     | **Partial** (UPDATE not supported) |
+| Stream     | ✅     | ✅     | ❌     | ✅     | **Full** (Large data set support with pagination) |
 
 ## Current Limitations
 
 - **Transactions**: Redis operations are not transactional with PostgreSQL
-- **Complex WHERE clauses**: Filtering happens at PostgreSQL level, not pushed down to Redis
-- **Large Data Sets**: All data for a table is loaded at scan initialization (not suitable for very large Redis keys)
+- **Large Data Sets**: For most table types, all data is loaded at scan initialization. Stream tables support efficient pagination for large data sets.
 
 ## Development
 
@@ -492,27 +492,32 @@ INSERT INTO redis_list_table VALUES
 ```
 src/
 ├── lib.rs                    # Clean entry point with organized imports
+├── auth/                     # Authentication module
+│   └── mod.rs               # Redis authentication handling
 ├── core/                     # Core FDW functionality  
 │   ├── mod.rs               # Module organization and re-exports
-│   ├── connection.rs        # Redis connection management
+│   ├── connection.rs        # Redis connection types and management
+│   ├── connection_factory.rs # Connection creation with R2D2 pooling
 │   ├── handlers.rs          # PostgreSQL FDW handlers  
 │   └── state.rs            # FDW state management
 ├── query/                   # Query processing & optimization
 │   ├── mod.rs              # Query module organization
 │   ├── pushdown.rs         # WHERE clause pushdown logic
-│   └── pushdown_types.rs   # Pushdown type definitions
+│   ├── pushdown_types.rs   # Pushdown type definitions
+│   └── scan_ops.rs         # Redis scan operation builders
 ├── tables/                  # Table implementations
 │   ├── mod.rs              # Tables module organization
 │   ├── interface.rs        # RedisTableOperations trait
 │   ├── types.rs           # Table type definitions (RedisTableType enum)
 │   └── implementations/    # Actual Redis table implementations
 │       ├── mod.rs         # Implementations organization
-│       ├── hash.rs        # Redis Hash table (was redis_hash_table.rs)
-│       ├── list.rs        # Redis List table (was redis_list_table.rs)
-│       ├── set.rs         # Redis Set table (was redis_set_table.rs)
-│       ├── string.rs      # Redis String table (was redis_string_table.rs)
-│       └── zset.rs        # Redis ZSet table (was redis_zset_table.rs)
-├── utils/                  # Utility functions (renamed from utils_share)
+│       ├── hash.rs        # Redis Hash table implementation
+│       ├── list.rs        # Redis List table implementation
+│       ├── set.rs         # Redis Set table implementation
+│       ├── string.rs      # Redis String table implementation
+│       ├── stream.rs      # Redis Stream table implementation
+│       └── zset.rs        # Redis ZSet table implementation
+├── utils/                  # Utility functions
 │   ├── mod.rs             # Utils module organization
 │   ├── cell.rs            # Cell data type handling
 │   ├── memory.rs          # Memory context management
@@ -520,9 +525,14 @@ src/
 │   └── utils.rs           # General utilities
 └── tests/                 # Organized test suite
     ├── mod.rs            # Test module organization
+    ├── auth_tests.rs     # Authentication tests
+    ├── basic_test.rs     # Basic functionality tests
     ├── core_tests.rs     # Core functionality tests
     ├── table_tests.rs    # Table implementation tests
+    ├── integration_tests.rs # Redis integration tests
+    ├── cluster_integration_tests.rs # Cluster integration tests
     ├── pushdown_tests.rs # Query pushdown tests
+    ├── stream_test.rs    # Stream-specific tests
     └── utils_tests.rs    # Utility function tests
 ```
 
@@ -672,15 +682,13 @@ SELECT EXISTS(SELECT 1 FROM user_roles WHERE member = 'admin');
 
 6. **UPDATE operations failing**: UPDATE operations are not supported by design and will not work with Redis FDW
 
-7. **DELETE operations failing on Lists**: DELETE operations for List type are not yet fully implemented
-
-8. **Connection pool exhaustion**: If you encounter connection timeout errors:
+7. **Connection pool exhaustion**: If you encounter connection timeout errors:
    - Check Redis server connection limits (`redis-cli CONFIG GET maxclients`)
    - Monitor connection pool usage in PostgreSQL logs
    - Consider increasing Redis server connection limits if needed
    - Default pool size is 10 connections per PostgreSQL backend
 
-9. **Connection timeouts**: If operations timeout frequently:
+8. **Connection timeouts**: If operations timeout frequently:
    - Verify network connectivity to Redis server
    - Check Redis server response times
    - Monitor PostgreSQL logs for connection pool events
@@ -722,6 +730,27 @@ cargo pgrx test pg17
 REDIS_HOST_PORT="127.0.0.1:8899" cargo pgrx test pg14
 ```
 
+### Performance and Load Testing
+
+The project includes dedicated performance tests in the `load_tests/` directory:
+
+```bash
+# Set up load testing environment
+cd load_tests
+./setup_load_test.sh
+
+# Run specific performance tests
+# These SQL scripts test various scenarios:
+# - hash_table_test.sql: Hash table performance
+# - list_table_test.sql: List operations performance  
+# - set_table_test.sql: Set operations performance
+# - string_table_test.sql: String operations performance
+# - zset_table_test.sql: Sorted set performance
+# - mixed_operations_test.sql: Mixed workload testing
+# - read_heavy_test.sql: Read-intensive scenarios
+# - write_heavy_test.sql: Write-intensive scenarios
+```
+
 ### Redis Cluster Testing
 
 This project includes comprehensive Redis cluster integration testing infrastructure:
@@ -729,22 +758,19 @@ This project includes comprehensive Redis cluster integration testing infrastruc
 #### Quick Start with Cluster Testing
 
 ```bash
-# 1. Validate your cluster testing setup
-./scripts/validate_cluster_setup.sh
-
-# 2. Start a Redis cluster using Docker Compose
+# 1. Start a Redis cluster using Docker Compose
 ./scripts/cluster_test.sh start
 
-# 3. Run integration tests against the cluster
+# 2. Run integration tests against the cluster
 ./scripts/cluster_test.sh test
 
-# 4. Monitor cluster status
+# 3. Monitor cluster status
 ./scripts/cluster_test.sh status
 
-# 5. View cluster logs
+# 4. View cluster logs
 ./scripts/cluster_test.sh logs
 
-# 6. Clean up when done
+# 5. Clean up when done
 ./scripts/cluster_test.sh cleanup
 ```
 
