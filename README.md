@@ -29,16 +29,30 @@ A high-performance Redis Foreign Data Wrapper (FDW) for PostgreSQL written in Ru
 ### Quick Start with Docker
 
 1. **Start Redis server:**
+
 ```bash
+# init single redis
 docker run -d --name redis-server -p 8899:6379 redis
 ```
 
-2. **Build and install the extension:**
 ```bash
-cargo pgrx install --release
+# init cluster reids
+docker-compose -f docker-compose.cluster-test.yml up -d
+```
+
+
+2. **Build and install the extension:**
+
+```bash
+cargo pgrx install --version 0.15.0
 ```
 
 3. **Create the extension in PostgreSQL:**
+
+```bash
+cargo pgrx run
+```
+
 ```sql
 CREATE EXTENSION redis_fdw_rs;
 ```
@@ -104,6 +118,70 @@ INSERT INTO event_log VALUES ('*', 'user_action', 'login', '123', '2024-01-01');
 INSERT INTO event_log VALUES ('*', 'user_action', 'purchase', '456', '2024-01-01');
 SELECT * FROM event_log ORDER BY stream_id;
 ```
+
+Example result.
+
+```sql
+redis_fdw_rs=# INSERT INTO user_profiles (key, value) 
+SELECT i, 'value_' || i
+FROM generate_series(1,100000) i;
+INSERT 0 100000
+Time: 12911.183 ms (00:12.911)
+redis_fdw_rs=# SELECT * FROM user_profiles where key = '5';
+ key |  value  
+-----+---------
+ 5   | value_5
+(1 row)
+
+Time: 15.380 ms
+redis_fdw_rs=# SELECT * FROM user_profiles where key in ('10', '15', '20');
+ key |  value   
+-----+----------
+ 10  | value_10
+ 15  | value_15
+ 20  | value_20
+(3 rows)
+
+redis_fdw_rs=#  SELECT * FROM user_profiles where key like '555%';
+  key  |    value    
+-------+-------------
+ 55556 | value_55556
+ 55581 | value_55581
+ 55569 | value_55569
+ 55561 | value_55561
+ 55516 | value_55516
+ 55538 | value_55538
+ 55549 | value_55549
+ 55539 | value_55539
+ 55531 | value_55531
+ 55545 | value_55545
+ 55590 | value_55590
+ 55512 | value_55512
+ 55523 | value_55523
+ 55534 | value_55534
+ 55518 | value_55518
+ 55560 | value_55560
+ 55564 | value_55564
+ 55592 | value_55592
+ 55572 | value_55572
+ 55519 | value_55519
+ 55526 | value_55526
+ 5559  | value_5559
+ 55530 | value_55530
+ 55511 | value_55511
+ 55562 | value_55562
+ 55542 | value_55542
+ 55582 | value_55582
+ 55580 | value_55580
+ 55501 | value_55501
+ 55540 | value_55540
+ 55554 | value_55554
+ 55546 | value_55546
+ 55513 | value_55513
+ 55548 | value_55548
+--More--
+```
+
 
 ## Configuration
 
@@ -185,6 +263,7 @@ OPTIONS (
 - **High availability**: Read/write operations continue during node failures
 
 **Cluster Usage Example:**
+
 ```sql
 -- Create a foreign table using cluster connection
 CREATE FOREIGN TABLE user_sessions (field TEXT, value TEXT) 
@@ -199,7 +278,6 @@ OPTIONS (
 INSERT INTO user_sessions VALUES ('user123', 'session_token_abc');
 SELECT * FROM user_sessions WHERE field = 'user123';
 ```
-
 
 ## Supported Redis Data Types (Usage Examples)
 
