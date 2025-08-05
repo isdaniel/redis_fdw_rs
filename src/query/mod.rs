@@ -5,6 +5,7 @@
 pub mod pushdown;
 pub mod pushdown_types;
 pub mod scan_ops;
+pub mod limit;
 
 // Re-export for convenience
 pub use pushdown::*;

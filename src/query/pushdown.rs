@@ -23,7 +23,6 @@ impl WhereClausePushdown {
     ) -> PushdownAnalysis {
         let mut analysis = PushdownAnalysis {
             pushable_conditions: Vec::new(),
-            remaining_conditions: Vec::new(),
             can_optimize: false,
         };
 
@@ -38,12 +37,7 @@ impl WhereClausePushdown {
             if let Some(condition) = Self::analyze_expression(clause, table_type, relation) {
                 analysis.pushable_conditions.push(condition);
                 analysis.can_optimize = true;
-            } else {
-                // Store the unpushable clause for later evaluation
-                analysis
-                    .remaining_conditions
-                    .push(format!("unpushable_clause_{}", clause as u64));
-            }
+            } 
         }
 
         analysis

@@ -23,6 +23,5 @@ pub enum ComparisonOperator {
 #[derive(Debug, Clone)]
 pub struct PushdownAnalysis {
     pub pushable_conditions: Vec<PushableCondition>,
-    pub remaining_conditions: Vec<String>, // Conditions that can't be pushed down
     pub can_optimize: bool,
 }

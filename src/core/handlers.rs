@@ -101,6 +101,7 @@ extern "C-unwind" fn get_foreign_paths(
     }
 }
 
+
 #[pg_guard]
 unsafe extern "C-unwind" fn get_foreign_plan(
     _root: *mut pgrx::pg_sys::PlannerInfo,
@@ -115,7 +116,8 @@ unsafe extern "C-unwind" fn get_foreign_plan(
 
     // Get the FDW state from baserel to analyze table type
     let mut state = PgBox::<RedisFdwState>::from_pg((*baserel).fdw_private as _);
-
+    // let limit = extract_limit(root);
+    // info!("Extracted limit: {:?}", limit);
     PgMemoryContexts::For(state.tmp_ctx).switch_to(|_| {
         let relation = pg_sys::relation_open(foreigntableid, pg_sys::AccessShareLock as _);
         // Analyze WHERE clauses for pushdown opportunities
@@ -124,14 +126,14 @@ unsafe extern "C-unwind" fn get_foreign_plan(
             &state.table_type,
             relation as _,
         );
-        log!("Pushdown analysis result: {:?}", pushdown_analysis);
+        info!("Pushdown analysis result: {:?}", pushdown_analysis);
         if pushdown_analysis.can_optimize {
-            log!(
+            info!(
                 "WHERE clause pushdown enabled with {} pushable conditions",
                 pushdown_analysis.pushable_conditions.len()
             );
         } else {
-            log!("No WHERE clause pushdown optimizations possible");
+            info!("No WHERE clause pushdown optimizations possible");
         }
 
         // Store the analysis in the state
