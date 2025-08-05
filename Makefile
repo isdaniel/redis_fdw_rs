@@ -53,114 +53,21 @@ build-release:
 	@echo "Building Redis FDW in release mode..."
 	cargo build --release
 
-# Install targets
+# Run install for all versions
 install: $(addprefix install-,$(PG_VERSIONS))
 
-install-pg14:
-	@echo "Installing Redis FDW for PostgreSQL 14..."
-	cargo pgrx install --pg-config "$$(cargo pgrx env pg14)"
+# Pattern rule for install
+install-%:
+	@echo "Installing Redis FDW for PostgreSQL $*..."
+	cargo pgrx install --pg-config "$$(cargo pgrx env $*)"
 
-install-pg15:
-	@echo "Installing Redis FDW for PostgreSQL 15..."
-	cargo pgrx install --pg-config "$$(cargo pgrx env pg15)"
+# Run all unit and integration tests for all versions
+test: $(foreach v,$(PG_VERSIONS), test-$(v))
 
-install-pg16:
-	@echo "Installing Redis FDW for PostgreSQL 16..."
-	cargo pgrx install --pg-config "$$(cargo pgrx env pg16)"
-
-install-pg17:
-	@echo "Installing Redis FDW for PostgreSQL 17..."
-	cargo pgrx install --pg-config "$$(cargo pgrx env pg17)"
-
-# Test targets
-test: $(addprefix test-unit-,$(PG_VERSIONS)) $(addprefix test-integration-,$(PG_VERSIONS))
-
-# Individual test types
-test-unit-pg14:
-	@echo "Running unit tests for PostgreSQL 14..."
-	cargo pgrx test pg14
-
-test-integration-pg14:
-	@echo "Running integration tests for PostgreSQL 14..."
-	cargo pgrx test pg14
-
-test-unit-pg15:
-	@echo "Running unit tests for PostgreSQL 15..."
-	cargo pgrx test pg15
-
-test-integration-pg15:
-	@echo "Running integration tests for PostgreSQL 15..."
-	cargo pgrx test pg15 
-
-# Individual test types
-test-unit-pg16:
-	@echo "Running unit tests for PostgreSQL 16..."
-	cargo pgrx test pg16
-
-test-integration-pg16:
-	@echo "Running integration tests for PostgreSQL 16..."
-	cargo pgrx test pg16 
-	
-# Individual test types
-test-unit-pg17:
-	@echo "Running unit tests for PostgreSQL 17..."
-	cargo pgrx test pg17
-
-test-integration-pg17:
-	@echo "Running integration tests for PostgreSQL 17..."
-	cargo pgrx test pg17 
-
-# Specific test functions
-test-hash:
-	@echo "Running hash table tests..."
-	cargo pgrx test pg15 -- test_hash_table_smoke
-
-test-list:
-	@echo "Running list table tests..."
-	cargo pgrx test pg15 -- test_list_table_smoke
-
-test-set:
-	@echo "Running set table tests..."
-	cargo pgrx test pg15 -- test_set_table_smoke
-
-test-string:
-	@echo "Running string table tests..."
-	cargo pgrx test pg15
-
-test-zset:
-	@echo "Running zset table tests..."
-	cargo pgrx test pg15 
-
-# Redis management
-setup-redis:
-	@echo "Setting up Redis for testing..."
-	@if command -v docker >/dev/null 2>&1; then \
-		echo "Starting Redis with Docker..."; \
-		docker run -d --name redis-fdw-test -p 8899:6379 redis:latest || \
-		echo "Redis container may already be running"; \
-	elif command -v redis-server >/dev/null 2>&1; then \
-		echo "Starting Redis server..."; \
-		redis-server --daemonize yes --port 8899; \
-	else \
-		echo "Error: Neither Docker nor redis-server found"; \
-		echo "Please install Redis or Docker to run integration tests"; \
-		exit 1; \
-	fi
-	@sleep 2
-	@$(MAKE) redis-status
-
-redis-status:
-	@echo "Checking Redis status..."
-	@if command -v redis-cli >/dev/null 2>&1; then \
-		if redis-cli ping >/dev/null 2>&1; then \
-			echo "✅ Redis is running and accessible"; \
-			redis-cli info server | grep redis_version; \
-		else \
-			echo "❌ Redis is not responding"; \
-		fi; \
-	else \
-		echo "⚠️  redis-cli not available"; \
-	fi
+# Pattern rule for unit tests
+test-%:
+	@echo "Running unit tests for PostgreSQL $*..."
+	cargo pgrx test $*
 
 # Development targets
 docs:
