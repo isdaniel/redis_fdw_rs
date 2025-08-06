@@ -1,6 +1,6 @@
 use crate::{
-    core::state::RedisFdwState,
-    query::{pushdown::WhereClausePushdown, limit::extract_limit_offset_info},
+    core::state_manager::RedisFdwState,
+    query::{limit::extract_limit_offset_info, pushdown::WhereClausePushdown},
     tables::types::RedisTableType,
     utils::{memory::create_wrappers_memctx, row::Row, utils::*},
 };
@@ -101,7 +101,6 @@ extern "C-unwind" fn get_foreign_paths(
     }
 }
 
-
 #[pg_guard]
 unsafe extern "C-unwind" fn get_foreign_plan(
     root: *mut pgrx::pg_sys::PlannerInfo,
@@ -116,20 +115,26 @@ unsafe extern "C-unwind" fn get_foreign_plan(
 
     // Get the FDW state from baserel to analyze table type
     let mut state = PgBox::<RedisFdwState>::from_pg((*baserel).fdw_private as _);
-    
+
     PgMemoryContexts::For(state.tmp_ctx).switch_to(|_| {
         let relation = pg_sys::relation_open(foreigntableid, pg_sys::AccessShareLock as _);
-        
+
         // Analyze WHERE clauses for pushdown opportunities
         let mut pushdown_analysis = WhereClausePushdown::analyze_scan_clauses(
             scan_clauses,
             &state.table_type,
             relation as _,
         );
-        log!("WHERE clause pushdown analysis result: {:?}", pushdown_analysis);
+        log!(
+            "WHERE clause pushdown analysis result: {:?}",
+            pushdown_analysis
+        );
 
         pushdown_analysis.set_limit_offset(extract_limit_offset_info(root));
-        log!("Extracted LIMIT/OFFSET info: {:?}", pushdown_analysis.limit_offset);
+        log!(
+            "Extracted LIMIT/OFFSET info: {:?}",
+            pushdown_analysis.limit_offset
+        );
         if pushdown_analysis.has_optimizations() {
             log!(
                 "Pushdown optimizations enabled: WHERE conditions={:?}, LIMIT/OFFSET={:?}",

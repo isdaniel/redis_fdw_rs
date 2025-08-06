@@ -1,15 +1,20 @@
+/// State management module for Redis FDW
+///
+/// This module contains simplified state management focused on
+/// configuration, connection status, and coordination between components.
 use crate::{
     core::{
         connection::RedisConnectionType,
         connection_factory::{RedisConnectionConfig, RedisConnectionFactory},
+        data_loader::RedisDataLoader,
     },
-    query::{limit::LimitOffsetInfo, pushdown_types::PushdownAnalysis},
-    tables::types::{LoadDataResult, RedisTableType},
+    query::pushdown_types::PushdownAnalysis,
+    tables::types::RedisTableType,
 };
 use pgrx::{pg_sys::MemoryContext, prelude::*};
 use std::collections::HashMap;
 
-/// Read FDW state
+/// Simplified Redis FDW state focused on state management
 pub struct RedisFdwState {
     pub tmp_ctx: MemoryContext,
     pub redis_connection: Option<RedisConnectionType>,
@@ -38,9 +43,7 @@ impl RedisFdwState {
             pushdown_analysis: None,
         }
     }
-}
 
-impl RedisFdwState {
     /// Initialize Redis connection using the connection factory with authentication
     /// Returns Result for proper error handling instead of panicking
     pub fn init_redis_connection_from_options(&mut self) -> Result<(), String> {
@@ -82,6 +85,7 @@ impl RedisFdwState {
         }
     }
 
+    /// Set table type and load data using the data loader
     pub fn set_table_type(&mut self) {
         let table_type = self
             .opts
@@ -90,86 +94,21 @@ impl RedisFdwState {
 
         self.table_type = RedisTableType::from_str(table_type);
 
-        // Load data from Redis (will be optimized if pushdown conditions exist)
-        self.load_data();
+        // Load data using the data loader
+        let _ = self.load_data();
     }
 
-    /// Load data from Redis, applying pushdown optimizations if available
-    fn load_data(&mut self) {
-        if let Some(conn) = self.redis_connection.as_mut() {
-            let conn_like = conn.as_connection_like_mut();
-            if let Some(ref analysis) = self.pushdown_analysis {
-                if analysis.has_optimizations() {
-                    // Apply pushdown conditions using the table type's unified method
-                    match self.table_type.load_data(
-                        conn_like,
-                        &self.table_key_prefix,
-                        Some(&analysis.pushable_conditions),
-                        analysis.limit_offset.as_ref().unwrap_or(&LimitOffsetInfo::default()),
-                    ) {
-                        Ok(LoadDataResult::PushdownApplied(mut filtered_data)) => {
-                            // Apply LIMIT/OFFSET if specified
-                            if let Some(ref limit_offset) = analysis.limit_offset {
-                                if limit_offset.has_constraints() {
-                                    log!(
-                                        "Applying LIMIT/OFFSET: limit={:?}, offset={:?}",
-                                        limit_offset.limit,
-                                        limit_offset.offset
-                                    );
-                                    // Apply limit/offset to the filtered data
-                                    let original_len = filtered_data.len();
-                                    filtered_data = limit_offset.apply_to_vec(filtered_data);
-                                    log!(
-                                        "LIMIT/OFFSET applied: {} -> {} rows",
-                                        original_len,
-                                        filtered_data.len()
-                                    );
-                                    // Update the internal data with the limited result
-                                    self.table_type.set_filtered_data(filtered_data);
-                                }
-                            }
-                            log!(
-                                "Pushdown optimization applied, loaded {} items with LIMIT/OFFSET",
-                                self.table_type.data_len()
-                            );
-                            return;
-                        }
-                        Ok(LoadDataResult::LoadedToInternal) => {
-                            // Data was loaded to internal storage, apply LIMIT/OFFSET if needed
-                            if let Some(ref limit_offset) = analysis.limit_offset {
-                                if limit_offset.has_constraints() {
-                                    log!(
-                                        "Applying LIMIT/OFFSET to internally loaded data: limit={:?}, offset={:?}",
-                                        limit_offset.limit,
-                                        limit_offset.offset
-                                    );
-                                }
-                            }
-                            log!("Data loaded into table internal storage with LIMIT/OFFSET applied");
-                            return;
-                        }
-                        Ok(LoadDataResult::Empty) => {
-                            log!("No data found for pushdown conditions");
-                            return;
-                        }
-                        Err(e) => {
-                            error!("Pushdown failed, falling back to full scan: {:?}", e);
-                        }
-                    }
-                } else if analysis.has_limit_pushdown() {
-                    // Only LIMIT/OFFSET pushdown, no WHERE conditions
-                    log!("Applying LIMIT/OFFSET only pushdown");
-                    if let Some(ref limit_offset) = analysis.limit_offset {
-                        self.table_type.load_data(conn_like, &self.table_key_prefix, None, limit_offset);
-                        return;
-                    }
-                }
-            }
-
-            // Fall back to loading all data without pushdown
-            let _ = self
-                .table_type
-                .load_data(conn_like, &self.table_key_prefix, None, &LimitOffsetInfo::default());
+    /// Load data using the dedicated data loader
+    fn load_data(&mut self) -> Result<(), String> {
+        if let Some(ref mut conn) = self.redis_connection {
+            let mut data_loader = RedisDataLoader::new(
+                &mut self.table_type,
+                &self.table_key_prefix,
+                self.pushdown_analysis.as_ref(),
+            );
+            data_loader.load_data(conn)
+        } else {
+            Err("Redis connection not initialized".to_string())
         }
     }
 
@@ -183,10 +122,12 @@ impl RedisFdwState {
         self.pushdown_analysis = Some(analysis);
     }
 
+    /// Check if we've read all available data
     pub fn is_read_end(&self) -> bool {
         self.row_count >= self.data_len() as u32
     }
 
+    /// Get the total number of data items
     pub fn data_len(&self) -> usize {
         self.table_type.data_len()
     }

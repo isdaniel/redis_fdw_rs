@@ -1,15 +1,14 @@
 use crate::{
     query::{
+        limit::LimitOffsetInfo,
         pushdown_types::{ComparisonOperator, PushableCondition},
         scan_ops::{extract_scan_conditions, RedisScanBuilder, ScanConditions},
-        limit::LimitOffsetInfo,
     },
     tables::{
         interface::RedisTableOperations,
         types::{DataContainer, DataSet, LoadDataResult},
     },
 };
-use pgrx::prelude::*;
 
 /// Redis Sorted Set table type
 #[derive(Debug, Clone, Default)]
@@ -104,7 +103,7 @@ impl RedisTableOperations for RedisZSetTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         conditions: Option<&[PushableCondition]>,
-        limit_offset: &LimitOffsetInfo
+        _limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(conditions) = conditions {
             let scan_conditions = extract_scan_conditions(conditions);
@@ -256,45 +255,6 @@ impl RedisTableOperations for RedisZSetTable {
             ComparisonOperator::Equal | ComparisonOperator::In | ComparisonOperator::Like
         )
     }
-
-    // fn apply_limit_offset(&mut self, limit_offset: &LimitOffsetInfo) {
-    //     match &mut self.dataset {
-    //         DataSet::Complete(DataContainer::ZSet(ref mut items)) => {
-    //             let original_items = std::mem::take(items);
-    //             let string_data: Vec<String> = original_items
-    //                 .iter()
-    //                 .map(|(member, score)| format!("{}:{}", member, score))
-    //                 .collect();
-    //             let limited_data = limit_offset.apply_to_vec(string_data);
-                
-    //             // Convert back to (member, score) pairs
-    //             *items = limited_data
-    //                 .into_iter()
-    //                 .filter_map(|item| {
-    //                     let parts: Vec<&str> = item.splitn(2, ':').collect();
-    //                     if parts.len() == 2 {
-    //                         if let Ok(score) = parts[1].parse::<f64>() {
-    //                             Some((parts[0].to_string(), score))
-    //                         } else {
-    //                             None
-    //                         }
-    //                     } else {
-    //                         None
-    //                     }
-    //                 })
-    //                 .collect();
-    //         }
-    //         DataSet::Filtered(ref mut data) => {
-    //             *data = limit_offset.apply_to_vec(std::mem::take(data));
-    //         }
-    //         DataSet::Empty => {
-    //             // Nothing to limit/offset
-    //         }
-    //         _ => {
-    //             log!("Warning: apply_limit_offset called on zset table with unexpected data container");
-    //         }
-    //     }
-    // }
 
     fn set_filtered_data(&mut self, data: Vec<String>) {
         self.dataset = DataSet::Filtered(data);

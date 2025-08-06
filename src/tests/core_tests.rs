@@ -2,9 +2,11 @@
 #[pgrx::pg_schema]
 mod tests {
     use crate::{
-        core::state::RedisFdwState,
-        tables::implementations::{RedisHashTable, RedisListTable},
-        tables::types::RedisTableType,
+        core::state_manager::RedisFdwState,
+        tables::{
+            implementations::{RedisHashTable, RedisListTable},
+            types::RedisTableType,
+        },
     };
     use pgrx::prelude::*;
     use std::ptr;
@@ -696,7 +698,6 @@ mod tests {
 
     #[pg_test]
     fn test_redis_cluster_connection_parsing() {
-        use crate::core::state::RedisFdwState;
         use std::collections::HashMap;
 
         // Test cluster node parsing

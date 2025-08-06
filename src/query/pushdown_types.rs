@@ -1,6 +1,5 @@
 /// WHERE clause pushdown condition types and analysis structures
 /// This module contains types used for analyzing and representing WHERE clause conditions
-
 use crate::query::limit::LimitOffsetInfo;
 
 /// Represents a pushable condition from WHERE clause
@@ -14,14 +13,14 @@ pub struct PushableCondition {
 /// Supported comparison operators for pushdown
 #[derive(Debug, Clone, PartialEq)]
 pub enum ComparisonOperator {
-    Equal,    // =
-    NotEqual, // <>
-    Like,     // LIKE
-    In,       // IN (...)
-    NotIn,    // NOT IN (...)
-    GreaterThan,      // >
+    Equal,              // =
+    NotEqual,           // <>
+    Like,               // LIKE
+    In,                 // IN (...)
+    NotIn,              // NOT IN (...)
+    GreaterThan,        // >
     GreaterThanOrEqual, // >=
-    LessThan,         // <
+    LessThan,           // <
     LessThanOrEqual,    // <=
 }
 
@@ -59,7 +58,10 @@ impl PushdownAnalysis {
         conditions: Vec<PushableCondition>,
         limit_offset: Option<LimitOffsetInfo>,
     ) -> Self {
-        let can_optimize = !conditions.is_empty() || limit_offset.as_ref().map_or(false, |lo| lo.has_constraints());
+        let can_optimize = !conditions.is_empty()
+            || limit_offset
+                .as_ref()
+                .map_or(false, |lo| lo.has_constraints());
         Self {
             pushable_conditions: conditions,
             can_optimize,
@@ -69,7 +71,9 @@ impl PushdownAnalysis {
 
     /// Set LIMIT/OFFSET information and update optimization flag
     pub fn set_limit_offset(&mut self, limit_offset: Option<LimitOffsetInfo>) {
-        let has_limit_constraints = limit_offset.as_ref().map_or(false, |lo| lo.has_constraints());
+        let has_limit_constraints = limit_offset
+            .as_ref()
+            .map_or(false, |lo| lo.has_constraints());
         self.limit_offset = limit_offset;
         self.can_optimize = !self.pushable_conditions.is_empty() || has_limit_constraints;
     }
@@ -81,6 +85,8 @@ impl PushdownAnalysis {
 
     /// Check if LIMIT/OFFSET pushdown is possible
     pub fn has_limit_pushdown(&self) -> bool {
-        self.limit_offset.as_ref().map_or(false, |lo| lo.has_constraints())
+        self.limit_offset
+            .as_ref()
+            .map_or(false, |lo| lo.has_constraints())
     }
 }

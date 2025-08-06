@@ -1,5 +1,8 @@
 use crate::{
-    query::{pushdown_types::{ComparisonOperator, PushableCondition}, limit::LimitOffsetInfo},
+    query::{
+        limit::LimitOffsetInfo,
+        pushdown_types::{ComparisonOperator, PushableCondition},
+    },
     tables::types::{DataSet, LoadDataResult},
 };
 
@@ -12,7 +15,7 @@ pub trait RedisTableOperations {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         conditions: Option<&[PushableCondition]>,
-        limit_offset: &LimitOffsetInfo
+        limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError>;
 
     /// Get the current dataset for this table
@@ -46,9 +49,6 @@ pub trait RedisTableOperations {
 
     /// Check if a specific condition can be pushed down for this table type
     fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool;
-
-    /// Apply LIMIT/OFFSET constraints to the internal data
-    //fn apply_limit_offset(&mut self, limit_offset: &LimitOffsetInfo);
 
     /// Set filtered data directly (used when external filtering is applied)
     fn set_filtered_data(&mut self, data: Vec<String>);

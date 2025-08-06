@@ -1,15 +1,14 @@
 use crate::{
     query::{
+        limit::LimitOffsetInfo,
         pushdown_types::{ComparisonOperator, PushableCondition},
         scan_ops::{extract_scan_conditions, ScanConditions},
-        limit::LimitOffsetInfo,
     },
     tables::{
         interface::RedisTableOperations,
         types::{DataContainer, DataSet, LoadDataResult},
     },
 };
-use pgrx::prelude::*;
 
 /// Redis List table type
 #[derive(Debug, Clone, Default)]
@@ -98,7 +97,7 @@ impl RedisTableOperations for RedisListTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         conditions: Option<&[PushableCondition]>,
-        limit_offset: &LimitOffsetInfo
+        _limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(conditions) = conditions {
             let scan_conditions = extract_scan_conditions(conditions);
@@ -187,24 +186,6 @@ impl RedisTableOperations for RedisListTable {
             ComparisonOperator::Equal | ComparisonOperator::Like
         )
     }
-
-    // fn apply_limit_offset(&mut self, limit_offset: &LimitOffsetInfo) {
-    //     match &mut self.dataset {
-    //         DataSet::Complete(DataContainer::List(ref mut items)) => {
-    //             let original_items = std::mem::take(items);
-    //             *items = limit_offset.apply_to_vec(original_items);
-    //         }
-    //         DataSet::Filtered(ref mut data) => {
-    //             *data = limit_offset.apply_to_vec(std::mem::take(data));
-    //         }
-    //         DataSet::Empty => {
-    //             // Nothing to limit/offset
-    //         }
-    //         _ => {
-    //             log!("Warning: apply_limit_offset called on list table with unexpected data container");
-    //         }
-    //     }
-    // }
 
     fn set_filtered_data(&mut self, data: Vec<String>) {
         self.dataset = DataSet::Filtered(data);

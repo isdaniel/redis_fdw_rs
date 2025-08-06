@@ -4,12 +4,12 @@ mod tests {
     use crate::{
         query::{
             limit::LimitOffsetInfo,
-            pushdown_types::{PushdownAnalysis, PushableCondition, ComparisonOperator},
+            pushdown_types::{ComparisonOperator, PushableCondition, PushdownAnalysis},
         },
         tables::{
-            types::{DataSet, DataContainer},
-            implementations::{RedisStringTable, RedisListTable, RedisHashTable},
+            implementations::{RedisHashTable, RedisListTable, RedisStringTable},
             interface::RedisTableOperations,
+            types::{DataContainer, DataSet},
         },
     };
     use pgrx::prelude::*;
@@ -32,8 +32,13 @@ mod tests {
 
     #[test]
     fn test_limit_offset_apply_to_vec() {
-        let data = vec!["item1".to_string(), "item2".to_string(), "item3".to_string(), 
-                       "item4".to_string(), "item5".to_string()];
+        let data = vec![
+            "item1".to_string(),
+            "item2".to_string(),
+            "item3".to_string(),
+            "item4".to_string(),
+            "item5".to_string(),
+        ];
 
         // Test LIMIT only
         let limit_info = LimitOffsetInfo::with_limit_offset(Some(3), None);
@@ -93,36 +98,36 @@ mod tests {
             value: "pattern%".to_string(),
         }];
         let limit_info = LimitOffsetInfo::with_limit_offset(Some(10), None);
-        let combined_analysis = PushdownAnalysis::with_conditions_and_limit(conditions, Some(limit_info));
+        let combined_analysis =
+            PushdownAnalysis::with_conditions_and_limit(conditions, Some(limit_info));
         assert!(combined_analysis.has_optimizations());
         assert!(combined_analysis.has_limit_pushdown());
         assert_eq!(combined_analysis.pushable_conditions.len(), 1);
     }
-
 
     #[test]
     fn test_set_filtered_data() {
         let mut string_table = RedisStringTable::new();
         let mut list_table = RedisListTable::new();
         let mut hash_table = RedisHashTable::new();
-        
+
         let test_data = vec!["data1".to_string(), "data2".to_string()];
-        
+
         // Test set_filtered_data for all table types
         string_table.set_filtered_data(test_data.clone());
         list_table.set_filtered_data(test_data.clone());
         hash_table.set_filtered_data(test_data.clone());
-        
+
         match &string_table.dataset {
             DataSet::Filtered(data) => assert_eq!(data, &test_data),
             _ => panic!("Expected Filtered dataset for string table"),
         }
-        
+
         match &list_table.dataset {
             DataSet::Filtered(data) => assert_eq!(data, &test_data),
             _ => panic!("Expected Filtered dataset for list table"),
         }
-        
+
         match &hash_table.dataset {
             DataSet::Filtered(data) => assert_eq!(data, &test_data),
             _ => panic!("Expected Filtered dataset for hash table"),
@@ -133,8 +138,13 @@ mod tests {
     #[test]
     fn pg_test_limit_offset_basic_functionality() {
         // Test basic LIMIT/OFFSET data manipulation
-        let data = vec!["a".to_string(), "b".to_string(), "c".to_string(), 
-                       "d".to_string(), "e".to_string()];
+        let data = vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+            "e".to_string(),
+        ];
 
         // LIMIT 3
         let limit_info = LimitOffsetInfo::with_limit_offset(Some(3), None);
@@ -181,7 +191,7 @@ mod tests {
     fn pg_test_pushdown_analysis_integration() {
         // Test that PushdownAnalysis properly handles LIMIT/OFFSET
         let mut analysis = PushdownAnalysis::new();
-        
+
         // Initially no optimizations
         assert!(!analysis.has_optimizations());
         assert!(!analysis.has_limit_pushdown());
@@ -189,11 +199,11 @@ mod tests {
         // Add LIMIT/OFFSET
         let limit_info = LimitOffsetInfo::with_limit_offset(Some(10), Some(5));
         analysis.set_limit_offset(Some(limit_info));
-        
+
         // Should now have optimizations
         assert!(analysis.has_optimizations());
         assert!(analysis.has_limit_pushdown());
-        
+
         // Verify the stored LIMIT/OFFSET info
         assert!(analysis.limit_offset.is_some());
         let stored_info = analysis.limit_offset.as_ref().unwrap();

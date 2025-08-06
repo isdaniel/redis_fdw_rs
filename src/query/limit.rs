@@ -1,11 +1,11 @@
-use pgrx::{pg_sys, FromDatum, prelude::*};
+use pgrx::{pg_sys, prelude::*, FromDatum};
 
 /// Represents LIMIT and OFFSET constraints that can be pushed down to Redis
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct LimitOffsetInfo {
     /// The maximum number of rows to return (LIMIT clause)
     pub limit: Option<usize>,
-    /// The number of rows to skip (OFFSET clause) 
+    /// The number of rows to skip (OFFSET clause)
     pub offset: Option<usize>,
 }
 
@@ -49,12 +49,10 @@ impl LimitOffsetInfo {
 }
 
 /// Extract LIMIT and OFFSET information from PostgreSQL planner
-/// 
+///
 /// # Safety
 /// This function assumes valid pointers and proper PostgreSQL context
-pub unsafe fn extract_limit_offset_info(
-    root: *mut pg_sys::PlannerInfo,
-) -> Option<LimitOffsetInfo> {
+pub unsafe fn extract_limit_offset_info(root: *mut pg_sys::PlannerInfo) -> Option<LimitOffsetInfo> {
     if root.is_null() {
         return None;
     }
@@ -69,7 +67,9 @@ pub unsafe fn extract_limit_offset_info(
 
     // Extract LIMIT count if present
     let limit_count = (*parse).limitCount as *mut pg_sys::Const;
-    if !limit_count.is_null() && pgrx::is_a(limit_count as *mut pg_sys::Node, pg_sys::NodeTag::T_Const) {
+    if !limit_count.is_null()
+        && pgrx::is_a(limit_count as *mut pg_sys::Node, pg_sys::NodeTag::T_Const)
+    {
         if let Some(count) = i64::from_polymorphic_datum(
             (*limit_count).constvalue,
             (*limit_count).constisnull,
@@ -85,7 +85,9 @@ pub unsafe fn extract_limit_offset_info(
 
     // Extract OFFSET if present
     let limit_offset = (*parse).limitOffset as *mut pg_sys::Const;
-    if !limit_offset.is_null() && pgrx::is_a(limit_offset as *mut pg_sys::Node, pg_sys::NodeTag::T_Const) {
+    if !limit_offset.is_null()
+        && pgrx::is_a(limit_offset as *mut pg_sys::Node, pg_sys::NodeTag::T_Const)
+    {
         if let Some(offset) = i64::from_polymorphic_datum(
             (*limit_offset).constvalue,
             (*limit_offset).constisnull,
