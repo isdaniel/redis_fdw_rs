@@ -21,10 +21,7 @@ impl WhereClausePushdown {
         table_type: &RedisTableType,
         relation: pg_sys::Relation,
     ) -> PushdownAnalysis {
-        let mut analysis = PushdownAnalysis {
-            pushable_conditions: Vec::new(),
-            can_optimize: false,
-        };
+        let mut analysis = PushdownAnalysis::new();
 
         if scan_clauses.is_null() {
             return analysis;
@@ -71,7 +68,8 @@ impl WhereClausePushdown {
         if node.is_null() {
             return None;
         }
-        //info!("Analyzing expression (*node).type_: {:?}", (*node).type_);
+        
+        //log!("Analyzing expression (*node).type_: {:?}", (*node).type_);
         match (*node).type_ {
             pg_sys::NodeTag::T_OpExpr => {
                 Self::analyze_op_expr(node as *mut pg_sys::OpExpr, table_type, relation)
@@ -439,13 +437,26 @@ impl WhereClausePushdown {
         }
     }
 
+    /*
+        This function is a placeholder for looking up operator names from PostgreSQL's system catalog.
+        It would typically involve executing a SQL query like:
+
+        SELECT oid, oprname, oprleft::regtype, oprright::regtype
+        FROM pg_operator
+        WHERE oid IN (oid...);
+    */
     /// Determine operator type from PostgreSQL operator OID
+    /// Currently only supports a few common operators from Text type
     unsafe fn get_operator_from_oid(op_oid: pg_sys::Oid) -> Option<ComparisonOperator> {
         let oid_val = op_oid.to_u32();
         match oid_val {
             98 => Some(ComparisonOperator::Equal),     // text = text
             531 => Some(ComparisonOperator::NotEqual), // text <> text
             1209 => Some(ComparisonOperator::Like),    // text LIKE text
+            664 => Some(ComparisonOperator::LessThan),  // text < text
+            665 => Some(ComparisonOperator::LessThanOrEqual), // text <= text
+            666 => Some(ComparisonOperator::GreaterThan), // text > text
+            667 => Some(ComparisonOperator::GreaterThanOrEqual), // text >= text
             _ => {
                 // Look up operator name from system catalog
                 Self::lookup_operator_name(op_oid)

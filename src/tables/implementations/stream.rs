@@ -2,6 +2,7 @@ use crate::{
     query::{
         pushdown_types::{ComparisonOperator, PushableCondition},
         scan_ops::extract_scan_conditions,
+        limit::LimitOffsetInfo,
     },
     tables::{
         interface::RedisTableOperations,
@@ -168,6 +169,32 @@ impl RedisStreamTable {
         let len: usize = redis::cmd("XLEN").arg(key_prefix).query(conn)?;
         Ok(len)
     }
+
+    /// Format stream data for display (used for LIMIT/OFFSET operations)
+    fn format_stream_data(&self, entries: &[(String, Vec<(String, String)>)]) -> Vec<String> {
+        entries.iter().map(|(id, fields)| {
+            let fields_str = fields
+                .iter()
+                .map(|(field, value)| format!("{}:{}", field, value))
+                .collect::<Vec<_>>()
+                .join("|");
+            format!("{}:{}", id, fields_str)
+        }).collect()
+    }
+
+    /// Extract stream data as strings for filtering/limiting
+    fn extract_stream_data(&self) -> Option<Vec<String>> {
+        match &self.dataset {
+            DataSet::Complete(_) => {
+                // For streams, we need to construct the data representation
+                // This is a simplified version - in practice, you might want to
+                // get the actual stream data from the complete dataset
+                Some(Vec::new()) // Placeholder implementation
+            }
+            DataSet::Filtered(data) => Some(data.clone()),
+            DataSet::Empty => None,
+        }
+    }
 }
 
 impl RedisTableOperations for RedisStreamTable {
@@ -176,6 +203,7 @@ impl RedisTableOperations for RedisStreamTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         conditions: Option<&[PushableCondition]>,
+        limit_offset: &LimitOffsetInfo
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(conditions) = conditions {
             let scan_conditions = extract_scan_conditions(conditions);
@@ -267,5 +295,27 @@ impl RedisTableOperations for RedisStreamTable {
             operator,
             ComparisonOperator::Equal | ComparisonOperator::NotEqual | ComparisonOperator::Like
         )
+    }
+
+    // fn apply_limit_offset(&mut self, limit_offset: &LimitOffsetInfo) {
+    //     match &mut self.dataset {
+    //         DataSet::Filtered(ref mut data) => {
+    //             *data = limit_offset.apply_to_vec(std::mem::take(data));
+    //         }
+    //         DataSet::Complete(_) => {
+    //             // For streams with complete data, we need to extract and limit
+    //             if let Some(data) = self.extract_stream_data() {
+    //                 let limited_data = limit_offset.apply_to_vec(data);
+    //                 self.dataset = DataSet::Filtered(limited_data);
+    //             }
+    //         }
+    //         DataSet::Empty => {
+    //             // Nothing to limit/offset
+    //         }
+    //     }
+    // }
+
+    fn set_filtered_data(&mut self, data: Vec<String>) {
+        self.dataset = DataSet::Filtered(data);
     }
 }
