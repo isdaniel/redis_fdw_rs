@@ -2,7 +2,7 @@
 #[pgrx::pg_schema]
 mod tests {
     use crate::{
-        query::ComparisonOperator,
+        query::{limit::LimitOffsetInfo, ComparisonOperator},
         tables::{DataSet, RedisStreamTable, RedisTableOperations},
     };
 
@@ -140,7 +140,7 @@ mod tests {
             .expect("Failed to add test entry 3");
 
         // Test loading data without conditions
-        let result = table.load_data(&mut conn, test_key, None);
+        let result = table.load_data(&mut conn, test_key, None, &LimitOffsetInfo::default());
         assert!(result.is_ok());
 
         match result.unwrap() {
@@ -193,7 +193,7 @@ mod tests {
         }
 
         // Load data with batch processing
-        let result = table.load_data(&mut conn, test_key, None);
+        let result = table.load_data(&mut conn, test_key, None, &LimitOffsetInfo::default());
         assert!(result.is_ok());
 
         // Should load only the first batch (5 entries due to batch_size)
@@ -306,7 +306,7 @@ mod tests {
             value: "2000000000000-0".to_string(),
         };
 
-        let range_result = table.load_data(&mut conn, test_key, Some(&[condition]));
+        let range_result = table.load_data(&mut conn, test_key, Some(&[condition]), &LimitOffsetInfo::default());
         assert!(range_result.is_ok());
 
         // Should load the specific entry
@@ -361,7 +361,7 @@ mod tests {
         let mut table = RedisStreamTable::new(1000);
 
         // Test with non-existent stream
-        let result = table.load_data(&mut conn, "non:existent:stream", None);
+        let result = table.load_data(&mut conn, "non:existent:stream", None, &LimitOffsetInfo::default());
         assert!(result.is_ok());
 
         match result.unwrap() {

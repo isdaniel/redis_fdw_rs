@@ -1,7 +1,7 @@
 /// Redis FDW data types and enums
 /// This module contains the core data type definitions used throughout the Redis FDW
 use crate::{
-    query::pushdown_types::{ComparisonOperator, PushableCondition},
+    query::{pushdown_types::{ComparisonOperator, PushableCondition}, limit::LimitOffsetInfo},
     tables::{
         implementations::{
             RedisHashTable, RedisListTable, RedisSetTable, RedisStreamTable, RedisStringTable,
@@ -41,14 +41,15 @@ impl RedisTableType {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         conditions: Option<&[PushableCondition]>,
+        limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         match self {
-            RedisTableType::String(table) => table.load_data(conn, key_prefix, conditions),
-            RedisTableType::Hash(table) => table.load_data(conn, key_prefix, conditions),
-            RedisTableType::List(table) => table.load_data(conn, key_prefix, conditions),
-            RedisTableType::Set(table) => table.load_data(conn, key_prefix, conditions),
-            RedisTableType::ZSet(table) => table.load_data(conn, key_prefix, conditions),
-            RedisTableType::Stream(table) => table.load_data(conn, key_prefix, conditions),
+            RedisTableType::String(table) => table.load_data(conn, key_prefix, conditions, limit_offset),
+            RedisTableType::Hash(table) => table.load_data(conn, key_prefix, conditions, limit_offset),
+            RedisTableType::List(table) => table.load_data(conn, key_prefix, conditions, limit_offset),
+            RedisTableType::Set(table) => table.load_data(conn, key_prefix, conditions, limit_offset),
+            RedisTableType::ZSet(table) => table.load_data(conn, key_prefix, conditions, limit_offset),
+            RedisTableType::Stream(table) => table.load_data(conn, key_prefix, conditions, limit_offset),
             RedisTableType::None => Ok(LoadDataResult::Empty),
         }
     }
@@ -121,6 +122,32 @@ impl RedisTableType {
             RedisTableType::ZSet(table) => table.supports_pushdown(operator),
             RedisTableType::Stream(table) => table.supports_pushdown(operator),
             RedisTableType::None => false,
+        }
+    }
+
+    /// Apply LIMIT/OFFSET constraints to the internal data
+    // pub fn apply_limit_offset(&mut self, limit_offset: &LimitOffsetInfo) {
+    //     match self {
+    //         RedisTableType::String(table) => table.apply_limit_offset(limit_offset),
+    //         RedisTableType::Hash(table) => table.apply_limit_offset(limit_offset),
+    //         RedisTableType::List(table) => table.apply_limit_offset(limit_offset),
+    //         RedisTableType::Set(table) => table.apply_limit_offset(limit_offset),
+    //         RedisTableType::ZSet(table) => table.apply_limit_offset(limit_offset),
+    //         RedisTableType::Stream(table) => table.apply_limit_offset(limit_offset),
+    //         RedisTableType::None => {} // No-op for None type
+    //     }
+    // }
+
+    /// Set filtered data result directly (for external filtering)
+    pub fn set_filtered_data(&mut self, data: Vec<String>) {
+        match self {
+            RedisTableType::String(table) => table.set_filtered_data(data),
+            RedisTableType::Hash(table) => table.set_filtered_data(data),
+            RedisTableType::List(table) => table.set_filtered_data(data),
+            RedisTableType::Set(table) => table.set_filtered_data(data),
+            RedisTableType::ZSet(table) => table.set_filtered_data(data),
+            RedisTableType::Stream(table) => table.set_filtered_data(data),
+            RedisTableType::None => {} // No-op for None type
         }
     }
 }

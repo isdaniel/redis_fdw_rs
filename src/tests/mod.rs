@@ -19,6 +19,9 @@ pub mod utils_tests;
 pub mod basic_test;
 
 #[cfg(any(test, feature = "pg_test"))]
+pub mod limit_offset_tests;
+
+#[cfg(any(test, feature = "pg_test"))]
 pub mod integration_tests;
 
 #[cfg(any(test, feature = "pg_test"))]
