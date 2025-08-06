@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use crate::{
     query::{
+        limit::LimitOffsetInfo,
         pushdown_types::{ComparisonOperator, PushableCondition},
         scan_ops::{extract_scan_conditions, PatternMatcher, RedisScanBuilder},
-        limit::LimitOffsetInfo,
     },
     tables::{
         interface::RedisTableOperations,
@@ -33,12 +33,10 @@ impl RedisHashTable {
         scan_conditions: &crate::query::scan_ops::ScanConditions,
         limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
-
-
         if let Some(pattern) = scan_conditions.get_primary_pattern() {
             let pattern_matcher = PatternMatcher::from_like_pattern(&pattern);
             let limit = limit_offset.limit.unwrap_or(100 as usize);
-            
+
             if pattern_matcher.requires_scan() {
                 // Use HSCAN with MATCH to find matching fields
                 let matching_fields: Vec<String> = RedisScanBuilder::new_hash_scan(key_prefix)
@@ -123,7 +121,12 @@ impl RedisTableOperations for RedisHashTable {
 
             // Check for SCAN-optimizable conditions first
             if scan_conditions.has_optimizable_conditions() {
-                return self.load_with_scan_optimization(conn, key_prefix, &scan_conditions, limit_offset);
+                return self.load_with_scan_optimization(
+                    conn,
+                    key_prefix,
+                    &scan_conditions,
+                    limit_offset,
+                );
             }
 
             // Legacy optimization for non-pattern conditions
@@ -251,41 +254,6 @@ impl RedisTableOperations for RedisHashTable {
             ComparisonOperator::Equal | ComparisonOperator::In | ComparisonOperator::Like
         )
     }
-
-    // fn apply_limit_offset(&mut self, limit_offset: &LimitOffsetInfo) {
-    //     match &mut self.dataset {
-    //         DataSet::Complete(DataContainer::Hash(ref mut pairs)) => {
-    //             let original_pairs = std::mem::take(pairs);
-    //             let string_data: Vec<String> = original_pairs
-    //                 .iter()
-    //                 .map(|(k, v)| format!("{}:{}", k, v))
-    //                 .collect();
-    //             let limited_data = limit_offset.apply_to_vec(string_data);
-                
-    //             // Convert back to key-value pairs
-    //             *pairs = limited_data
-    //                 .into_iter()
-    //                 .filter_map(|item| {
-    //                     let parts: Vec<&str> = item.splitn(2, ':').collect();
-    //                     if parts.len() == 2 {
-    //                         Some((parts[0].to_string(), parts[1].to_string()))
-    //                     } else {
-    //                         None
-    //                     }
-    //                 })
-    //                 .collect();
-    //         }
-    //         DataSet::Filtered(ref mut data) => {
-    //             *data = limit_offset.apply_to_vec(std::mem::take(data));
-    //         }
-    //         DataSet::Empty => {
-    //             // Nothing to limit/offset
-    //         }
-    //         _ => {
-    //             pgrx::log!("Warning: apply_limit_offset called on hash table with unexpected data container");
-    //         }
-    //     }
-    // }
 
     fn set_filtered_data(&mut self, data: Vec<String>) {
         self.dataset = DataSet::Filtered(data);

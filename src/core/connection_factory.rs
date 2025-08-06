@@ -167,7 +167,7 @@ impl RedisConnectionFactory {
         let url = config.get_single_node_url()?;
         log!("Creating single Redis node connection: {}", url);
         let pool = r2d2::Pool::builder()
-            .max_size(Self::MAX_SIZE) 
+            .max_size(Self::MAX_SIZE)
             .build(Client::open(url)?)?;
         let connection = pool
             .get()
@@ -182,7 +182,7 @@ impl RedisConnectionFactory {
         let nodes = config.parse_cluster_nodes()?;
         log!("Creating Redis cluster connection with nodes: {:?}", nodes);
         let pool = r2d2::Pool::builder()
-            .max_size(Self::MAX_SIZE) 
+            .max_size(Self::MAX_SIZE)
             .build(ClusterClient::new(nodes)?)?;
         let cluster_connection = pool
             .get()

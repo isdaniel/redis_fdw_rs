@@ -1,13 +1,17 @@
 /// Redis FDW data types and enums
 /// This module contains the core data type definitions used throughout the Redis FDW
 use crate::{
-    query::{pushdown_types::{ComparisonOperator, PushableCondition}, limit::LimitOffsetInfo},
+    query::{
+        limit::LimitOffsetInfo,
+        pushdown_types::{ComparisonOperator, PushableCondition},
+    },
     tables::{
         implementations::{
             RedisHashTable, RedisListTable, RedisSetTable, RedisStreamTable, RedisStringTable,
             RedisZSetTable,
         },
         interface::RedisTableOperations,
+        macros::{table_dispatch, table_dispatch_mut_result, table_dispatch_mut_void},
     },
 };
 
@@ -43,39 +47,15 @@ impl RedisTableType {
         conditions: Option<&[PushableCondition]>,
         limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
-        match self {
-            RedisTableType::String(table) => table.load_data(conn, key_prefix, conditions, limit_offset),
-            RedisTableType::Hash(table) => table.load_data(conn, key_prefix, conditions, limit_offset),
-            RedisTableType::List(table) => table.load_data(conn, key_prefix, conditions, limit_offset),
-            RedisTableType::Set(table) => table.load_data(conn, key_prefix, conditions, limit_offset),
-            RedisTableType::ZSet(table) => table.load_data(conn, key_prefix, conditions, limit_offset),
-            RedisTableType::Stream(table) => table.load_data(conn, key_prefix, conditions, limit_offset),
-            RedisTableType::None => Ok(LoadDataResult::Empty),
-        }
+        table_dispatch_mut_result!(self, load_data(conn, key_prefix, conditions, limit_offset))
     }
 
     pub fn data_len(&self) -> usize {
-        match self {
-            RedisTableType::String(table) => table.data_len(),
-            RedisTableType::Hash(table) => table.data_len(),
-            RedisTableType::List(table) => table.data_len(),
-            RedisTableType::Set(table) => table.data_len(),
-            RedisTableType::ZSet(table) => table.data_len(),
-            RedisTableType::Stream(table) => table.data_len(),
-            RedisTableType::None => 0,
-        }
+        table_dispatch!(self, data_len() -> 0)
     }
 
     pub fn get_row(&self, index: usize) -> Option<Vec<String>> {
-        match self {
-            RedisTableType::String(table) => table.get_row(index),
-            RedisTableType::Hash(table) => table.get_row(index),
-            RedisTableType::List(table) => table.get_row(index),
-            RedisTableType::Set(table) => table.get_row(index),
-            RedisTableType::ZSet(table) => table.get_row(index),
-            RedisTableType::Stream(table) => table.get_row(index),
-            RedisTableType::None => None,
-        }
+        table_dispatch!(self, get_row(index) -> None)
     }
 
     pub fn insert(
@@ -84,15 +64,7 @@ impl RedisTableType {
         key_prefix: &str,
         data: &[String],
     ) -> Result<(), redis::RedisError> {
-        match self {
-            RedisTableType::String(table) => table.insert(conn, key_prefix, data),
-            RedisTableType::Hash(table) => table.insert(conn, key_prefix, data),
-            RedisTableType::List(table) => table.insert(conn, key_prefix, data),
-            RedisTableType::Set(table) => table.insert(conn, key_prefix, data),
-            RedisTableType::ZSet(table) => table.insert(conn, key_prefix, data),
-            RedisTableType::Stream(table) => table.insert(conn, key_prefix, data),
-            RedisTableType::None => Ok(()),
-        }
+        table_dispatch_mut_result!(self, insert(conn, key_prefix, data) -> Result<(), redis::RedisError>, Ok(()))
     }
 
     pub fn delete(
@@ -101,54 +73,17 @@ impl RedisTableType {
         key_prefix: &str,
         data: &[String],
     ) -> Result<(), redis::RedisError> {
-        match self {
-            RedisTableType::String(table) => table.delete(conn, key_prefix, data),
-            RedisTableType::Hash(table) => table.delete(conn, key_prefix, data),
-            RedisTableType::List(table) => table.delete(conn, key_prefix, data),
-            RedisTableType::Set(table) => table.delete(conn, key_prefix, data),
-            RedisTableType::ZSet(table) => table.delete(conn, key_prefix, data),
-            RedisTableType::Stream(table) => table.delete(conn, key_prefix, data),
-            RedisTableType::None => Ok(()),
-        }
+        table_dispatch_mut_result!(self, delete(conn, key_prefix, data) -> Result<(), redis::RedisError>, Ok(()))
     }
 
     /// Check if this table type supports a specific pushdown operator
     pub fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
-        match self {
-            RedisTableType::String(table) => table.supports_pushdown(operator),
-            RedisTableType::Hash(table) => table.supports_pushdown(operator),
-            RedisTableType::List(table) => table.supports_pushdown(operator),
-            RedisTableType::Set(table) => table.supports_pushdown(operator),
-            RedisTableType::ZSet(table) => table.supports_pushdown(operator),
-            RedisTableType::Stream(table) => table.supports_pushdown(operator),
-            RedisTableType::None => false,
-        }
+        table_dispatch!(self, supports_pushdown(operator) -> false)
     }
-
-    /// Apply LIMIT/OFFSET constraints to the internal data
-    // pub fn apply_limit_offset(&mut self, limit_offset: &LimitOffsetInfo) {
-    //     match self {
-    //         RedisTableType::String(table) => table.apply_limit_offset(limit_offset),
-    //         RedisTableType::Hash(table) => table.apply_limit_offset(limit_offset),
-    //         RedisTableType::List(table) => table.apply_limit_offset(limit_offset),
-    //         RedisTableType::Set(table) => table.apply_limit_offset(limit_offset),
-    //         RedisTableType::ZSet(table) => table.apply_limit_offset(limit_offset),
-    //         RedisTableType::Stream(table) => table.apply_limit_offset(limit_offset),
-    //         RedisTableType::None => {} // No-op for None type
-    //     }
-    // }
 
     /// Set filtered data result directly (for external filtering)
     pub fn set_filtered_data(&mut self, data: Vec<String>) {
-        match self {
-            RedisTableType::String(table) => table.set_filtered_data(data),
-            RedisTableType::Hash(table) => table.set_filtered_data(data),
-            RedisTableType::List(table) => table.set_filtered_data(data),
-            RedisTableType::Set(table) => table.set_filtered_data(data),
-            RedisTableType::ZSet(table) => table.set_filtered_data(data),
-            RedisTableType::Stream(table) => table.set_filtered_data(data),
-            RedisTableType::None => {} // No-op for None type
-        }
+        table_dispatch_mut_void!(self, set_filtered_data(data))
     }
 }
 

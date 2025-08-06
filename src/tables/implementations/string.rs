@@ -1,8 +1,8 @@
 use crate::{
     query::{
+        limit::LimitOffsetInfo,
         pushdown_types::{ComparisonOperator, PushableCondition},
         scan_ops::{extract_scan_conditions, PatternMatcher},
-        limit::LimitOffsetInfo,
     },
     tables::{
         interface::RedisTableOperations,
@@ -84,7 +84,7 @@ impl RedisTableOperations for RedisStringTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         conditions: Option<&[PushableCondition]>,
-        limit_offset: &LimitOffsetInfo
+        _limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(conditions) = conditions {
             let scan_conditions = extract_scan_conditions(conditions);
@@ -133,38 +133,6 @@ impl RedisTableOperations for RedisStringTable {
             ComparisonOperator::Equal | ComparisonOperator::Like
         )
     }
-
-    // fn apply_limit_offset(&mut self, limit_offset: &LimitOffsetInfo) {
-    //     // For string tables, we typically have at most one row
-    //     // Apply limit/offset logic accordingly
-    //     match &mut self.dataset {
-    //         DataSet::Complete(DataContainer::String(opt)) => {
-    //             if let Some(offset) = limit_offset.offset {
-    //                 if offset > 0 {
-    //                     // Offset greater than 0 means skip the only possible row
-    //                     *opt = None;
-    //                 }
-    //                 // If offset is 0, keep the row (if any)
-    //             } else if let Some(limit) = limit_offset.limit {
-    //                 if limit <= 0 {
-    //                     // Limit of 0 or negative means no rows
-    //                     *opt = None;
-    //                 }
-    //                 // If limit is positive and we have data, keep it
-    //             }
-    //         }
-    //         DataSet::Filtered(ref mut data) => {
-    //             *data = limit_offset.apply_to_vec(std::mem::take(data));
-    //         }
-    //         DataSet::Empty => {
-    //             // Nothing to limit/offset
-    //         }
-    //         _ => {
-    //             // Handle unexpected data container types
-    //             pgrx::log!("Warning: apply_limit_offset called on string table with unexpected data container");
-    //         }
-    //     }
-    // }
 
     fn set_filtered_data(&mut self, data: Vec<String>) {
         self.dataset = DataSet::Filtered(data);

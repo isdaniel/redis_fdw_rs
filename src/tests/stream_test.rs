@@ -2,8 +2,10 @@
 #[pgrx::pg_schema]
 mod tests {
     use crate::{
-        query::{limit::LimitOffsetInfo, ComparisonOperator},
-        tables::{DataSet, RedisStreamTable, RedisTableOperations},
+        query::{limit::LimitOffsetInfo, pushdown_types::ComparisonOperator},
+        tables::{
+            implementations::RedisStreamTable, interface::RedisTableOperations, types::DataSet,
+        },
     };
 
     #[test]
@@ -306,7 +308,12 @@ mod tests {
             value: "2000000000000-0".to_string(),
         };
 
-        let range_result = table.load_data(&mut conn, test_key, Some(&[condition]), &LimitOffsetInfo::default());
+        let range_result = table.load_data(
+            &mut conn,
+            test_key,
+            Some(&[condition]),
+            &LimitOffsetInfo::default(),
+        );
         assert!(range_result.is_ok());
 
         // Should load the specific entry
@@ -361,7 +368,12 @@ mod tests {
         let mut table = RedisStreamTable::new(1000);
 
         // Test with non-existent stream
-        let result = table.load_data(&mut conn, "non:existent:stream", None, &LimitOffsetInfo::default());
+        let result = table.load_data(
+            &mut conn,
+            "non:existent:stream",
+            None,
+            &LimitOffsetInfo::default(),
+        );
         assert!(result.is_ok());
 
         match result.unwrap() {

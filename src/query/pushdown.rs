@@ -34,7 +34,7 @@ impl WhereClausePushdown {
             if let Some(condition) = Self::analyze_expression(clause, table_type, relation) {
                 analysis.pushable_conditions.push(condition);
                 analysis.can_optimize = true;
-            } 
+            }
         }
 
         analysis
@@ -68,7 +68,7 @@ impl WhereClausePushdown {
         if node.is_null() {
             return None;
         }
-        
+
         //log!("Analyzing expression (*node).type_: {:?}", (*node).type_);
         match (*node).type_ {
             pg_sys::NodeTag::T_OpExpr => {
@@ -453,7 +453,7 @@ impl WhereClausePushdown {
             98 => Some(ComparisonOperator::Equal),     // text = text
             531 => Some(ComparisonOperator::NotEqual), // text <> text
             1209 => Some(ComparisonOperator::Like),    // text LIKE text
-            664 => Some(ComparisonOperator::LessThan),  // text < text
+            664 => Some(ComparisonOperator::LessThan), // text < text
             665 => Some(ComparisonOperator::LessThanOrEqual), // text <= text
             666 => Some(ComparisonOperator::GreaterThan), // text > text
             667 => Some(ComparisonOperator::GreaterThanOrEqual), // text >= text

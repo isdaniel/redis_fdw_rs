@@ -1,5 +1,3 @@
-use pgrx::prelude::*;
-
 // Authentication module for Redis credentials
 mod auth;
 
