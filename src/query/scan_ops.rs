@@ -163,19 +163,26 @@ impl RedisScanBuilder {
         let mut all_results = Vec::new();
         let mut cursor = 0;
 
-        let mut cmd = redis::cmd("SCAN");
-        cmd.arg(cursor);
+       loop {
+            let mut cmd = redis::cmd("SCAN");
+            cmd.arg(cursor);
 
-        if let Some(pattern) = &self.pattern {
-            cmd.arg("MATCH").arg(pattern);
+            if let Some(pattern) = &self.pattern {
+                cmd.arg("MATCH").arg(pattern);
+            }
+
+            if let Some(count) = self.count {
+                cmd.arg("COUNT").arg(count);
+            }
+
+            let (new_cursor, results): (u64, Vec<T>) = cmd.query(conn)?;
+            all_results.extend(results);
+
+            if new_cursor == 0 {
+                break;
+            }
+            cursor = new_cursor;
         }
-
-        if let Some(count) = self.count {
-            cmd.arg("COUNT").arg(count);
-        }
-
-        let (new_cursor, results): (u64, Vec<T>) = cmd.query(conn)?;
-        all_results.extend(results);
 
 
         Ok(all_results)
@@ -196,19 +203,28 @@ impl RedisScanBuilder {
         let mut all_results = Vec::new();
         let mut cursor = 0;
 
-        let mut cmd = redis::cmd("HSCAN");
-        cmd.arg(key).arg(cursor);
+       loop {
+            let mut cmd = redis::cmd("HSCAN");
+            cmd.arg(key).arg(cursor);
 
-        if let Some(pattern) = &self.pattern {
-            cmd.arg("MATCH").arg(pattern);
+            if let Some(pattern) = &self.pattern {
+                cmd.arg("MATCH").arg(pattern);
+            }
+
+            if let Some(count) = self.count {
+                cmd.arg("COUNT").arg(count);
+            }
+
+            let (new_cursor, results): (u64, Vec<T>) = cmd.query(conn)?;
+            all_results.extend(results);
+
+
+            if new_cursor == 0 {
+                break;
+            }
+            cursor = new_cursor;
         }
 
-        if let Some(count) = self.count {
-            cmd.arg("COUNT").arg(count);
-        }
-
-        let (new_cursor, results): (u64, Vec<T>) = cmd.query(conn)?;
-        all_results.extend(results);
 
         Ok(all_results)
     }
