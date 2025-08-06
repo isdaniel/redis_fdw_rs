@@ -2,6 +2,7 @@
 /// This module provides comprehensive SCAN support for all Redis data types
 /// with LIKE pattern matching capabilities for WHERE clause optimization.
 use crate::query::pushdown_types::{ComparisonOperator, PushableCondition};
+use pgrx::info;
 use redis::{ConnectionLike, RedisError, RedisResult};
 
 /// Redis SCAN operation types
@@ -70,6 +71,7 @@ impl PatternMatcher {
 }
 
 /// SCAN operation builder for different Redis data types
+#[derive(Debug)]
 pub struct RedisScanBuilder {
     scan_type: ScanType,
     key: Option<String>,
@@ -161,26 +163,20 @@ impl RedisScanBuilder {
         let mut all_results = Vec::new();
         let mut cursor = 0;
 
-        loop {
-            let mut cmd = redis::cmd("SCAN");
-            cmd.arg(cursor);
+        let mut cmd = redis::cmd("SCAN");
+        cmd.arg(cursor);
 
-            if let Some(pattern) = &self.pattern {
-                cmd.arg("MATCH").arg(pattern);
-            }
-
-            if let Some(count) = self.count {
-                cmd.arg("COUNT").arg(count);
-            }
-
-            let (new_cursor, results): (u64, Vec<T>) = cmd.query(conn)?;
-            all_results.extend(results);
-
-            if new_cursor == 0 {
-                break;
-            }
-            cursor = new_cursor;
+        if let Some(pattern) = &self.pattern {
+            cmd.arg("MATCH").arg(pattern);
         }
+
+        if let Some(count) = self.count {
+            cmd.arg("COUNT").arg(count);
+        }
+
+        let (new_cursor, results): (u64, Vec<T>) = cmd.query(conn)?;
+        all_results.extend(results);
+
 
         Ok(all_results)
     }
@@ -200,26 +196,19 @@ impl RedisScanBuilder {
         let mut all_results = Vec::new();
         let mut cursor = 0;
 
-        loop {
-            let mut cmd = redis::cmd("HSCAN");
-            cmd.arg(key).arg(cursor);
+        let mut cmd = redis::cmd("HSCAN");
+        cmd.arg(key).arg(cursor);
 
-            if let Some(pattern) = &self.pattern {
-                cmd.arg("MATCH").arg(pattern);
-            }
-
-            if let Some(count) = self.count {
-                cmd.arg("COUNT").arg(count);
-            }
-
-            let (new_cursor, results): (u64, Vec<T>) = cmd.query(conn)?;
-            all_results.extend(results);
-
-            if new_cursor == 0 {
-                break;
-            }
-            cursor = new_cursor;
+        if let Some(pattern) = &self.pattern {
+            cmd.arg("MATCH").arg(pattern);
         }
+
+        if let Some(count) = self.count {
+            cmd.arg("COUNT").arg(count);
+        }
+
+        let (new_cursor, results): (u64, Vec<T>) = cmd.query(conn)?;
+        all_results.extend(results);
 
         Ok(all_results)
     }

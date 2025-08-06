@@ -97,7 +97,7 @@ impl RedisTableOperations for RedisListTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         conditions: Option<&[PushableCondition]>,
-        _limit_offset: &LimitOffsetInfo,
+        limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(conditions) = conditions {
             let scan_conditions = extract_scan_conditions(conditions);
@@ -112,11 +112,28 @@ impl RedisTableOperations for RedisListTable {
                 for condition in conditions {
                     if let ComparisonOperator::Equal = condition.operator {
                         // For lists, we need to load all data and filter
-                        let all_data: Vec<String> = redis::cmd("LRANGE")
-                            .arg(key_prefix)
-                            .arg(0)
-                            .arg(-1)
-                            .query(conn)?;
+                        let all_data: Vec<String> = if limit_offset.has_constraints() {
+                            // Apply LIMIT/OFFSET directly with LRANGE for better performance
+                            let offset = limit_offset.offset.unwrap_or(0);
+                            let limit = limit_offset.limit.unwrap_or(usize::MAX);
+                            let start = offset as isize;
+                            let end = if limit == usize::MAX {
+                                -1isize
+                            } else {
+                                (offset + limit - 1) as isize
+                            };
+                            redis::cmd("LRANGE")
+                                .arg(key_prefix)
+                                .arg(start)
+                                .arg(end)
+                                .query(conn)?
+                        } else {
+                            redis::cmd("LRANGE")
+                                .arg(key_prefix)
+                                .arg(0)
+                                .arg(-1)
+                                .query(conn)?
+                        };
 
                         let filtered: Vec<String> = all_data
                             .into_iter()
@@ -136,11 +153,25 @@ impl RedisTableOperations for RedisListTable {
         }
 
         // Lists don't have efficient filtering in Redis
-        // Fall back to loading all data
+        // Fall back to loading all data, but apply LIMIT/OFFSET directly with LRANGE
+        let (start, end) = if limit_offset.has_constraints() {
+            let offset = limit_offset.offset.unwrap_or(0);
+            let limit = limit_offset.limit.unwrap_or(usize::MAX);
+            let start = offset as isize;
+            let end = if limit == usize::MAX {
+                -1isize // Redis LRANGE end=-1 means to the end of list
+            } else {
+                (offset + limit - 1) as isize
+            };
+            (start, end)
+        } else {
+            (0, -1) // Get all elements
+        };
+
         let data: Vec<String> = redis::cmd("LRANGE")
             .arg(key_prefix)
-            .arg(0)
-            .arg(-1)
+            .arg(start)
+            .arg(end)
             .query(conn)?;
         self.dataset = DataSet::Complete(DataContainer::List(data));
         Ok(LoadDataResult::LoadedToInternal)

@@ -29,6 +29,7 @@ impl RedisStringTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         scan_conditions: &crate::query::scan_ops::ScanConditions,
+        limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         // For string tables, we need to check the stored value against conditions
         // Get the value from Redis
@@ -62,6 +63,21 @@ impl RedisStringTable {
             }
 
             if matches {
+                // Apply LIMIT/OFFSET constraints
+                if let Some(offset) = limit_offset.offset {
+                    if offset > 0 {
+                        self.dataset = DataSet::Empty;
+                        return Ok(LoadDataResult::Empty);
+                    }
+                }
+                
+                if let Some(limit) = limit_offset.limit {
+                    if limit == 0 {
+                        self.dataset = DataSet::Empty;
+                        return Ok(LoadDataResult::Empty);
+                    }
+                }
+                
                 self.dataset = DataSet::Complete(DataContainer::String(Some(value)));
                 Ok(LoadDataResult::PushdownApplied(
                     vec![key_prefix.to_string()],
@@ -84,19 +100,36 @@ impl RedisTableOperations for RedisStringTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         conditions: Option<&[PushableCondition]>,
-        _limit_offset: &LimitOffsetInfo,
+        limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(conditions) = conditions {
             let scan_conditions = extract_scan_conditions(conditions);
 
             // For string tables, we can optimize by scanning keys with patterns
             if scan_conditions.has_optimizable_conditions() {
-                return self.load_with_scan_optimization(conn, key_prefix, &scan_conditions);
+                return self.load_with_scan_optimization(conn, key_prefix, &scan_conditions, limit_offset);
             }
         }
 
         // Fallback: Load single key without optimization
         let value: Option<String> = redis::cmd("GET").arg(key_prefix).query(conn)?;
+        
+        // Apply LIMIT/OFFSET constraints - for string tables, OFFSET > 0 means no results
+        if let Some(offset) = limit_offset.offset {
+            if offset > 0 {
+                self.dataset = DataSet::Empty;
+                return Ok(LoadDataResult::Empty);
+            }
+        }
+        
+        // Apply LIMIT - if LIMIT is 0, return empty
+        if let Some(limit) = limit_offset.limit {
+            if limit == 0 {
+                self.dataset = DataSet::Empty;
+                return Ok(LoadDataResult::Empty);
+            }
+        }
+        
         self.dataset = DataSet::Complete(DataContainer::String(value));
         Ok(LoadDataResult::LoadedToInternal)
     }

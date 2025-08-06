@@ -206,7 +206,7 @@ impl RedisTableOperations for RedisStreamTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         conditions: Option<&[PushableCondition]>,
-        _limit_offset: &LimitOffsetInfo,
+        limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(conditions) = conditions {
             let scan_conditions = extract_scan_conditions(conditions);
@@ -217,8 +217,30 @@ impl RedisTableOperations for RedisStreamTable {
             }
         }
 
-        // Fallback: Load recent entries with default batch size
-        self.load_with_xrange(conn, key_prefix, "-", "+", Some(self.batch_size))
+        // Fallback: Load recent entries with LIMIT/OFFSET optimization
+        let effective_count = if limit_offset.has_constraints() {
+            let offset = limit_offset.offset.unwrap_or(0);
+            let limit = limit_offset.limit.unwrap_or(self.batch_size);
+            Some(offset + limit) // Load enough to apply offset and limit
+        } else {
+            Some(self.batch_size)
+        };
+        
+        match self.load_with_xrange(conn, key_prefix, "-", "+", effective_count) {
+            Ok(result) => {
+                // Apply LIMIT/OFFSET to loaded stream data if constraints are present
+                if limit_offset.has_constraints() {
+                    if let DataSet::Filtered(ref data) = self.dataset {
+                        // Stream data is stored as flat entries: [id1, field1, value1, field2, value2, id2, ...]
+                        // Apply pagination at the entry level (groups of fields per stream entry)
+                        let paginated_data = limit_offset.apply_to_vec(data.clone());
+                        self.dataset = DataSet::Filtered(paginated_data);
+                    }
+                }
+                Ok(result)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     fn get_dataset(&self) -> &DataSet {

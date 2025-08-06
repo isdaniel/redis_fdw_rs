@@ -25,6 +25,17 @@ impl LimitOffsetInfo {
         self.limit.is_some() || self.offset.is_some()
     }
 
+    /// Calculate effective scan limit for Redis commands that need to account for offset
+    /// When both limit and offset are present, returns limit + offset to ensure enough data is retrieved
+    /// Otherwise returns the limit or a default value
+    pub fn effective_scan_limit(&self, default_limit: usize) -> usize {
+        if let (Some(limit), Some(offset)) = (self.limit, self.offset) {
+            limit + offset
+        } else {
+            self.limit.unwrap_or(default_limit)
+        }
+    }
+
     /// Apply limit and offset to a vector of data
     pub fn apply_to_vec<T>(&self, mut data: Vec<T>) -> Vec<T> {
         // Apply offset first

@@ -35,13 +35,14 @@ impl RedisHashTable {
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(pattern) = scan_conditions.get_primary_pattern() {
             let pattern_matcher = PatternMatcher::from_like_pattern(&pattern);
-            let limit = limit_offset.limit.unwrap_or(100 as usize);
+            // Calculate effective limit for HSCAN - need to account for offset
+            let scan_limit = limit_offset.effective_scan_limit(100);
 
             if pattern_matcher.requires_scan() {
                 // Use HSCAN with MATCH to find matching fields
                 let matching_fields: Vec<String> = RedisScanBuilder::new_hash_scan(key_prefix)
                     .with_pattern(pattern_matcher.get_pattern())
-                    .with_count(limit)
+                    .with_count(scan_limit)
                     .execute_all(conn)?;
 
                 if matching_fields.is_empty() {
@@ -79,8 +80,27 @@ impl RedisHashTable {
                     .cloned()
                     .collect();
 
-                self.dataset = DataSet::Filtered(filtered_result.clone());
-                Ok(LoadDataResult::PushdownApplied(filtered_result))
+                // Apply LIMIT/OFFSET to filtered results
+                let paginated_result = if limit_offset.has_constraints() {
+                    // Convert to key-value pairs for proper pagination
+                    let pairs: Vec<String> = filtered_result
+                        .chunks(2)
+                        .map(|chunk| vec![chunk[0].clone(), chunk[1].clone()])
+                        .flatten()
+                        .collect();
+                    limit_offset.apply_to_vec(
+                        pairs.chunks(2)
+                            .map(|chunk| vec![chunk[0].clone(), chunk[1].clone()])
+                            .collect::<Vec<Vec<String>>>()
+                    ).into_iter()
+                        .flatten()
+                        .collect()
+                } else {
+                    filtered_result
+                };
+
+                self.dataset = DataSet::Filtered(paginated_result.clone());
+                Ok(LoadDataResult::PushdownApplied(paginated_result))
             } else {
                 // Exact field match
                 let value: Option<String> = redis::cmd("HGET")

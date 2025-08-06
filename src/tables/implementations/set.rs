@@ -29,19 +29,22 @@ impl RedisSetTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         scan_conditions: &crate::query::scan_ops::ScanConditions,
+        limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(pattern) = scan_conditions.get_primary_pattern() {
             let pattern_matcher = PatternMatcher::from_like_pattern(&pattern);
+            // Calculate effective limit for SSCAN - need to account for offset
+            let scan_limit = limit_offset.effective_scan_limit(100);
 
             if pattern_matcher.requires_scan() {
                 // Use SSCAN with MATCH to find matching members
                 let matching_members: Vec<String> = RedisScanBuilder::new_set_scan(key_prefix)
                     .with_pattern(pattern_matcher.get_pattern())
-                    .with_count(100)
+                    .with_count(scan_limit)
                     .execute_all(conn)?;
 
-                // Additional client-side filtering
-                let filtered_members: Vec<String> = matching_members
+                // Additional client-side filtering and pagination
+                let mut filtered_members: Vec<String> = matching_members
                     .into_iter()
                     .filter(|member| {
                         scan_conditions.pattern_conditions.iter().all(|condition| {
@@ -50,6 +53,11 @@ impl RedisSetTable {
                         })
                     })
                     .collect();
+
+                // Apply LIMIT/OFFSET to filtered results
+                if limit_offset.has_constraints() {
+                    filtered_members = limit_offset.apply_to_vec(filtered_members);
+                }
 
                 if filtered_members.is_empty() {
                     self.dataset = DataSet::Empty;
@@ -89,14 +97,14 @@ impl RedisTableOperations for RedisSetTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         conditions: Option<&[PushableCondition]>,
-        _limit_offset: &LimitOffsetInfo,
+        limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(conditions) = conditions {
             let scan_conditions = extract_scan_conditions(conditions);
 
             // Check for SCAN-optimizable conditions first
             if scan_conditions.has_optimizable_conditions() {
-                return self.load_with_scan_optimization(conn, key_prefix, &scan_conditions);
+                return self.load_with_scan_optimization(conn, key_prefix, &scan_conditions, limit_offset);
             }
 
             // Legacy optimization for non-pattern conditions
@@ -143,9 +151,16 @@ impl RedisTableOperations for RedisSetTable {
             }
         }
 
-        // Load all data into internal storage
-        let data: Vec<String> = redis::cmd("SMEMBERS").arg(key_prefix).query(conn)?;
-        self.dataset = DataSet::Complete(DataContainer::Set(data));
+        // Load all data into internal storage, applying LIMIT/OFFSET if specified
+        let mut data: Vec<String> = redis::cmd("SMEMBERS").arg(key_prefix).query(conn)?;
+        
+        // Apply LIMIT/OFFSET to complete dataset if constraints are present
+        if limit_offset.has_constraints() {
+            data = limit_offset.apply_to_vec(data);
+            self.dataset = DataSet::Filtered(data);
+        } else {
+            self.dataset = DataSet::Complete(DataContainer::Set(data));
+        }
         Ok(LoadDataResult::LoadedToInternal)
     }
 
