@@ -103,7 +103,7 @@ impl RedisTableOperations for RedisZSetTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         conditions: Option<&[PushableCondition]>,
-        _limit_offset: &LimitOffsetInfo,
+        limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(conditions) = conditions {
             let scan_conditions = extract_scan_conditions(conditions);
@@ -165,15 +165,37 @@ impl RedisTableOperations for RedisZSetTable {
             }
         }
 
-        // ZSets could support score-based range queries in the future
-        // For now, fall back to loading all data
+        // ZSets support efficient range queries with LIMIT/OFFSET using ZRANGE
+        let (start, end) = if limit_offset.has_constraints() {
+            let offset = limit_offset.offset.unwrap_or(0) as isize;
+            let limit = limit_offset.limit.unwrap_or(usize::MAX);
+            let end_idx = if limit == usize::MAX {
+                -1isize // Redis ZRANGE end=-1 means to the end of sorted set
+            } else {
+                offset + (limit as isize) - 1
+            };
+            (offset, end_idx)
+        } else {
+            (0, -1) // Get all elements
+        };
+
         let result: Vec<(String, f64)> = redis::cmd("ZRANGE")
             .arg(key_prefix)
-            .arg(0)
-            .arg(-1)
+            .arg(start)
+            .arg(end)
             .arg("WITHSCORES")
             .query(conn)?;
-        self.dataset = DataSet::Complete(DataContainer::ZSet(result));
+            
+        if limit_offset.has_constraints() {
+            // Convert to filtered format for efficient access
+            let flat_data: Vec<String> = result
+                .into_iter()
+                .flat_map(|(member, score)| vec![member, score.to_string()])
+                .collect();
+            self.dataset = DataSet::Filtered(flat_data);
+        } else {
+            self.dataset = DataSet::Complete(DataContainer::ZSet(result));
+        }
         Ok(LoadDataResult::LoadedToInternal)
     }
 

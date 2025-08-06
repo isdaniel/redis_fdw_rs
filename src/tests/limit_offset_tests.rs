@@ -70,6 +70,30 @@ mod tests {
     }
 
     #[test]
+    fn test_effective_scan_limit() {
+        // Test with no constraints - should return default
+        let limit_info = LimitOffsetInfo::new();
+        assert_eq!(limit_info.effective_scan_limit(100), 100);
+        assert_eq!(limit_info.effective_scan_limit(50), 50);
+
+        // Test with limit only - should return limit
+        let limit_info = LimitOffsetInfo::with_limit_offset(Some(10), None);
+        assert_eq!(limit_info.effective_scan_limit(100), 10);
+
+        // Test with offset only - should return default
+        let limit_info = LimitOffsetInfo::with_limit_offset(None, Some(5));
+        assert_eq!(limit_info.effective_scan_limit(100), 100);
+
+        // Test with both limit and offset - should return limit + offset
+        let limit_info = LimitOffsetInfo::with_limit_offset(Some(10), Some(5));
+        assert_eq!(limit_info.effective_scan_limit(100), 15);
+
+        // Test with zero values
+        let limit_info = LimitOffsetInfo::with_limit_offset(Some(0), Some(0));
+        assert_eq!(limit_info.effective_scan_limit(100), 0);
+    }
+
+    #[test]
     fn test_pushdown_analysis_with_limit_offset() {
         let mut analysis = PushdownAnalysis::new();
         assert!(!analysis.has_optimizations());
