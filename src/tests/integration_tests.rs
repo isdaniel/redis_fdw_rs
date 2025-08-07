@@ -124,6 +124,86 @@ mod tests {
     // ================================================
     // HASH TABLE INTEGRATION TESTS
     // ================================================
+    
+    // #[pg_test]
+    // fn test_integration_hash_table_basic_limit_offset() {
+    //     log!("=== Testing Hash Table Basic LIMIT/OFFSET Functionality ===");
+
+    //     setup_redis_fdw();
+
+    //     let table_name = "test_hash_limit_offset";
+    //     let key_prefix = "integration:hash:limit_offset";
+
+    //     // Create hash table
+    //     create_foreign_table(table_name, "field text, value text", "hash", key_prefix);
+
+    //     // Insert test data
+    //     for i in 1..=20 {
+    //         let field = format!("key{}", i);
+    //         let value = format!("value{}", i);
+    //         controlled_insert_pair(table_name, &field, &value);
+    //     }
+
+    //     // Perform SELECT with LIMIT
+    //     let result = Spi::get_one::<i64>(&format!(
+    //         "SELECT COUNT(*) FROM {} LIMIT 5",
+    //         table_name
+    //     ));
+    //     assert!(result.is_ok());
+    //     let count = result.unwrap().unwrap();
+    //     assert_eq!(count, 5); // Should return 5 records
+
+    //     log!("Basic LIMIT/OFFSET test passed successfully");
+
+    //     // Cleanup
+    //     drop_foreign_table(table_name);
+    //     cleanup_redis_fdw();
+
+    //     log!("=== Hash Table Basic LIMIT/OFFSET Test Completed ===");
+    // }
+    
+    #[pg_test]
+    fn test_integration_hash_like_limit() {
+        log!("=== Testing Hash Table LIKE with LIMIT/OFFSET ===");
+
+        setup_redis_fdw();
+
+        let table_name = "test_hash_like_limit";
+        let key_prefix = "integration:hash:like_limit";
+
+        // Create hash table
+        create_foreign_table(table_name, "field text, value text", "hash", key_prefix);
+
+        // Insert test data
+        let test_data = vec![
+            ("pattern_one", "pattern_one"),
+            ("pattern_two", "pattern_two"),
+            ("other_value", "other_value"),
+            ("pattern_three", "pattern_three"),
+            ("different_value", "different_value"),
+        ];
+
+        for (field, value) in &test_data {
+            controlled_insert_pair(table_name, field, value);
+        }
+
+        // Perform SELECT with LIKE and LIMIT
+        let result = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM {} WHERE field LIKE 'pattern%' LIMIT 2;",
+            table_name
+        ));
+        assert!(result.is_ok());
+        let count = result.unwrap().unwrap();
+        assert_eq!(count, 2); // Should return 2 records matching the pattern
+
+        log!("LIKE with LIMIT/OFFSET test passed successfully");
+
+        // Cleanup
+        drop_foreign_table(table_name);
+        cleanup_redis_fdw();
+
+        log!("=== Hash Table LIKE with LIMIT/OFFSET Test Completed ===");
+    }
 
     #[pg_test]
     fn test_integration_hash_table_basic_crud() {
@@ -301,6 +381,49 @@ mod tests {
     // ================================================
 
     #[pg_test]
+    fn test_integration_set_like_limit() {
+        log!("=== Testing Set Table LIKE with LIMIT/OFFSET ===");
+
+        setup_redis_fdw();
+
+        let table_name = "test_set_like_limit";
+        let key_prefix = "integration:set:like_limit";
+
+        // Create set table
+        create_foreign_table(table_name, "member text", "set", key_prefix);
+
+        // Insert test data
+        let test_data = vec![
+            "pattern_one",
+            "pattern_two",
+            "other_value",
+            "pattern_three",
+            "different_value",
+        ];
+
+        for member in &test_data {
+            controlled_insert_single(table_name, member);
+        }
+
+        // Perform SELECT with LIKE and LIMIT
+        let result = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM {} WHERE member LIKE 'pattern%' LIMIT 2;",
+            table_name
+        ));
+        assert!(result.is_ok());
+        let count = result.unwrap().unwrap();
+        assert_eq!(count, 2); // Should return 2 records matching the pattern
+
+        log!("LIKE with LIMIT/OFFSET test passed successfully");
+
+        // Cleanup
+        drop_foreign_table(table_name);
+        cleanup_redis_fdw();
+
+        log!("=== Set Table LIKE with LIMIT/OFFSET Test Completed ===");
+    }
+
+    #[pg_test]
     fn test_integration_set_table_basic_crud() {
         log!("=== Testing Set Table Basic CRUD Operations ===");
 
@@ -463,6 +586,50 @@ mod tests {
     // ================================================
     // ZSET (SORTED SET) TABLE INTEGRATION TESTS
     // ================================================
+
+    #[pg_test]
+    fn test_integration_zset_like_limit() {
+        log!("=== Testing ZSet Table LIKE with LIMIT/OFFSET ===");
+
+        setup_redis_fdw();
+
+        let table_name = "test_zset_like_limit";
+        let key_prefix = "integration:zset:like_limit";
+
+        // Create zset table
+        create_foreign_table(table_name, "member text, score numeric", "zset", key_prefix);
+
+        // Insert test data
+        let test_data = vec![
+            ("pattern_one", 10),
+            ("pattern_two", 20),
+            ("other_value", 30),
+            ("pattern_three", 40),
+            ("different_value", 50),
+        ];
+
+        for (member, score) in &test_data {
+            controlled_insert_pair(table_name, member, &score.to_string());
+        }
+
+        // Perform SELECT with LIKE and LIMIT
+        let result = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM {} WHERE member LIKE 'pattern%' LIMIT 2;",
+            table_name
+        ));
+        assert!(result.is_ok());
+        let count = result.unwrap().unwrap();
+        assert_eq!(count, 2); // Should return 2 records matching the pattern
+
+        log!("LIKE with LIMIT/OFFSET test passed successfully");
+
+        // Cleanup
+        drop_foreign_table(table_name);
+        cleanup_redis_fdw();
+
+        log!("=== ZSet Table LIKE with LIMIT/OFFSET Test Completed ===");
+    }
+
 
     #[pg_test]
     fn test_integration_zset_table_basic_crud() {

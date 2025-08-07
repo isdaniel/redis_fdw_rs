@@ -28,15 +28,19 @@ impl RedisZSetTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         scan_conditions: &ScanConditions,
+        limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         let mut scan_builder = RedisScanBuilder::new_zset_scan(key_prefix);
 
-        // Add pattern from the first LIKE condition
+        // Add pattern from the first LIKE condition and limit constraints
         if let Some(_pattern_condition) = scan_conditions.pattern_conditions.first() {
             if let Some(matcher) = &scan_conditions.pattern_matcher {
                 scan_builder = scan_builder.with_pattern(matcher.get_pattern());
             }
         }
+
+        // Add limit information to the scan builder
+        scan_builder = scan_builder.with_limit(limit_offset.clone());
 
         // Execute ZSCAN to get member-score pairs
         let all_members: Vec<String> = scan_builder.execute_all(conn)?;
@@ -87,6 +91,29 @@ impl RedisZSetTable {
             }
         }
 
+        // Apply LIMIT/OFFSET to filtered results
+        if limit_offset.has_constraints() {
+            // For zset data, we need to apply pagination at the member-score pair level
+            let pairs: Vec<String> = filtered_data
+                .chunks(2)
+                .map(|chunk| format!("{}\t{}", chunk[0], chunk[1]))
+                .collect();
+
+            let paginated_pairs = limit_offset.apply_to_vec(pairs);
+
+            filtered_data = paginated_pairs
+                .into_iter()
+                .flat_map(|pair| {
+                    let parts: Vec<&str> = pair.split('\t').collect();
+                    if parts.len() == 2 {
+                        vec![parts[0].to_string(), parts[1].to_string()]
+                    } else {
+                        vec![]
+                    }
+                })
+                .collect();
+        }
+
         if filtered_data.is_empty() {
             self.dataset = DataSet::Empty;
             Ok(LoadDataResult::Empty)
@@ -110,7 +137,12 @@ impl RedisTableOperations for RedisZSetTable {
 
             // Check for SCAN-optimizable conditions first
             if scan_conditions.has_optimizable_conditions() {
-                return self.load_with_scan_optimization(conn, key_prefix, &scan_conditions);
+                return self.load_with_scan_optimization(
+                    conn,
+                    key_prefix,
+                    &scan_conditions,
+                    limit_offset,
+                );
             }
 
             // Legacy optimization for specific member lookups
@@ -185,7 +217,7 @@ impl RedisTableOperations for RedisZSetTable {
             .arg(end)
             .arg("WITHSCORES")
             .query(conn)?;
-            
+
         if limit_offset.has_constraints() {
             // Convert to filtered format for efficient access
             let flat_data: Vec<String> = result

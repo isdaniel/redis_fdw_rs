@@ -225,7 +225,7 @@ impl RedisTableOperations for RedisStreamTable {
         } else {
             Some(self.batch_size)
         };
-        
+
         match self.load_with_xrange(conn, key_prefix, "-", "+", effective_count) {
             Ok(result) => {
                 // Apply LIMIT/OFFSET to loaded stream data if constraints are present
