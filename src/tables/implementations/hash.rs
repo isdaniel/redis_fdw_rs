@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use pgrx::info;
+
 use crate::{
     query::{
         limit::LimitOffsetInfo,
@@ -35,72 +37,21 @@ impl RedisHashTable {
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(pattern) = scan_conditions.get_primary_pattern() {
             let pattern_matcher = PatternMatcher::from_like_pattern(&pattern);
-            // Calculate effective limit for HSCAN - need to account for offset
-            let scan_limit = limit_offset.effective_scan_limit(100);
 
             if pattern_matcher.requires_scan() {
                 // Use HSCAN with MATCH to find matching fields
                 let matching_fields: Vec<String> = RedisScanBuilder::new_hash_scan(key_prefix)
                     .with_pattern(pattern_matcher.get_pattern())
-                    .with_count(scan_limit)
+                    .with_limit(limit_offset.clone())
                     .execute_all(conn)?;
-
+                
                 if matching_fields.is_empty() {
                     self.dataset = DataSet::Empty;
                     return Ok(LoadDataResult::Empty);
                 }
-                pgrx::log!("matching_fields: {:?}", matching_fields);
-                // Get values for matching fields
-                let mut result = Vec::new();
-                for field in &matching_fields {
-                    if let Ok(Some(value)) = redis::cmd("HGET")
-                        .arg(key_prefix)
-                        .arg(field)
-                        .query::<Option<String>>(conn)
-                    {
-                        result.push(field.clone());
-                        result.push(value);
-                    }
-                }
 
-                // Additional client-side filtering
-                let filtered_result: Vec<String> = result
-                    .chunks(2)
-                    .filter(|chunk| {
-                        if chunk.len() == 2 {
-                            scan_conditions.pattern_conditions.iter().all(|condition| {
-                                let matcher = PatternMatcher::from_like_pattern(&condition.value);
-                                matcher.matches(&chunk[0]) // Check field name
-                            })
-                        } else {
-                            false
-                        }
-                    })
-                    .flatten()
-                    .cloned()
-                    .collect();
-
-                // Apply LIMIT/OFFSET to filtered results
-                let paginated_result = if limit_offset.has_constraints() {
-                    // Convert to key-value pairs for proper pagination
-                    let pairs: Vec<String> = filtered_result
-                        .chunks(2)
-                        .map(|chunk| vec![chunk[0].clone(), chunk[1].clone()])
-                        .flatten()
-                        .collect();
-                    limit_offset.apply_to_vec(
-                        pairs.chunks(2)
-                            .map(|chunk| vec![chunk[0].clone(), chunk[1].clone()])
-                            .collect::<Vec<Vec<String>>>()
-                    ).into_iter()
-                        .flatten()
-                        .collect()
-                } else {
-                    filtered_result
-                };
-
-                self.dataset = DataSet::Filtered(paginated_result.clone());
-                Ok(LoadDataResult::PushdownApplied(paginated_result))
+                self.dataset = DataSet::Filtered(matching_fields.clone());
+                Ok(LoadDataResult::PushdownApplied(matching_fields))
             } else {
                 // Exact field match
                 let value: Option<String> = redis::cmd("HGET")
@@ -123,7 +74,7 @@ impl RedisHashTable {
                 redis::cmd("HGETALL").arg(key_prefix).query(conn)?;
             let data_vec: Vec<(String, String)> = hash_data.into_iter().collect();
             self.dataset = DataSet::Complete(DataContainer::Hash(data_vec));
-            Ok(LoadDataResult::LoadedToInternal)
+            Ok(LoadDataResult::FullyLoaded)
         }
     }
 }
@@ -141,12 +92,14 @@ impl RedisTableOperations for RedisHashTable {
 
             // Check for SCAN-optimizable conditions first
             if scan_conditions.has_optimizable_conditions() {
-                return self.load_with_scan_optimization(
+                let res = self.load_with_scan_optimization(
                     conn,
                     key_prefix,
                     &scan_conditions,
                     limit_offset,
                 );
+                info!("Load with scan optimization result: {:?}", res);
+                return res;
             }
 
             // Legacy optimization for non-pattern conditions
@@ -199,15 +152,20 @@ impl RedisTableOperations for RedisHashTable {
             redis::cmd("HGETALL").arg(key_prefix).query(conn)?;
         let data_vec: Vec<(String, String)> = hash_data.into_iter().collect();
         self.dataset = DataSet::Complete(DataContainer::Hash(data_vec));
-        Ok(LoadDataResult::LoadedToInternal)
+        Ok(LoadDataResult::FullyLoaded)
     }
 
     fn get_dataset(&self) -> &DataSet {
         &self.dataset
     }
 
+    fn get_dataset_mut(&mut self) -> &mut DataSet {
+        &mut self.dataset
+    }
+
     /// Override the default get_row implementation to handle hash-specific filtered data format
     fn get_row(&self, index: usize) -> Option<Vec<String>> {
+        info!("Getting row for hash table self: {:?}", self);
         match &self.dataset {
             DataSet::Filtered(data) => {
                 // Hash filtered data is stored as [key1, value1, key2, value2, ...]
@@ -273,9 +231,5 @@ impl RedisTableOperations for RedisHashTable {
             operator,
             ComparisonOperator::Equal | ComparisonOperator::In | ComparisonOperator::Like
         )
-    }
-
-    fn set_filtered_data(&mut self, data: Vec<String>) {
-        self.dataset = DataSet::Filtered(data);
     }
 }

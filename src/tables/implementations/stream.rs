@@ -89,7 +89,7 @@ impl RedisStreamTable {
 
         // Store data as filtered entries
         self.dataset = DataSet::Filtered(data);
-        Ok(LoadDataResult::LoadedToInternal)
+        Ok(LoadDataResult::FullyLoaded)
     }
 
     /// Load data with stream-specific optimizations and pushdown conditions
@@ -247,6 +247,10 @@ impl RedisTableOperations for RedisStreamTable {
         &self.dataset
     }
 
+    fn get_dataset_mut(&mut self) -> &mut DataSet {
+        &mut self.dataset
+    }
+
     fn data_len(&self) -> usize {
         self.dataset.len()
     }
@@ -320,9 +324,5 @@ impl RedisTableOperations for RedisStreamTable {
             operator,
             ComparisonOperator::Equal | ComparisonOperator::NotEqual | ComparisonOperator::Like
         )
-    }
-
-    fn set_filtered_data(&mut self, data: Vec<String>) {
-        self.dataset = DataSet::Filtered(data);
     }
 }

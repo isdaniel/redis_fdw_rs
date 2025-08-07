@@ -146,7 +146,7 @@ mod tests {
         assert!(result.is_ok());
 
         match result.unwrap() {
-            crate::tables::types::LoadDataResult::LoadedToInternal => {
+            crate::tables::types::LoadDataResult::FullyLoaded => {
                 assert_eq!(table.data_len(), 3);
 
                 // Verify we can get rows
@@ -200,7 +200,7 @@ mod tests {
 
         // Should load only the first batch (5 entries due to batch_size)
         match result.unwrap() {
-            crate::tables::types::LoadDataResult::LoadedToInternal => {
+            crate::tables::types::LoadDataResult::FullyLoaded => {
                 assert_eq!(table.data_len(), 5); // Only first batch loaded
                 assert!(table.last_id.is_some()); // Should track last ID for pagination
             }
@@ -318,7 +318,7 @@ mod tests {
 
         // Should load the specific entry
         match range_result.unwrap() {
-            crate::tables::types::LoadDataResult::LoadedToInternal => {
+            crate::tables::types::LoadDataResult::FullyLoaded => {
                 assert_eq!(table.data_len(), 1);
             }
             _ => panic!("Expected LoadedToInternal result"),

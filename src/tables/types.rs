@@ -93,7 +93,7 @@ pub enum LoadDataResult {
     /// Data was loaded and optimized with pushdown conditions
     PushdownApplied(Vec<String>),
     /// Data was loaded into internal storage without optimization
-    LoadedToInternal,
+    FullyLoaded,
     /// No data found or operation resulted in empty set
     Empty,
 }

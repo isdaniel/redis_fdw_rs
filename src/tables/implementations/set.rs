@@ -33,16 +33,14 @@ impl RedisSetTable {
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(pattern) = scan_conditions.get_primary_pattern() {
             let pattern_matcher = PatternMatcher::from_like_pattern(&pattern);
-            // Calculate effective limit for SSCAN - need to account for offset
-            let scan_limit = limit_offset.effective_scan_limit(100);
 
             if pattern_matcher.requires_scan() {
                 // Use SSCAN with MATCH to find matching members
                 let matching_members: Vec<String> = RedisScanBuilder::new_set_scan(key_prefix)
                     .with_pattern(pattern_matcher.get_pattern())
-                    .with_count(scan_limit)
+                    .with_limit(limit_offset.clone())
                     .execute_all(conn)?;
-
+                
                 // Additional client-side filtering and pagination
                 let mut filtered_members: Vec<String> = matching_members
                     .into_iter()
@@ -86,7 +84,7 @@ impl RedisSetTable {
             // No pattern available, fallback to regular load
             let members: Vec<String> = redis::cmd("SMEMBERS").arg(key_prefix).query(conn)?;
             self.dataset = DataSet::Complete(DataContainer::Set(members));
-            Ok(LoadDataResult::LoadedToInternal)
+            Ok(LoadDataResult::FullyLoaded)
         }
     }
 }
@@ -161,11 +159,15 @@ impl RedisTableOperations for RedisSetTable {
         } else {
             self.dataset = DataSet::Complete(DataContainer::Set(data));
         }
-        Ok(LoadDataResult::LoadedToInternal)
+        Ok(LoadDataResult::FullyLoaded)
     }
 
     fn get_dataset(&self) -> &DataSet {
         &self.dataset
+    }
+
+    fn get_dataset_mut(&mut self) -> &mut DataSet {
+        &mut self.dataset
     }
 
     fn insert(
@@ -197,9 +199,5 @@ impl RedisTableOperations for RedisSetTable {
             operator,
             ComparisonOperator::Equal | ComparisonOperator::In | ComparisonOperator::Like
         )
-    }
-
-    fn set_filtered_data(&mut self, data: Vec<String>) {
-        self.dataset = DataSet::Filtered(data);
     }
 }
