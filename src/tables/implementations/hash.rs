@@ -44,7 +44,7 @@ impl RedisHashTable {
                     .with_pattern(pattern_matcher.get_pattern())
                     .with_limit(limit_offset.clone())
                     .execute_all(conn)?;
-                
+
                 if matching_fields.is_empty() {
                     self.dataset = DataSet::Empty;
                     return Ok(LoadDataResult::Empty);
@@ -92,14 +92,12 @@ impl RedisTableOperations for RedisHashTable {
 
             // Check for SCAN-optimizable conditions first
             if scan_conditions.has_optimizable_conditions() {
-                let res = self.load_with_scan_optimization(
+                return self.load_with_scan_optimization(
                     conn,
                     key_prefix,
                     &scan_conditions,
                     limit_offset,
                 );
-                info!("Load with scan optimization result: {:?}", res);
-                return res;
             }
 
             // Legacy optimization for non-pattern conditions
@@ -165,7 +163,7 @@ impl RedisTableOperations for RedisHashTable {
 
     /// Override the default get_row implementation to handle hash-specific filtered data format
     fn get_row(&self, index: usize) -> Option<Vec<String>> {
-        info!("Getting row for hash table self: {:?}", self);
+        //info!("Getting row for hash table self: {:?}", self);
         match &self.dataset {
             DataSet::Filtered(data) => {
                 // Hash filtered data is stored as [key1, value1, key2, value2, ...]

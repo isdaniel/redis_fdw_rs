@@ -28,6 +28,7 @@ impl RedisListTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         scan_conditions: &ScanConditions,
+        limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         // Load all list data first since Redis doesn't have LSCAN
         let all_data: Vec<String> = redis::cmd("LRANGE")
@@ -81,6 +82,11 @@ impl RedisListTable {
             }
         }
 
+        // Apply LIMIT/OFFSET to filtered results
+        if limit_offset.has_constraints() {
+            filtered_data = limit_offset.apply_to_vec(filtered_data);
+        }
+
         if filtered_data.is_empty() {
             self.dataset = DataSet::Empty;
             Ok(LoadDataResult::Empty)
@@ -104,7 +110,12 @@ impl RedisTableOperations for RedisListTable {
 
             // Check for pattern-optimizable conditions
             if scan_conditions.has_optimizable_conditions() {
-                return self.load_with_pattern_optimization(conn, key_prefix, &scan_conditions);
+                return self.load_with_pattern_optimization(
+                    conn,
+                    key_prefix,
+                    &scan_conditions,
+                    limit_offset,
+                );
             }
 
             // Handle simple Equal conditions efficiently

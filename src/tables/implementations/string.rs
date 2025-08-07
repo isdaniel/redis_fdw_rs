@@ -70,14 +70,14 @@ impl RedisStringTable {
                         return Ok(LoadDataResult::Empty);
                     }
                 }
-                
+
                 if let Some(limit) = limit_offset.limit {
                     if limit == 0 {
                         self.dataset = DataSet::Empty;
                         return Ok(LoadDataResult::Empty);
                     }
                 }
-                
+
                 self.dataset = DataSet::Complete(DataContainer::String(Some(value)));
                 Ok(LoadDataResult::PushdownApplied(
                     vec![key_prefix.to_string()],
@@ -107,13 +107,18 @@ impl RedisTableOperations for RedisStringTable {
 
             // For string tables, we can optimize by scanning keys with patterns
             if scan_conditions.has_optimizable_conditions() {
-                return self.load_with_scan_optimization(conn, key_prefix, &scan_conditions, limit_offset);
+                return self.load_with_scan_optimization(
+                    conn,
+                    key_prefix,
+                    &scan_conditions,
+                    limit_offset,
+                );
             }
         }
 
         // Fallback: Load single key without optimization
         let value: Option<String> = redis::cmd("GET").arg(key_prefix).query(conn)?;
-        
+
         // Apply LIMIT/OFFSET constraints - for string tables, OFFSET > 0 means no results
         if let Some(offset) = limit_offset.offset {
             if offset > 0 {
@@ -121,7 +126,7 @@ impl RedisTableOperations for RedisStringTable {
                 return Ok(LoadDataResult::Empty);
             }
         }
-        
+
         // Apply LIMIT - if LIMIT is 0, return empty
         if let Some(limit) = limit_offset.limit {
             if limit == 0 {
@@ -129,7 +134,7 @@ impl RedisTableOperations for RedisStringTable {
                 return Ok(LoadDataResult::Empty);
             }
         }
-        
+
         self.dataset = DataSet::Complete(DataContainer::String(value));
         Ok(LoadDataResult::FullyLoaded)
     }

@@ -9,10 +9,9 @@ mod tests {
         tables::{
             implementations::{RedisHashTable, RedisListTable, RedisStringTable},
             interface::RedisTableOperations,
-            types::{DataContainer, DataSet},
+            types::DataSet,
         },
     };
-    use pgrx::prelude::*;
 
     #[test]
     fn test_limit_offset_info_creation() {
