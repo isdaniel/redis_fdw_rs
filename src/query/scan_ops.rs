@@ -5,7 +5,6 @@ use crate::query::{
     limit::LimitOffsetInfo,
     pushdown_types::{ComparisonOperator, PushableCondition},
 };
-use pgrx::info;
 use redis::{ConnectionLike, RedisError, RedisResult};
 
 /// Redis SCAN operation types
@@ -70,6 +69,46 @@ impl PatternMatcher {
 
         // Simple glob matching implementation
         glob_match(&self.pattern, text)
+    }
+}
+
+/// Configuration for different scan command types
+#[derive(Debug)]
+struct ScanConfig {
+    command_name: &'static str,
+    requires_key: bool,
+    limit_multiply_size: usize,
+    default_error_msg: &'static str,
+}
+
+impl ScanConfig {
+    fn for_scan_type(scan_type: &ScanType) -> Self {
+        match scan_type {
+            ScanType::KeyScan => ScanConfig {
+                command_name: "SCAN",
+                requires_key: false,
+                limit_multiply_size: 2,
+                default_error_msg: "Key scan error",
+            },
+            ScanType::HashScan => ScanConfig {
+                command_name: "HSCAN",
+                requires_key: true,
+                limit_multiply_size: 2,
+                default_error_msg: "Hash key is required for HSCAN",
+            },
+            ScanType::SetScan => ScanConfig {
+                command_name: "SSCAN",
+                requires_key: true,
+                limit_multiply_size: 1,
+                default_error_msg: "Set key is required for SSCAN",
+            },
+            ScanType::ZSetScan => ScanConfig {
+                command_name: "ZSCAN",
+                requires_key: true,
+                limit_multiply_size: 1,
+                default_error_msg: "ZSet key is required for ZSCAN",
+            },
+        }
     }
 }
 
@@ -151,90 +190,66 @@ impl RedisScanBuilder {
     where
         T: redis::FromRedisValue + std::fmt::Debug,
     {
-        match self.scan_type {
-            ScanType::KeyScan => self.execute_key_scan(conn),
-            ScanType::HashScan => self.execute_hash_scan(conn),
-            ScanType::SetScan => self.execute_set_scan(conn),
-            ScanType::ZSetScan => self.execute_zset_scan_all(conn),
-        }
+        let config = ScanConfig::for_scan_type(&self.scan_type);
+        self.execute_scan(conn, &config)
     }
 
-    /// Execute SCAN for database keys
-    fn execute_key_scan<T>(&self, conn: &mut dyn ConnectionLike) -> RedisResult<Vec<T>>
-    where
-        T: redis::FromRedisValue 
-    { 
-        let mut limit: usize = 1000;
-        if let Some(limit_offset) = &self.limit {
-            limit = limit_offset.limit.unwrap_or(limit) * 2;
-        }
-
-        let mut collected_results = Vec::with_capacity(limit);
-        let mut cursor = 0;
-
-        loop {
-            let mut cmd = redis::cmd("SCAN");
-            cmd.arg(cursor);
-
-            if let Some(pattern) = &self.pattern {
-                cmd.arg("MATCH").arg(pattern);
-            }
-
-            cmd.arg("COUNT").arg(Self::SCAN_DEFAULT_COUNT);
-         
-
-            let (new_cursor, results): (u64, Vec<T>) = cmd.query(conn)?;
-            for item in results {
-                if collected_results.len() <= limit {
-                    collected_results.push(item);
-                } else {
-                    return Ok(collected_results);
-                }
-            }
-
-            if new_cursor == 0 {
-                break;
-            }
-            cursor = new_cursor;
-        }
-        Ok(collected_results)
-    }
-
-    /// Execute HSCAN for hash fields
-    fn execute_hash_scan<T>(&self, conn: &mut dyn ConnectionLike) -> RedisResult<Vec<T>>
+    /// Generic scan execution function that handles all scan types
+    fn execute_scan<T>(&self, conn: &mut dyn ConnectionLike, config: &ScanConfig) -> RedisResult<Vec<T>>
     where
         T: redis::FromRedisValue + std::fmt::Debug,
     {
-        let key = self.key.as_ref().ok_or_else(|| {
-            RedisError::from((
+        // Validate key requirement
+        if config.requires_key && self.key.is_none() {
+            return Err(RedisError::from((
                 redis::ErrorKind::TypeError,
-                "Hash key is required for HSCAN",
-            ))
-        })?;
+                config.default_error_msg,
+            )));
+        }
 
+        // Calculate limit
         let mut limit: usize = 1000;
         if let Some(limit_offset) = &self.limit {
-            limit = limit_offset.limit.unwrap_or(limit) * 2;
+            let base_limit = limit_offset.limit.unwrap_or(limit);
+            limit = base_limit * config.limit_multiply_size;
         }
 
         let mut collected_results = Vec::with_capacity(limit);
         let mut cursor = 0;
-        loop {
-            let mut cmd = redis::cmd("HSCAN");
-            cmd.arg(key).arg(cursor);
 
+        loop {
+            let mut cmd = redis::cmd(config.command_name);
+            
+            // Add arguments based on scan type
+            if config.requires_key {
+                if let Some(key) = &self.key {
+                    cmd.arg(key);
+                }
+            }
+            cmd.arg(cursor);
+
+            // Add pattern if specified
             if let Some(pattern) = &self.pattern {
                 cmd.arg("MATCH").arg(pattern);
             }
 
-            cmd.arg("COUNT").arg(Self::SCAN_DEFAULT_COUNT);
+            // Add COUNT for most scan types (ZSCAN has special handling)
+            if self.scan_type != ScanType::ZSetScan {
+                cmd.arg("COUNT").arg(Self::SCAN_DEFAULT_COUNT);
+            }
+
             let (new_cursor, results): (u64, Vec<T>) = cmd.query(conn)?;
 
-            for item in results {
-                if collected_results.len() <= limit {
-                    collected_results.push(item);
-                } else {
-                    return Ok(collected_results);
+            // Handle limit checking - ZSCAN doesn't apply limit during scanning
+            if self.scan_type == ScanType::ZSetScan {
+                collected_results.extend(results);
+            } else {
+                for item in results {
+                    if collected_results.len() < limit {
+                        collected_results.push(item);
+                    } else {
+                        return Ok(collected_results);
+                    }
                 }
             }
 
@@ -247,90 +262,6 @@ impl RedisScanBuilder {
         Ok(collected_results)
     }
 
-    /// Execute SSCAN for set members
-    fn execute_set_scan<T>(&self, conn: &mut dyn ConnectionLike) -> RedisResult<Vec<T>>
-    where
-        T: redis::FromRedisValue,
-    {
-        let key = self.key.as_ref().ok_or_else(|| {
-            RedisError::from((redis::ErrorKind::TypeError, "Set key is required for SSCAN"))
-        })?;
-
-        let mut limit: usize = 1000;
-        if let Some(limit_offset) = &self.limit {
-            limit = limit_offset.limit.unwrap_or(limit) * 2;
-        }
-
-        let mut collected_results = Vec::with_capacity(limit);
-        let mut cursor = 0;
-
-        loop {
-            let mut cmd = redis::cmd("SSCAN");
-            cmd.arg(key).arg(cursor);
-
-            if let Some(pattern) = &self.pattern {
-                cmd.arg("MATCH").arg(pattern);
-            }
-
-            cmd.arg("COUNT").arg(Self::SCAN_DEFAULT_COUNT); 
-
-            let (new_cursor, results): (u64, Vec<T>) = cmd.query(conn)?;
-
-            for item in results {
-                if collected_results.len() <= limit {
-                    collected_results.push(item);
-                } else {
-                    return Ok(collected_results);
-                }
-            }
-
-            if new_cursor == 0 {
-                break;
-            }
-            cursor = new_cursor;
-        }
-
-        Ok(collected_results)
-    }
-
-    /// Execute ZSCAN for sorted set members
-    fn execute_zset_scan_all<T>(&self, conn: &mut dyn ConnectionLike) -> RedisResult<Vec<T>>
-    where
-        T: redis::FromRedisValue,
-    {
-        let key = self.key.as_ref().ok_or_else(|| {
-            RedisError::from((
-                redis::ErrorKind::TypeError,
-                "ZSet key is required for ZSCAN",
-            ))
-        })?;
-
-        let mut all_results = Vec::new();
-        let mut cursor = 0;
-
-        loop {
-            let mut cmd = redis::cmd("ZSCAN");
-            cmd.arg(key).arg(cursor);
-
-            if let Some(pattern) = &self.pattern {
-                cmd.arg("MATCH").arg(pattern);
-            }
-
-            // if let Some(count) = self.count {
-            //     cmd.arg("COUNT").arg(count);
-            // }
-
-            let (new_cursor, results): (u64, Vec<T>) = cmd.query(conn)?;
-            all_results.extend(results);
-
-            if new_cursor == 0 {
-                break;
-            }
-            cursor = new_cursor;
-        }
-
-        Ok(all_results)
-    }
 }
 
 /// Extract optimizable conditions for SCAN operations
