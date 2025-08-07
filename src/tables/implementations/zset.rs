@@ -196,11 +196,15 @@ impl RedisTableOperations for RedisZSetTable {
         } else {
             self.dataset = DataSet::Complete(DataContainer::ZSet(result));
         }
-        Ok(LoadDataResult::LoadedToInternal)
+        Ok(LoadDataResult::FullyLoaded)
     }
 
     fn get_dataset(&self) -> &DataSet {
         &self.dataset
+    }
+
+    fn get_dataset_mut(&mut self) -> &mut DataSet {
+        &mut self.dataset
     }
 
     /// Override the default get_row implementation to handle zset-specific filtered data format
@@ -276,9 +280,5 @@ impl RedisTableOperations for RedisZSetTable {
             operator,
             ComparisonOperator::Equal | ComparisonOperator::In | ComparisonOperator::Like
         )
-    }
-
-    fn set_filtered_data(&mut self, data: Vec<String>) {
-        self.dataset = DataSet::Filtered(data);
     }
 }

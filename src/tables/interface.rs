@@ -21,6 +21,9 @@ pub trait RedisTableOperations {
     /// Get the current dataset for this table
     fn get_dataset(&self) -> &DataSet;
 
+    /// Get a mutable reference to the dataset for this table
+    fn get_dataset_mut(&mut self) -> &mut DataSet;
+
     /// Get the number of rows/elements in this table type
     fn data_len(&self) -> usize {
         self.get_dataset().len()
@@ -51,5 +54,7 @@ pub trait RedisTableOperations {
     fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool;
 
     /// Set filtered data directly (used when external filtering is applied)
-    fn set_filtered_data(&mut self, data: Vec<String>);
+    fn set_filtered_data(&mut self, data: Vec<String>) {
+        *self.get_dataset_mut() = DataSet::Filtered(data);
+    }
 }

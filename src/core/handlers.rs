@@ -207,7 +207,7 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
     let tupdesc = (*slot).tts_tupleDescriptor;
 
     exec_clear_tuple(slot);
-
+    
     if state.data_len() == 0 || state.is_read_end() {
         return slot;
     }

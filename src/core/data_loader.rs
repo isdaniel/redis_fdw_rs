@@ -45,23 +45,10 @@ impl<'a> RedisDataLoader<'a> {
                         .as_ref()
                         .unwrap_or(&LimitOffsetInfo::default()),
                 ) {
-                    Ok(LoadDataResult::PushdownApplied(mut filtered_data)) => {
+                    Ok(LoadDataResult::PushdownApplied(filtered_data)) => {
                         // Apply LIMIT/OFFSET if specified
                         if let Some(ref limit_offset) = analysis.limit_offset {
                             if limit_offset.has_constraints() {
-                                log!(
-                                    "Applying LIMIT/OFFSET: limit={:?}, offset={:?}",
-                                    limit_offset.limit,
-                                    limit_offset.offset
-                                );
-                                // Apply limit/offset to the filtered data
-                                let original_len = filtered_data.len();
-                                filtered_data = limit_offset.apply_to_vec(filtered_data);
-                                log!(
-                                    "LIMIT/OFFSET applied: {} -> {} rows",
-                                    original_len,
-                                    filtered_data.len()
-                                );
                                 // Update the internal data with the limited result
                                 self.table_type.set_filtered_data(filtered_data);
                             }
@@ -72,26 +59,11 @@ impl<'a> RedisDataLoader<'a> {
                         );
                         return Ok(());
                     }
-                    Ok(LoadDataResult::LoadedToInternal) => {
-                        // Data was loaded to internal storage, apply LIMIT/OFFSET if needed
-                        if let Some(ref limit_offset) = analysis.limit_offset {
-                            if limit_offset.has_constraints() {
-                                log!(
-                                    "Applying LIMIT/OFFSET to internally loaded data: limit={:?}, offset={:?}",
-                                    limit_offset.limit,
-                                    limit_offset.offset
-                                );
-                            }
-                        }
-                        log!("Data loaded into table internal storage with LIMIT/OFFSET applied");
-                        return Ok(());
-                    }
-                    Ok(LoadDataResult::Empty) => {
-                        log!("No data found for pushdown conditions");
-                        return Ok(());
-                    }
                     Err(e) => {
                         error!("Pushdown failed, falling back to full scan: {:?}", e);
+                    }
+                    _ => {
+                        return Ok(());
                     }
                 }
             } else if analysis.has_limit_pushdown() {

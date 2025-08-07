@@ -1,7 +1,7 @@
 /// Redis SCAN operations and pattern matching utilities
 /// This module provides comprehensive SCAN support for all Redis data types
 /// with LIKE pattern matching capabilities for WHERE clause optimization.
-use crate::query::pushdown_types::{ComparisonOperator, PushableCondition};
+use crate::query::{limit::LimitOffsetInfo, pushdown_types::{ComparisonOperator, PushableCondition}};
 use pgrx::info;
 use redis::{ConnectionLike, RedisError, RedisResult};
 
@@ -76,7 +76,7 @@ pub struct RedisScanBuilder {
     scan_type: ScanType,
     key: Option<String>,
     pattern: Option<String>,
-    count: Option<usize>,
+    limit: Option<LimitOffsetInfo>,
 }
 
 impl RedisScanBuilder {
@@ -86,7 +86,7 @@ impl RedisScanBuilder {
             scan_type: ScanType::KeyScan,
             key: None,
             pattern: None,
-            count: None,
+            limit: None,
         }
     }
 
@@ -96,7 +96,7 @@ impl RedisScanBuilder {
             scan_type: ScanType::KeyScan,
             key: None,
             pattern: None,
-            count: None,
+            limit: None,
         }
     }
 
@@ -106,7 +106,7 @@ impl RedisScanBuilder {
             scan_type: ScanType::HashScan,
             key: Some(key.to_string()),
             pattern: None,
-            count: None,
+            limit: None,
         }
     }
 
@@ -116,7 +116,7 @@ impl RedisScanBuilder {
             scan_type: ScanType::SetScan,
             key: Some(key.to_string()),
             pattern: None,
-            count: None,
+            limit: None,
         }
     }
 
@@ -126,7 +126,7 @@ impl RedisScanBuilder {
             scan_type: ScanType::ZSetScan,
             key: Some(key.to_string()),
             pattern: None,
-            count: None,
+            limit: None,
         }
     }
 
@@ -136,20 +136,20 @@ impl RedisScanBuilder {
         self
     }
 
-    /// Set the count hint for the SCAN operation
-    pub fn with_count(mut self, count: usize) -> Self {
-        self.count = Some(count);
+    /// Set the limit hint for the SCAN operation
+    pub fn with_limit(mut self, limit: LimitOffsetInfo) -> Self {
+        self.limit = Some(limit);
         self
     }
 
     /// Execute the SCAN operation and return all matching results
     pub fn execute_all<T>(&self, conn: &mut dyn ConnectionLike) -> RedisResult<Vec<T>>
     where
-        T: redis::FromRedisValue,
+        T: redis::FromRedisValue + std::fmt::Debug
     {
         match self.scan_type {
             ScanType::KeyScan => self.execute_key_scan_all(conn),
-            ScanType::HashScan => self.execute_hash_scan_all(conn),
+            ScanType::HashScan => self.execute_hash_scan(conn),
             ScanType::SetScan => self.execute_set_scan_all(conn),
             ScanType::ZSetScan => self.execute_zset_scan_all(conn),
         }
@@ -158,7 +158,7 @@ impl RedisScanBuilder {
     /// Execute SCAN for database keys
     fn execute_key_scan_all<T>(&self, conn: &mut dyn ConnectionLike) -> RedisResult<Vec<T>>
     where
-        T: redis::FromRedisValue,
+        T: redis::FromRedisValue, 
     {
         let mut all_results = Vec::new();
         let mut cursor = 0;
@@ -171,9 +171,9 @@ impl RedisScanBuilder {
                 cmd.arg("MATCH").arg(pattern);
             }
 
-            if let Some(count) = self.count {
-                cmd.arg("COUNT").arg(count);
-            }
+            // if let Some(count) = self.count {
+            //     cmd.arg("COUNT").arg(count);
+            // }
 
             let (new_cursor, results): (u64, Vec<T>) = cmd.query(conn)?;
             all_results.extend(results);
@@ -189,9 +189,9 @@ impl RedisScanBuilder {
     }
 
     /// Execute HSCAN for hash fields
-    fn execute_hash_scan_all<T>(&self, conn: &mut dyn ConnectionLike) -> RedisResult<Vec<T>>
+    fn execute_hash_scan<T>(&self, conn: &mut dyn ConnectionLike) -> RedisResult<Vec<T>>
     where
-        T: redis::FromRedisValue,
+        T: redis::FromRedisValue + std::fmt::Debug
     {
         let key = self.key.as_ref().ok_or_else(|| {
             RedisError::from((
@@ -200,24 +200,31 @@ impl RedisScanBuilder {
             ))
         })?;
 
-        let mut all_results = Vec::new();
+        let mut limit : usize = 1000;
+        if let Some(limit_offset) = &self.limit {
+            limit = limit_offset.limit.unwrap_or(limit) * 2;
+        }
+     
+        let mut collected_results = Vec::with_capacity(limit);
         let mut cursor = 0;
-
-       loop {
+        loop {
             let mut cmd = redis::cmd("HSCAN");
             cmd.arg(key).arg(cursor);
 
             if let Some(pattern) = &self.pattern {
                 cmd.arg("MATCH").arg(pattern);
             }
-
-            if let Some(count) = self.count {
-                cmd.arg("COUNT").arg(count);
-            }
-
+            
+            cmd.arg("COUNT").arg(5000);
             let (new_cursor, results): (u64, Vec<T>) = cmd.query(conn)?;
-            all_results.extend(results);
-
+    
+            for item in results {
+                if collected_results.len() <= limit {
+                    collected_results.push(item);
+                } else {
+                    return Ok(collected_results);
+                }
+            }
 
             if new_cursor == 0 {
                 break;
@@ -225,8 +232,7 @@ impl RedisScanBuilder {
             cursor = new_cursor;
         }
 
-
-        Ok(all_results)
+        Ok(collected_results)
     }
 
     /// Execute SSCAN for set members
@@ -249,9 +255,9 @@ impl RedisScanBuilder {
                 cmd.arg("MATCH").arg(pattern);
             }
 
-            if let Some(count) = self.count {
-                cmd.arg("COUNT").arg(count);
-            }
+            // if let Some(count) = self.count {
+            //     cmd.arg("COUNT").arg(count);
+            // }
 
             let (new_cursor, results): (u64, Vec<T>) = cmd.query(conn)?;
             all_results.extend(results);
@@ -288,9 +294,9 @@ impl RedisScanBuilder {
                 cmd.arg("MATCH").arg(pattern);
             }
 
-            if let Some(count) = self.count {
-                cmd.arg("COUNT").arg(count);
-            }
+            // if let Some(count) = self.count {
+            //     cmd.arg("COUNT").arg(count);
+            // }
 
             let (new_cursor, results): (u64, Vec<T>) = cmd.query(conn)?;
             all_results.extend(results);

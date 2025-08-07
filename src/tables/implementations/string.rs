@@ -131,11 +131,15 @@ impl RedisTableOperations for RedisStringTable {
         }
         
         self.dataset = DataSet::Complete(DataContainer::String(value));
-        Ok(LoadDataResult::LoadedToInternal)
+        Ok(LoadDataResult::FullyLoaded)
     }
 
     fn get_dataset(&self) -> &DataSet {
         &self.dataset
+    }
+
+    fn get_dataset_mut(&mut self) -> &mut DataSet {
+        &mut self.dataset
     }
 
     fn insert(
@@ -165,9 +169,5 @@ impl RedisTableOperations for RedisStringTable {
             operator,
             ComparisonOperator::Equal | ComparisonOperator::Like
         )
-    }
-
-    fn set_filtered_data(&mut self, data: Vec<String>) {
-        self.dataset = DataSet::Filtered(data);
     }
 }
