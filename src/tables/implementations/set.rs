@@ -25,131 +25,130 @@ impl RedisSetTable {
         }
     }
 
-    /// Load data with SSCAN optimization for pattern matching
-    fn load_with_scan_optimization(
-        &mut self,
+        fn match_equal(
+        &self,
         conn: &mut dyn redis::ConnectionLike,
-        key_prefix: &str,
-        scan_conditions: &crate::query::scan_ops::ScanConditions,
-        limit_offset: &LimitOffsetInfo,
-    ) -> Result<LoadDataResult, redis::RedisError> {
-        if let Some(pattern) = scan_conditions.get_primary_pattern() {
-            let pattern_matcher = PatternMatcher::from_like_pattern(&pattern);
-            if pattern_matcher.requires_scan() {
-                // Use SSCAN with MATCH to find matching members
-                let matching_members: Vec<String> = RedisScanBuilder::new_set_scan(key_prefix)
-                    .with_pattern(pattern_matcher.get_pattern())
-                    .with_limit(limit_offset.clone())
-                    .execute_all(conn)?;
-                            
-                if matching_members.is_empty() {
-                    self.dataset = DataSet::Empty;
-                    Ok(LoadDataResult::Empty)
-                } else {
-                    self.dataset = DataSet::Filtered(matching_members.clone());
-                    Ok(LoadDataResult::PushdownApplied(matching_members))
-                }
-            } else {
-                // Exact member match
-                let exists: bool = redis::cmd("SISMEMBER")
-                    .arg(key_prefix)
-                    .arg(&pattern)
-                    .query(conn)?;
+        key: &str,
+        member: &str,
+    ) -> redis::RedisResult<Vec<String>> {
+        let exists: bool = redis::cmd("SISMEMBER").arg(key).arg(member).query(conn)?;
+        Ok(if exists { vec![member.to_string()] } else { vec![] })
+    }
 
-                if exists {
-                    let result = vec![pattern.clone()];
-                    self.dataset = DataSet::Filtered(result.clone());
-                    Ok(LoadDataResult::PushdownApplied(result))
-                } else {
-                    self.dataset = DataSet::Empty;
-                    Ok(LoadDataResult::Empty)
-                }
+    fn match_in(
+        &self,
+        conn: &mut dyn redis::ConnectionLike,
+        key: &str,
+        members: &[&str],
+    ) -> redis::RedisResult<Vec<String>> {
+        let mut result = Vec::new();
+        for m in members {
+            let exists: bool = redis::cmd("SISMEMBER").arg(key).arg(m).query(conn)?;
+            if exists {
+                result.push(m.to_string());
             }
-        } else {
-            // No pattern available, fallback to regular load
-            let members: Vec<String> = redis::cmd("SMEMBERS").arg(key_prefix).query(conn)?;
-            self.dataset = DataSet::Complete(DataContainer::Set(members));
-            Ok(LoadDataResult::FullyLoaded)
         }
+        Ok(result)
+    }
+
+    fn match_like(
+        &self,
+        conn: &mut dyn redis::ConnectionLike,
+        key: &str,
+        pattern: &str,
+        limit_offset: &LimitOffsetInfo,
+    ) -> redis::RedisResult<Vec<String>> {
+        let matcher = PatternMatcher::from_like_pattern(pattern);
+        if matcher.requires_scan() {
+            RedisScanBuilder::new_set_scan(key)
+                .with_pattern(matcher.get_pattern())
+                .with_limit(limit_offset.clone())
+                .execute_all(conn)
+        } else {
+            self.match_equal(conn, key, pattern)
+        }
+    }
+
+    fn all_members(
+        &self,
+        conn: &mut dyn redis::ConnectionLike,
+        key: &str,
+    ) -> redis::RedisResult<Vec<String>> {
+        redis::cmd("SMEMBERS").arg(key).query(conn)
+    }
+
+
+    /// Load data with SSCAN optimization for pattern matching
+     fn apply_conditions(
+        &self,
+        conn: &mut dyn redis::ConnectionLike,
+        key: &str,
+        conditions: &[PushableCondition],
+        limit_offset: &LimitOffsetInfo,
+    ) -> redis::RedisResult<Vec<String>> {
+        let mut matched: Option<Vec<String>> = None;
+
+        for cond in conditions {
+            let matches = match cond.operator {
+                ComparisonOperator::Equal => {
+                    self.match_equal(conn, key, &cond.value)?
+                }
+                ComparisonOperator::In => {
+                    let list: Vec<&str> = cond.value.split(',').collect();
+                    self.match_in(conn, key, &list)?
+                }
+                ComparisonOperator::Like => {
+                    self.match_like(conn, key, &cond.value, limit_offset)?
+                }
+                _ => self.all_members(conn, key)?,
+            };
+
+            matched = match matched {
+                Some(prev) => Some(prev.into_iter().filter(|m| matches.contains(m)).collect()),
+                None => Some(matches),
+            };
+
+            if matched.as_ref().map_or(false, |v| v.is_empty()) {
+                break; // short-circuit if no match left
+            }
+        }
+
+        Ok(matched.unwrap_or_default())
     }
 }
 
 impl RedisTableOperations for RedisSetTable {
-    fn load_data(
+     fn load_data(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
-        key_prefix: &str,
+        key: &str,
         conditions: Option<&[PushableCondition]>,
         limit_offset: &LimitOffsetInfo,
-    ) -> Result<LoadDataResult, redis::RedisError> {
-        if let Some(conditions) = conditions {
-            let scan_conditions = extract_scan_conditions(conditions);
+    ) -> redis::RedisResult<LoadDataResult> {
+        let members = if let Some(conds) = conditions {
+            let scan_conditions = extract_scan_conditions(conds);
 
-            // Check for SCAN-optimizable conditions first
             if scan_conditions.has_optimizable_conditions() {
-                return self.load_with_scan_optimization(
-                    conn,
-                    key_prefix,
-                    &scan_conditions,
-                    limit_offset,
-                );
+                let pattern = scan_conditions.get_primary_pattern().unwrap();
+                self.match_like(conn, key, &pattern, limit_offset)?
+            } else {
+                self.apply_conditions(conn, key, conds, limit_offset)?
             }
-
-            // Legacy optimization for non-pattern conditions
-            if !conditions.is_empty() {
-                for condition in conditions {
-                    match condition.operator {
-                        ComparisonOperator::Equal => {
-                            // SISMEMBER for specific member
-                            let exists: bool = redis::cmd("SISMEMBER")
-                                .arg(key_prefix)
-                                .arg(&condition.value)
-                                .query(conn)?;
-
-                            return if exists {
-                                let filtered_data = vec![condition.value.clone()];
-                                self.dataset = DataSet::Filtered(filtered_data.clone());
-                                Ok(LoadDataResult::PushdownApplied(filtered_data))
-                            } else {
-                                self.dataset = DataSet::Empty;
-                                Ok(LoadDataResult::Empty)
-                            };
-                        }
-                        ComparisonOperator::In => {
-                            // Check multiple members
-                            let members: Vec<&str> = condition.value.split(',').collect();
-                            let mut result = Vec::new();
-
-                            for member in members {
-                                let exists: bool = redis::cmd("SISMEMBER")
-                                    .arg(key_prefix)
-                                    .arg(member)
-                                    .query(conn)?;
-
-                                if exists {
-                                    result.push(member.to_string());
-                                }
-                            }
-                            self.dataset = DataSet::Filtered(result.clone());
-                            return Ok(LoadDataResult::PushdownApplied(result));
-                        }
-                        _ => {} // Fall back to full scan
-                    }
-                }
-            }
-        }
-
-        // Load all data into internal storage, applying LIMIT/OFFSET if specified
-        let mut data: Vec<String> = redis::cmd("SMEMBERS").arg(key_prefix).query(conn)?;
-
-        // Apply LIMIT/OFFSET to complete dataset if constraints are present
-        if limit_offset.has_constraints() {
-            data = limit_offset.apply_to_vec(data);
-            self.dataset = DataSet::Filtered(data);
         } else {
-            self.dataset = DataSet::Complete(DataContainer::Set(data));
-        }
-        Ok(LoadDataResult::FullyLoaded)
+            self.all_members(conn, key)?
+        };
+
+        self.dataset = if members.is_empty() {
+            DataSet::Empty
+        } else {
+            DataSet::Filtered(members.clone())
+        };
+
+        Ok(if members.is_empty() {
+            LoadDataResult::Empty
+        } else {
+            LoadDataResult::PushdownApplied(members)
+        })
     }
 
     fn get_dataset(&self) -> &DataSet {

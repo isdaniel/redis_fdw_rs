@@ -131,10 +131,12 @@ unsafe extern "C-unwind" fn get_foreign_plan(
         );
 
         pushdown_analysis.set_limit_offset(extract_limit_offset_info(root));
+
         log!(
             "Extracted LIMIT/OFFSET info: {:?}",
             pushdown_analysis.limit_offset
         );
+        
         if pushdown_analysis.has_optimizations() {
             log!(
                 "Pushdown optimizations enabled: WHERE conditions={:?}, LIMIT/OFFSET={:?}",

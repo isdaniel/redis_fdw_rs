@@ -34,12 +34,11 @@ impl RedisHashTable {
         key_prefix: &str,
         scan_conditions: &crate::query::scan_ops::ScanConditions,
         limit_offset: &LimitOffsetInfo,
-    ) -> Result<LoadDataResult, redis::RedisError> {
+    ) -> Result<LoadDataResult, redis::RedisError> { 
         if let Some(pattern) = scan_conditions.get_primary_pattern() {
             let pattern_matcher = PatternMatcher::from_like_pattern(&pattern);
 
             if pattern_matcher.requires_scan() {
-                // Use HSCAN with MATCH to find matching fields
                 let matching_fields: Vec<String> = RedisScanBuilder::new_hash_scan(key_prefix)
                     .with_pattern(pattern_matcher.get_pattern())
                     .with_limit(limit_offset.clone())
@@ -51,31 +50,72 @@ impl RedisHashTable {
                 }
 
                 self.dataset = DataSet::Filtered(matching_fields.clone());
-                Ok(LoadDataResult::PushdownApplied(matching_fields))
-            } else {
-                // Exact field match
-                let value: Option<String> = redis::cmd("HGET")
-                    .arg(key_prefix)
-                    .arg(&pattern)
-                    .query(conn)?;
-
-                if let Some(v) = value {
-                    let result = vec![pattern.clone(), v];
-                    self.dataset = DataSet::Filtered(result.clone());
-                    Ok(LoadDataResult::PushdownApplied(result))
-                } else {
-                    self.dataset = DataSet::Empty;
-                    Ok(LoadDataResult::Empty)
-                }
+                return Ok(LoadDataResult::PushdownApplied(matching_fields));
             }
-        } else {
-            // No pattern available, fallback to regular load
-            let hash_data: HashMap<String, String> =
-                redis::cmd("HGETALL").arg(key_prefix).query(conn)?;
-            let data_vec: Vec<(String, String)> = hash_data.into_iter().collect();
-            self.dataset = DataSet::Complete(DataContainer::Hash(data_vec));
-            Ok(LoadDataResult::FullyLoaded)
+            info!("scan_conditions:{:?}",scan_conditions);
+            // exact match case
+            return self.hget_exact(conn, key_prefix, &pattern);
         }
+
+        // no pattern — fallback
+        self.hgetall_all(conn, key_prefix)
+    }
+
+     fn hget_exact(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        field: &str,
+    ) -> Result<LoadDataResult, redis::RedisError> {
+        let value: Option<String> = redis::cmd("HGET")
+            .arg(key_prefix)
+            .arg(field)
+            .query(conn)?;
+
+        if let Some(v) = value {
+            let result = vec![field.to_string(), v];
+            self.dataset = DataSet::Filtered(result.clone());
+            Ok(LoadDataResult::PushdownApplied(result))
+        } else {
+            self.dataset = DataSet::Empty;
+            Ok(LoadDataResult::Empty)
+        }
+    }
+
+    /// Helper: Fetch multiple fields
+    fn hmget_fields(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        fields: &[&str],
+    ) -> Result<LoadDataResult, redis::RedisError> {
+        let values: Vec<Option<String>> = redis::cmd("HMGET")
+            .arg(key_prefix)
+            .arg(fields)
+            .query(conn)?;
+
+        let mut result = Vec::new();
+        for (i, value) in values.iter().enumerate() {
+            if let Some(v) = value {
+                result.push(fields[i].to_string());
+                result.push(v.clone());
+            }
+        }
+        self.dataset = DataSet::Filtered(result.clone());
+        Ok(LoadDataResult::PushdownApplied(result))
+    }
+
+    /// Helper: Load full hash
+    fn hgetall_all(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+    ) -> Result<LoadDataResult, redis::RedisError> {
+        let hash_data: HashMap<String, String> =
+            redis::cmd("HGETALL").arg(key_prefix).query(conn)?;
+        let data_vec: Vec<(String, String)> = hash_data.into_iter().collect();
+        self.dataset = DataSet::Complete(DataContainer::Hash(data_vec));
+        Ok(LoadDataResult::FullyLoaded)
     }
 }
 
@@ -87,70 +127,30 @@ impl RedisTableOperations for RedisHashTable {
         conditions: Option<&[PushableCondition]>,
         limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
-        if let Some(conditions) = conditions {
+           if let Some(conditions) = conditions {
             let scan_conditions = extract_scan_conditions(conditions);
 
-            // Check for SCAN-optimizable conditions first
             if scan_conditions.has_optimizable_conditions() {
-                return self.load_with_scan_optimization(
-                    conn,
-                    key_prefix,
-                    &scan_conditions,
-                    limit_offset,
-                );
+                return self.load_with_scan_optimization(conn, key_prefix, &scan_conditions, limit_offset);
             }
 
-            // Legacy optimization for non-pattern conditions
-            // todo fix bug
-            if !conditions.is_empty() {
-                for condition in conditions {
-                    match condition.operator {
-                        ComparisonOperator::Equal => {
-                            pgrx::log!("Applying pushdown for condition: {:?}", condition);
-                            let value: Option<String> = redis::cmd("HGET")
-                                .arg(key_prefix)
-                                .arg(&condition.value)
-                                .query(conn)?;
-
-                            return if let Some(v) = value {
-                                let filtered_data = vec![condition.value.clone(), v];
-                                self.dataset = DataSet::Filtered(filtered_data.clone());
-                                Ok(LoadDataResult::PushdownApplied(filtered_data))
-                            } else {
-                                self.dataset = DataSet::Empty;
-                                Ok(LoadDataResult::Empty)
-                            };
-                        }
-                        ComparisonOperator::In => {
-                            // HMGET for multiple fields
-                            let fields: Vec<&str> = condition.value.split(',').collect();
-                            let values: Vec<Option<String>> = redis::cmd("HMGET")
-                                .arg(key_prefix)
-                                .arg(&fields)
-                                .query(conn)?;
-
-                            let mut result = Vec::new();
-                            for (i, value) in values.iter().enumerate() {
-                                if let Some(v) = value {
-                                    result.push(fields[i].to_string());
-                                    result.push(v.clone());
-                                }
-                            }
-                            self.dataset = DataSet::Filtered(result.clone());
-                            return Ok(LoadDataResult::PushdownApplied(result));
-                        }
-                        _ => {} // Fall back to full scan
+            // legacy non-pattern pushdowns
+            if let Some(first) = conditions.first() {
+                match first.operator {
+                    ComparisonOperator::Equal => {
+                        return self.hget_exact(conn, key_prefix, &first.value);
                     }
+                    ComparisonOperator::In => {
+                        let fields: Vec<&str> = first.value.split(',').collect();
+                        return self.hmget_fields(conn, key_prefix, &fields);
+                    }
+                    _ => {} // fallback
                 }
             }
         }
 
-        // Load all data (either no conditions or pushdown not applicable)
-        let hash_data: HashMap<String, String> =
-            redis::cmd("HGETALL").arg(key_prefix).query(conn)?;
-        let data_vec: Vec<(String, String)> = hash_data.into_iter().collect();
-        self.dataset = DataSet::Complete(DataContainer::Hash(data_vec));
-        Ok(LoadDataResult::FullyLoaded)
+        // no conditions or pushdown not possible
+        self.hgetall_all(conn, key_prefix)
     }
 
     fn get_dataset(&self) -> &DataSet {

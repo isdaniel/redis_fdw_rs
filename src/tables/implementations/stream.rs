@@ -45,23 +45,21 @@ impl RedisStreamTable {
         end_id: &str,
         count: Option<usize>,
     ) -> Result<LoadDataResult, redis::RedisError> {
-        let count = count.unwrap_or(self.batch_size);
 
         // Use XRANGE to get stream entries
-        let entries: Vec<(String, Vec<(String, String)>)> = if let Some(c) = Some(count) {
-            redis::cmd("XRANGE")
+        let entries: Vec<(String, Vec<(String, String)>)> = match count {
+            Some(c) => redis::cmd("XRANGE")
                 .arg(key_prefix)
                 .arg(start_id)
                 .arg(end_id)
                 .arg("COUNT")
                 .arg(c)
-                .query(conn)?
-        } else {
-            redis::cmd("XRANGE")
+                .query(conn)?,
+            None => redis::cmd("XRANGE")
                 .arg(key_prefix)
                 .arg(start_id)
                 .arg(end_id)
-                .query(conn)?
+                .query(conn)?,
         };
 
         if entries.is_empty() {

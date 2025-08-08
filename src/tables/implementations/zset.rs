@@ -40,10 +40,9 @@ impl RedisZSetTable {
         }
 
         // Add limit information to the scan builder
-        scan_builder = scan_builder.with_limit(limit_offset.clone());
-
-        // Execute ZSCAN to get member-score pairs
-        let all_members: Vec<String> = scan_builder.execute_all(conn)?;
+        let all_members: Vec<String> =  scan_builder
+            .with_limit(limit_offset.clone())
+            .execute_all(conn)?;
 
         let mut filtered_data = Vec::new();
 
