@@ -194,26 +194,41 @@ Redis FDW now includes built-in connection pooling using the R2D2 library, provi
 - **Resource Efficiency**: Maintains a controlled number of connections, preventing resource exhaustion
 - **Reliability**: Automatic connection health checks and recovery from network issues
 - **Thread Safety**: Safe concurrent access from multiple PostgreSQL worker processes
+- **Global Pool Manager**: Singleton pool manager caches connection pools by configuration, eliminating pool creation overhead
 
 #### Default Pool Configuration
 ```rust
-// Default R2D2 pool settings (automatically applied)
-Pool::builder()
-    .max_size(10)                    // Maximum 10 connections
-    .min_idle(None)                  // Minimum idle connections (defaults to max_size)
-    .connection_timeout(Duration::from_secs(30))  // 30 second connection timeout
-    .idle_timeout(Some(Duration::from_secs(600))) // 10 minute idle timeout
-    .max_lifetime(Some(Duration::from_secs(1800))) // 30 minute max lifetime
-    .test_on_check_out(true)         // Validate connections before use
-    .build(redis_client)
+// Default pool settings (automatically applied)
+PoolConfig {
+    max_size: 64,                              // Maximum connections per pool
+    min_idle: Some(8),                         // Minimum idle connections
+    connection_timeout: Duration::from_secs(30), // Connection acquisition timeout
+    max_lifetime: Some(Duration::from_secs(1800)), // 30 minute max lifetime
+    idle_timeout: Some(Duration::from_secs(600)),  // 10 minute idle timeout
+}
+```
+
+#### Configurable Pool Options
+You can customize pool behavior using server options:
+```sql
+CREATE SERVER redis_server 
+FOREIGN DATA WRAPPER redis_wrapper
+OPTIONS (
+    host_port '127.0.0.1:6379',
+    pool_max_size '128',              -- Maximum connections (1-512)
+    pool_min_idle '16',               -- Minimum idle connections
+    pool_connection_timeout_ms '10000', -- Timeout in milliseconds (100-60000)
+    pool_max_lifetime_secs '3600',    -- Max connection lifetime (60-7200)
+    pool_idle_timeout_secs '300'      -- Idle timeout (30-3600)
+);
 ```
 
 #### Pool Behavior
 - **Connection Reuse**: Connections are automatically returned to the pool after each operation
 - **Health Monitoring**: Connections are validated before use and replaced if unhealthy
 - **Automatic Cleanup**: Idle connections are closed after timeout to free resources
-- **Graceful Degradation**: Pool handles connection failures transparently
-- **Thread Safe**: Multiple PostgreSQL backends can safely share the connection pool
+- **Graceful Degradation**: Pool handles connection failures transparently with retry logic
+- **Thread Safe**: Multiple PostgreSQL backends can safely share the global pool manager
 
 ### 1. Create Foreign Data Wrapper
 ```sql
@@ -574,10 +589,11 @@ src/
 │   └── mod.rs               # Redis authentication handling
 ├── core/                     # Core FDW functionality  
 │   ├── mod.rs               # Module organization and re-exports
-│   ├── connection.rs        # Redis connection types and management
-│   ├── connection_factory.rs # Connection creation with R2D2 pooling
+│   ├── connection_factory.rs # Connection configuration and factory
+│   ├── pool_manager.rs      # Global connection pool manager with R2D2
 │   ├── handlers.rs          # PostgreSQL FDW handlers  
-│   └── state.rs            # FDW state management
+│   ├── data_loader.rs       # Data loading utilities
+│   └── state_manager.rs     # FDW state management
 ├── query/                   # Query processing & optimization
 │   ├── mod.rs              # Query module organization
 │   ├── pushdown.rs         # WHERE clause pushdown logic
@@ -659,7 +675,8 @@ See [TESTING.md](TESTING.md) for detailed testing documentation.
 The Redis FDW follows a clean object-oriented architecture with integrated connection pooling for optimal performance:
 
 #### Connection Management
-- **R2D2 Connection Pool**: Centralized connection pool management using the industry-standard R2D2 library
+- **Global Pool Manager**: Singleton pool manager that caches connection pools by configuration
+- **R2D2 Connection Pool**: Industry-standard R2D2 library for efficient connection pooling
 - **Connection Reuse**: Automatic connection lifecycle management with pooling, validation, and cleanup
 - **Thread Safety**: Safe concurrent access from multiple PostgreSQL worker processes
 - **Health Monitoring**: Automatic detection and replacement of failed connections
@@ -708,9 +725,10 @@ match &mut self.table_type {
 ## Performance Considerations
 
 - **Memory Management**: The extension uses PostgreSQL's memory contexts for efficient memory allocation
-- **Connection Pooling**: Integrated R2D2 connection pooling provides:
+- **Global Connection Pool Manager**: Singleton pool manager with R2D2 provides:
+  - **Pool caching**: Pools are cached by configuration key, eliminating pool creation overhead
   - **Efficient connection reuse**: Eliminates overhead of creating new Redis connections for each operation
-  - **Configurable pool sizing**: Customizable maximum connections (default: 10) and minimum idle connections
+  - **Configurable pool sizing**: Customizable maximum connections (default: 64) and minimum idle connections (default: 8)
   - **Connection health monitoring**: Automatic validation and cleanup of stale connections
   - **Connection timeouts**: Configurable connection acquisition timeout (default: 30 seconds)
   - **Resource management**: Automatic connection lifecycle management with idle timeout (default: 10 minutes) and maximum lifetime (default: 30 minutes)
@@ -764,7 +782,7 @@ SELECT EXISTS(SELECT 1 FROM user_roles WHERE member = 'admin');
    - Check Redis server connection limits (`redis-cli CONFIG GET maxclients`)
    - Monitor connection pool usage in PostgreSQL logs
    - Consider increasing Redis server connection limits if needed
-   - Default pool size is 10 connections per PostgreSQL backend
+   - Default pool size is 64 connections per pool (configurable via `pool_max_size`)
 
 8. **Connection timeouts**: If operations timeout frequently:
    - Verify network connectivity to Redis server
@@ -871,26 +889,6 @@ export REDIS_CLUSTER_NODES="127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003,127.0.0
 cargo pgrx test pg14
 ```
 
-## Roadmap
-
-### Recently Completed ✅
-- ✅ **Redis Cluster support** with automatic failover and sharding
-- ✅ **Object-oriented architecture refactoring** with unified trait interface
-- ✅ **Method consolidation** eliminating duplicate functionality 
-- ✅ **Enhanced encapsulation** with table-specific optimization logic
-- ✅ **Simplified state management** using clean delegation patterns
-- ✅ **Connection pooling and reuse** with R2D2 for improved performance and resource management
-- ✅ Code restructuring and modular architecture
-- ✅ Enhanced error handling for DELETE operations
-- ✅ Implementation of SELECT and INSERT operations for all Redis data types
-- ✅ DELETE operations for Hash, Set, ZSet, and String data types
-- ✅ Improved memory safety and validation
-- ✅ **WHERE clause pushdown optimization** for Hash, Set, and String table types
-
-### Planned Features
-- 🚧 Async operations support
-- 🚧 Custom connection-pool on option.
-- 🚧 Transaction support and rollback capabilities
 
 **Note**: UPDATE operations are intentionally not supported due to fundamental differences between Redis data models and SQL UPDATE semantics. Redis operations like HSET, SADD, etc. are inherently insert-or-update operations, making traditional SQL UPDATE behavior problematic.
 

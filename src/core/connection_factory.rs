@@ -1,11 +1,16 @@
-use crate::{auth::RedisAuthConfig, core::connection::RedisConnectionType};
+use crate::{
+    auth::RedisAuthConfig,
+    core::pool_manager::{get_pooled_connection, PoolConfig, PooledConnection},
+};
 /// Redis connection factory module
 ///
 /// This module provides a clean interface for creating Redis connections
 /// with proper error handling, configuration validation, and retry logic.
 /// It supports both single-node and cluster Redis deployments with authentication.
+///
+/// The factory now uses a global connection pool manager for efficient connection
+/// reuse across queries, significantly improving performance under concurrent workloads.
 use pgrx::prelude::*;
-use redis::{cluster::ClusterClient, Client};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -44,6 +49,7 @@ pub struct RedisConnectionConfig {
     pub retry_attempts: Option<u32>,
     pub retry_delay: Option<Duration>,
     pub auth_config: RedisAuthConfig,
+    pub pool_config: PoolConfig,
 }
 
 impl RedisConnectionConfig {
@@ -69,7 +75,8 @@ impl RedisConnectionConfig {
             database,
             retry_attempts: Some(3),
             retry_delay: Some(Duration::from_millis(100)),
-            auth_config: RedisAuthConfig::from_user_mapping_options(&opts),
+            auth_config: RedisAuthConfig::from_user_mapping_options(opts),
+            pool_config: PoolConfig::from_options(opts),
         };
 
         config.validate()?;
@@ -157,51 +164,34 @@ impl RedisConnectionConfig {
 /// Redis connection factory for creating properly configured connections
 pub struct RedisConnectionFactory;
 
-//todo could be configured from options
 impl RedisConnectionFactory {
-    const MAX_SIZE: u32 = 64;
-    /// Create a Redis client based on configuration
-    fn create_client_pool(
+    /// Create a connection using the global pool manager (recommended)
+    /// This method reuses existing pools for the same configuration,
+    /// significantly improving performance under concurrent workloads.
+    pub fn create_pooled_connection(
         config: &RedisConnectionConfig,
-    ) -> ConnectionFactoryResult<r2d2::PooledConnection<Client>> {
-        let url = config.get_single_node_url()?;
-        log!("Creating single Redis node connection: {}", url);
-        let pool = r2d2::Pool::builder()
-            .max_size(Self::MAX_SIZE)
-            .build(Client::open(url)?)?;
-        let connection = pool
-            .get()
-            .map_err(|e| ConnectionFactoryError::ConnectionFailed(e.to_string()))?;
-        Ok(connection)
+    ) -> ConnectionFactoryResult<PooledConnection> {
+        get_pooled_connection(
+            &config.host_port,
+            config.database,
+            &config.auth_config,
+            &config.pool_config,
+        )
+        .map_err(|e| ConnectionFactoryError::ConnectionFailed(e.to_string()))
     }
 
-    /// Create a Redis cluster client based on configuration
-    fn create_cluster_client_pool(
-        config: &RedisConnectionConfig,
-    ) -> ConnectionFactoryResult<r2d2::PooledConnection<ClusterClient>> {
-        let nodes = config.parse_cluster_nodes()?;
-        log!("Creating Redis cluster connection with nodes: {:?}", nodes);
-        let pool = r2d2::Pool::builder()
-            .max_size(Self::MAX_SIZE)
-            .build(ClusterClient::new(nodes)?)?;
-        let cluster_connection = pool
-            .get()
-            .map_err(|e| ConnectionFactoryError::ConnectionFailed(e.to_string()))?;
-        Ok(cluster_connection)
-    }
-
-    /// Create a connection with retry logic
+    /// Create a connection with retry logic using the global pool
     pub fn create_connection_with_retry(
         config: &RedisConnectionConfig,
-    ) -> ConnectionFactoryResult<RedisConnectionType> {
+    ) -> ConnectionFactoryResult<PooledConnection> {
         let retry_attempts = config.retry_attempts.unwrap_or(3);
         let retry_delay = config.retry_delay.unwrap_or(Duration::from_millis(100));
 
         for attempt in 1..=retry_attempts {
-            match Self::create_connection_internal(config) {
+            match Self::create_pooled_connection(config) {
                 Ok(connection) => {
                     log!(
-                        "Successfully created Redis connection on attempt {}",
+                        "Successfully acquired Redis connection from pool on attempt {}",
                         attempt
                     );
                     return Ok(connection);
@@ -225,18 +215,5 @@ impl RedisConnectionFactory {
         }
 
         unreachable!()
-    }
-
-    /// Internal connection creation logic
-    fn create_connection_internal(
-        config: &RedisConnectionConfig,
-    ) -> ConnectionFactoryResult<RedisConnectionType> {
-        if config.is_cluster_mode() {
-            let cluster_connetion_pool = Self::create_cluster_client_pool(config)?;
-            Ok(RedisConnectionType::Cluster(cluster_connetion_pool))
-        } else {
-            let client_pool = Self::create_client_pool(config)?;
-            Ok(RedisConnectionType::Single(client_pool))
-        }
     }
 }

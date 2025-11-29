@@ -4,9 +4,9 @@
 /// configuration, connection status, and coordination between components.
 use crate::{
     core::{
-        connection::RedisConnectionType,
         connection_factory::{RedisConnectionConfig, RedisConnectionFactory},
         data_loader::RedisDataLoader,
+        pool_manager::PooledConnection,
     },
     query::pushdown_types::PushdownAnalysis,
     tables::types::RedisTableType,
@@ -18,7 +18,7 @@ use std::collections::HashMap;
 /// Simplified Redis FDW state focused on state management
 pub struct RedisFdwState {
     pub tmp_ctx: MemoryContext,
-    pub redis_connection: Option<RedisConnectionType>,
+    pub redis_connection: Option<PooledConnection>,
     pub database: i64,
     pub host_port: String,
     pub table_type: RedisTableType,
