@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::{
     query::{
         limit::LimitOffsetInfo,
@@ -239,13 +241,14 @@ impl RedisTableOperations for RedisZSetTable {
     }
 
     /// Override the default get_row implementation to handle zset-specific filtered data format
-    fn get_row(&self, index: usize) -> Option<Vec<String>> {
+    #[inline]
+    fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
         match &self.dataset {
             DataSet::Filtered(data) => {
                 // ZSet filtered data is stored as [member1, score1, member2, score2, ...]
                 let data_index = index * 2;
                 if data_index + 1 < data.len() {
-                    Some(vec![data[data_index].clone(), data[data_index + 1].clone()])
+                    Some(vec![Cow::Borrowed(data[data_index].as_str()), Cow::Borrowed(data[data_index + 1].as_str())])
                 } else {
                     None
                 }
@@ -255,6 +258,7 @@ impl RedisTableOperations for RedisZSetTable {
     }
 
     /// Override data_len to handle zset-specific filtered data format
+    #[inline]
     fn data_len(&self) -> usize {
         match &self.dataset {
             DataSet::Filtered(data) => data.len() / 2, // member-score pairs

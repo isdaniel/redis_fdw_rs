@@ -216,7 +216,7 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
 
     if let Some(row_data) = state.get_row(state.row_count as usize) {
         for (col_idx, value) in row_data.iter().enumerate() {
-            write_datum_to_slot(slot, tupdesc, col_idx, value);
+            write_datum_to_slot(slot, tupdesc, col_idx, value.as_ref());
         }
     } else {
         error!("Failed to get row data at index: {}", state.row_count);
