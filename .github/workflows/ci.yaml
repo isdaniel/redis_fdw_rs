@@ -65,7 +65,7 @@ jobs:
           redis-cli -h 127.0.0.1 -p 7001 cluster info | grep 'cluster_state:ok'
           
       - name: Install cargo-pgrx
-        run: cargo install cargo-pgrx --version 0.15.0
+        run: cargo install cargo-pgrx --version 0.16.1
 
       - name: Initialize pgrx for PostgreSQL ${{ env.PG_VER }}
         run: cargo pgrx init --pg${{ env.PG_VER }} ${{ env.PG_BIN }}/pg_config

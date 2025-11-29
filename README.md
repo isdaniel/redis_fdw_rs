@@ -44,7 +44,7 @@ docker-compose -f docker-compose.cluster-test.yml up -d
 2. **Build and install the extension:**
 
 ```bash
-cargo pgrx install --version 0.15.0
+cargo pgrx install --version 0.16.1
 ```
 
 3. **Create the extension in PostgreSQL:**
@@ -624,7 +624,7 @@ src/
 ### Building from Source
 ```bash
 # Install pgrx
-cargo install --locked cargo-pgrx --version 0.15.0
+cargo install --locked cargo-pgrx --version 0.16.1
 
 # Initialize pgrx
 cargo pgrx init

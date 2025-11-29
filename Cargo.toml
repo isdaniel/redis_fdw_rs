@@ -19,14 +19,14 @@ pg17 = ["pgrx/pg17", "pgrx-tests/pg17" ]
 pg_test = []
 
 [dependencies]
-pgrx = "=0.15.0"
+pgrx = "=0.16.1"
 redis = { version = "0.32.4", features = ["cluster", "streams","r2d2"] }
 thiserror = "2.0.12"
 rand = "0.9.2"
 r2d2 = "0.8.10"
 
 [dev-dependencies]
-pgrx-tests = "=0.15.0"
+pgrx-tests = "=0.16.1"
 
 [profile.dev]
 panic = "unwind"

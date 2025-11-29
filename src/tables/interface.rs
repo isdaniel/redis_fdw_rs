@@ -5,6 +5,7 @@ use crate::{
     },
     tables::types::{DataSet, LoadDataResult},
 };
+use std::borrow::Cow;
 
 /// Trait defining common operations for Redis table types
 pub trait RedisTableOperations {
@@ -25,12 +26,14 @@ pub trait RedisTableOperations {
     fn get_dataset_mut(&mut self) -> &mut DataSet;
 
     /// Get the number of rows/elements in this table type
+    #[inline]
     fn data_len(&self) -> usize {
         self.get_dataset().len()
     }
 
-    /// Get a row at the specified index for iteration
-    fn get_row(&self, index: usize) -> Option<Vec<String>> {
+    /// Get a row at the specified index for iteration - returns borrowed strings to avoid cloning
+    #[inline]
+    fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
         self.get_dataset().get_row(index)
     }
 

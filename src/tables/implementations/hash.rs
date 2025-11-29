@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use pgrx::info;
@@ -162,14 +163,15 @@ impl RedisTableOperations for RedisHashTable {
     }
 
     /// Override the default get_row implementation to handle hash-specific filtered data format
-    fn get_row(&self, index: usize) -> Option<Vec<String>> {
+    #[inline]
+    fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
         //info!("Getting row for hash table self: {:?}", self);
         match &self.dataset {
             DataSet::Filtered(data) => {
                 // Hash filtered data is stored as [key1, value1, key2, value2, ...]
                 let data_index = index * 2;
                 if data_index + 1 < data.len() {
-                    Some(vec![data[data_index].clone(), data[data_index + 1].clone()])
+                    Some(vec![Cow::Borrowed(data[data_index].as_str()), Cow::Borrowed(data[data_index + 1].as_str())])
                 } else {
                     None
                 }
@@ -179,6 +181,7 @@ impl RedisTableOperations for RedisHashTable {
     }
 
     /// Override data_len to handle hash-specific filtered data format
+    #[inline]
     fn data_len(&self) -> usize {
         match &self.dataset {
             DataSet::Filtered(data) => data.len() / 2, // key-value pairs

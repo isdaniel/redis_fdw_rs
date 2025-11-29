@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::{
     query::{
         limit::LimitOffsetInfo,
@@ -253,12 +255,13 @@ impl RedisTableOperations for RedisStreamTable {
         self.dataset.len()
     }
 
-    fn get_row(&self, index: usize) -> Option<Vec<String>> {
+    #[inline]
+    fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
         match &self.dataset {
             DataSet::Filtered(entries) => {
                 entries.get(index).map(|entry| {
                     // Parse tab-separated entry back to fields
-                    entry.split('\t').map(|s| s.to_string()).collect()
+                    entry.split('\t').map(|s| Cow::Owned(s.to_string())).collect()
                 })
             }
             DataSet::Complete(container) => container.get_row(index),

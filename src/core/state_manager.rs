@@ -12,6 +12,7 @@ use crate::{
     tables::types::RedisTableType,
 };
 use pgrx::{pg_sys::MemoryContext, prelude::*};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// Simplified Redis FDW state focused on state management
@@ -161,7 +162,8 @@ impl RedisFdwState {
     }
 
     /// Get a row at the specified index
-    pub fn get_row(&self, index: usize) -> Option<Vec<String>> {
+    #[inline]
+    pub fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
         self.table_type.get_row(index)
     }
 }
