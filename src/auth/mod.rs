@@ -68,4 +68,14 @@ impl RedisAuthConfig {
             format!("redis://{}{}", auth_component, url)
         }
     }
+
+    /// Generate a cache key for pool identification
+    /// This is used to uniquely identify connection configurations for pooling
+    pub fn cache_key(&self) -> String {
+        match (&self.username, &self.password) {
+            (Some(u), Some(_)) => format!("auth:user:{}", u),
+            (None, Some(_)) => "auth:password".to_string(),
+            _ => "noauth".to_string(),
+        }
+    }
 }

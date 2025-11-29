@@ -53,7 +53,7 @@ impl RedisHashTable {
                 self.dataset = DataSet::Filtered(matching_fields.clone());
                 return Ok(LoadDataResult::PushdownApplied(matching_fields));
             }
-            info!("scan_conditions:{:?}",scan_conditions);
+            //info!("scan_conditions:{:?}",scan_conditions);
             // exact match case
             return self.hget_exact(conn, key_prefix, &pattern);
         }

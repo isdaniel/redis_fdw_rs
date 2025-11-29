@@ -3,7 +3,7 @@
 /// This module handles the loading of data from Redis with optimizations
 /// like pushdown conditions and limit/offset operations.
 use crate::{
-    core::connection::RedisConnectionType,
+    core::pool_manager::PooledConnection,
     query::{limit::LimitOffsetInfo, pushdown_types::PushdownAnalysis},
     tables::types::{LoadDataResult, RedisTableType},
 };
@@ -30,7 +30,7 @@ impl<'a> RedisDataLoader<'a> {
     }
 
     /// Load data from Redis, applying pushdown optimizations if available
-    pub fn load_data(&mut self, connection: &mut RedisConnectionType) -> Result<(), String> {
+    pub fn load_data(&mut self, connection: &mut PooledConnection) -> Result<(), String> {
         let conn_like = connection.as_connection_like_mut();
 
         if let Some(analysis) = self.pushdown_analysis {

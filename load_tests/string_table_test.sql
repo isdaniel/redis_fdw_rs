@@ -1,8 +1,8 @@
 -- pgbench script for string table operations
+-- Tests INSERT, SELECT, DELETE on Redis string foreign table
 
+\set id random(1, 100000 * :scale)
 
-BEGIN;
 INSERT INTO redis_string (value) VALUES ('value-' || :id);
-SELECT * FROM redis_string WHERE value = 'pgbench:string:' || :id;
-DELETE FROM redis_string WHERE value = 'pgbench:string:' || :id;
-COMMIT;
+SELECT * FROM redis_string WHERE value = 'value-' || :id;
+DELETE FROM redis_string WHERE value = 'value-' || :id;
