@@ -1,8 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use pgrx::info;
-
 use crate::{
     query::{
         limit::LimitOffsetInfo,
@@ -35,7 +33,7 @@ impl RedisHashTable {
         key_prefix: &str,
         scan_conditions: &crate::query::scan_ops::ScanConditions,
         limit_offset: &LimitOffsetInfo,
-    ) -> Result<LoadDataResult, redis::RedisError> { 
+    ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(pattern) = scan_conditions.get_primary_pattern() {
             let pattern_matcher = PatternMatcher::from_like_pattern(&pattern);
 
@@ -62,16 +60,13 @@ impl RedisHashTable {
         self.hgetall_all(conn, key_prefix)
     }
 
-     fn hget_exact(
+    fn hget_exact(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         field: &str,
     ) -> Result<LoadDataResult, redis::RedisError> {
-        let value: Option<String> = redis::cmd("HGET")
-            .arg(key_prefix)
-            .arg(field)
-            .query(conn)?;
+        let value: Option<String> = redis::cmd("HGET").arg(key_prefix).arg(field).query(conn)?;
 
         if let Some(v) = value {
             let result = vec![field.to_string(), v];
@@ -128,11 +123,16 @@ impl RedisTableOperations for RedisHashTable {
         conditions: Option<&[PushableCondition]>,
         limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
-           if let Some(conditions) = conditions {
+        if let Some(conditions) = conditions {
             let scan_conditions = extract_scan_conditions(conditions);
 
             if scan_conditions.has_optimizable_conditions() {
-                return self.load_with_scan_optimization(conn, key_prefix, &scan_conditions, limit_offset);
+                return self.load_with_scan_optimization(
+                    conn,
+                    key_prefix,
+                    &scan_conditions,
+                    limit_offset,
+                );
             }
 
             // legacy non-pattern pushdowns
@@ -171,7 +171,10 @@ impl RedisTableOperations for RedisHashTable {
                 // Hash filtered data is stored as [key1, value1, key2, value2, ...]
                 let data_index = index * 2;
                 if data_index + 1 < data.len() {
-                    Some(vec![Cow::Borrowed(data[data_index].as_str()), Cow::Borrowed(data[data_index + 1].as_str())])
+                    Some(vec![
+                        Cow::Borrowed(data[data_index].as_str()),
+                        Cow::Borrowed(data[data_index + 1].as_str()),
+                    ])
                 } else {
                     None
                 }

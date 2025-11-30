@@ -41,17 +41,6 @@ impl Default for PoolConfig {
 }
 
 impl PoolConfig {
-    /// Create a high-performance configuration optimized for throughput
-    pub fn high_performance() -> Self {
-        Self {
-            max_size: 128,
-            min_idle: Some(16),
-            connection_timeout: Duration::from_secs(10),
-            max_lifetime: Some(Duration::from_secs(3600)), // 1 hour
-            idle_timeout: Some(Duration::from_secs(300)),  // 5 minutes
-        }
-    }
-
     /// Create configuration from options map
     pub fn from_options(opts: &HashMap<String, String>) -> Self {
         let mut config = Self::default();
@@ -99,8 +88,6 @@ pub enum RedisPool {
 /// Cached pool entry with metadata
 struct PoolEntry {
     pool: RedisPool,
-    #[allow(dead_code)]
-    created_at: std::time::Instant,
 }
 
 /// Global pool manager that caches connection pools by configuration key
@@ -187,7 +174,6 @@ impl PoolManager {
             key,
             PoolEntry {
                 pool: RedisPool::Single(pool.clone()),
-                created_at: std::time::Instant::now(),
             },
         );
 
@@ -240,35 +226,11 @@ impl PoolManager {
             key,
             PoolEntry {
                 pool: RedisPool::Cluster(pool.clone()),
-                created_at: std::time::Instant::now(),
             },
         );
 
         Ok(pool)
     }
-
-    /// Get pool statistics
-    #[allow(dead_code)]
-    pub fn stats(&self) -> PoolStats {
-        PoolStats {
-            single_pools_count: self.single_pools.len(),
-            cluster_pools_count: self.cluster_pools.len(),
-        }
-    }
-
-    /// Clear all cached pools (useful for testing or reconfiguration)
-    #[allow(dead_code)]
-    pub fn clear(&mut self) {
-        self.single_pools.clear();
-        self.cluster_pools.clear();
-    }
-}
-
-/// Pool statistics
-#[derive(Debug)]
-pub struct PoolStats {
-    pub single_pools_count: usize,
-    pub cluster_pools_count: usize,
 }
 
 /// Errors that can occur in pool management

@@ -195,7 +195,11 @@ impl RedisScanBuilder {
     }
 
     /// Generic scan execution function that handles all scan types
-    fn execute_scan<T>(&self, conn: &mut dyn ConnectionLike, config: &ScanConfig) -> RedisResult<Vec<T>>
+    fn execute_scan<T>(
+        &self,
+        conn: &mut dyn ConnectionLike,
+        config: &ScanConfig,
+    ) -> RedisResult<Vec<T>>
     where
         T: redis::FromRedisValue + std::fmt::Debug,
     {
@@ -219,7 +223,7 @@ impl RedisScanBuilder {
 
         loop {
             let mut cmd = redis::cmd(config.command_name);
-            
+
             // Add arguments based on scan type
             if config.requires_key {
                 if let Some(key) = &self.key {
@@ -261,7 +265,6 @@ impl RedisScanBuilder {
 
         Ok(collected_results)
     }
-
 }
 
 /// Extract optimizable conditions for SCAN operations

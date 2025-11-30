@@ -43,16 +43,6 @@ impl PushdownAnalysis {
         }
     }
 
-    /// Create analysis with WHERE conditions only
-    pub fn with_conditions(conditions: Vec<PushableCondition>) -> Self {
-        let can_optimize = !conditions.is_empty();
-        Self {
-            pushable_conditions: conditions,
-            can_optimize,
-            limit_offset: None,
-        }
-    }
-
     /// Create analysis with both WHERE conditions and LIMIT/OFFSET
     pub fn with_conditions_and_limit(
         conditions: Vec<PushableCondition>,

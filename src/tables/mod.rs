@@ -6,12 +6,3 @@ pub mod implementations;
 pub mod interface;
 pub mod macros;
 pub mod types;
-
-// Re-export the interface trait for convenience
-pub use interface::RedisTableOperations;
-
-// Re-export common types
-pub use types::*;
-
-// Re-export all table implementations
-pub use implementations::*;

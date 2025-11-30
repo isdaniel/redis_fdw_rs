@@ -152,7 +152,8 @@ impl DataSet {
             DataSet::Empty => None,
             DataSet::Filtered(data) => {
                 // Generic implementation - each element is a row
-                data.get(index).map(|item| vec![Cow::Borrowed(item.as_str())])
+                data.get(index)
+                    .map(|item| vec![Cow::Borrowed(item.as_str())])
             }
             DataSet::Complete(container) => container.get_row(index),
         }
@@ -189,12 +190,21 @@ impl DataContainer {
                     None
                 }
             }
-            DataContainer::Hash(pairs) => pairs.get(index).map(|(k, v)| vec![Cow::Borrowed(k.as_str()), Cow::Borrowed(v.as_str())]),
-            DataContainer::List(items) => items.get(index).map(|item| vec![Cow::Borrowed(item.as_str())]),
-            DataContainer::Set(items) => items.get(index).map(|item| vec![Cow::Borrowed(item.as_str())]),
-            DataContainer::ZSet(items) => items
+            DataContainer::Hash(pairs) => pairs
                 .get(index)
-                .map(|(member, score)| vec![Cow::Borrowed(member.as_str()), Cow::Owned(score.to_string())]),
+                .map(|(k, v)| vec![Cow::Borrowed(k.as_str()), Cow::Borrowed(v.as_str())]),
+            DataContainer::List(items) => items
+                .get(index)
+                .map(|item| vec![Cow::Borrowed(item.as_str())]),
+            DataContainer::Set(items) => items
+                .get(index)
+                .map(|item| vec![Cow::Borrowed(item.as_str())]),
+            DataContainer::ZSet(items) => items.get(index).map(|(member, score)| {
+                vec![
+                    Cow::Borrowed(member.as_str()),
+                    Cow::Owned(score.to_string()),
+                ]
+            }),
         }
     }
 }

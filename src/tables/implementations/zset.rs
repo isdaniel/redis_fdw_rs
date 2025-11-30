@@ -42,7 +42,7 @@ impl RedisZSetTable {
         }
 
         // Add limit information to the scan builder
-        let all_members: Vec<String> =  scan_builder
+        let all_members: Vec<String> = scan_builder
             .with_limit(limit_offset.clone())
             .execute_all(conn)?;
 
@@ -248,7 +248,10 @@ impl RedisTableOperations for RedisZSetTable {
                 // ZSet filtered data is stored as [member1, score1, member2, score2, ...]
                 let data_index = index * 2;
                 if data_index + 1 < data.len() {
-                    Some(vec![Cow::Borrowed(data[data_index].as_str()), Cow::Borrowed(data[data_index + 1].as_str())])
+                    Some(vec![
+                        Cow::Borrowed(data[data_index].as_str()),
+                        Cow::Borrowed(data[data_index + 1].as_str()),
+                    ])
                 } else {
                     None
                 }

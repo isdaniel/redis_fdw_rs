@@ -124,7 +124,7 @@ mod tests {
     // ================================================
     // HASH TABLE INTEGRATION TESTS
     // ================================================
-    
+
     // #[pg_test]
     // fn test_integration_hash_table_basic_limit_offset() {
     //     log!("=== Testing Hash Table Basic LIMIT/OFFSET Functionality ===");
@@ -161,7 +161,7 @@ mod tests {
 
     //     log!("=== Hash Table Basic LIMIT/OFFSET Test Completed ===");
     // }
-    
+
     #[pg_test]
     fn test_integration_hash_like_limit() {
         log!("=== Testing Hash Table LIKE with LIMIT/OFFSET ===");
@@ -629,7 +629,6 @@ mod tests {
 
         log!("=== ZSet Table LIKE with LIMIT/OFFSET Test Completed ===");
     }
-
 
     #[pg_test]
     fn test_integration_zset_table_basic_crud() {

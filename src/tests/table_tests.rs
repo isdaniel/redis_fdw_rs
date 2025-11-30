@@ -3,7 +3,6 @@
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 mod tests {
-    use pgrx::pg_sys;
     use std::borrow::Cow;
 
     use crate::tables::{
@@ -49,7 +48,10 @@ mod tests {
         // Test empty string
         string_table.dataset = DataSet::Complete(DataContainer::String(Some("".to_string())));
         assert_eq!(string_table.data_len(), 1);
-        assert_eq!(cow_vec_to_string_vec(string_table.get_row(0)), Some(vec!["".to_string()]));
+        assert_eq!(
+            cow_vec_to_string_vec(string_table.get_row(0)),
+            Some(vec!["".to_string()])
+        );
 
         // Test None data
         string_table.dataset = DataSet::Complete(DataContainer::String(None));
@@ -104,9 +106,18 @@ mod tests {
 
         // Check data
         assert_eq!(list_table.data_len(), 3);
-        assert_eq!(cow_vec_to_string_vec(list_table.get_row(0)), Some(vec!["apple".to_string()]));
-        assert_eq!(cow_vec_to_string_vec(list_table.get_row(1)), Some(vec!["banana".to_string()]));
-        assert_eq!(cow_vec_to_string_vec(list_table.get_row(2)), Some(vec!["cherry".to_string()]));
+        assert_eq!(
+            cow_vec_to_string_vec(list_table.get_row(0)),
+            Some(vec!["apple".to_string()])
+        );
+        assert_eq!(
+            cow_vec_to_string_vec(list_table.get_row(1)),
+            Some(vec!["banana".to_string()])
+        );
+        assert_eq!(
+            cow_vec_to_string_vec(list_table.get_row(2)),
+            Some(vec!["cherry".to_string()])
+        );
         assert_eq!(list_table.get_row(3), None);
     }
 
@@ -127,17 +138,32 @@ mod tests {
 
         // Check data
         assert_eq!(set_table.data_len(), 3);
-        assert_eq!(cow_vec_to_string_vec(set_table.get_row(0)), Some(vec!["red".to_string()]));
-        assert_eq!(cow_vec_to_string_vec(set_table.get_row(1)), Some(vec!["green".to_string()]));
-        assert_eq!(cow_vec_to_string_vec(set_table.get_row(2)), Some(vec!["blue".to_string()]));
+        assert_eq!(
+            cow_vec_to_string_vec(set_table.get_row(0)),
+            Some(vec!["red".to_string()])
+        );
+        assert_eq!(
+            cow_vec_to_string_vec(set_table.get_row(1)),
+            Some(vec!["green".to_string()])
+        );
+        assert_eq!(
+            cow_vec_to_string_vec(set_table.get_row(2)),
+            Some(vec!["blue".to_string()])
+        );
         assert_eq!(set_table.get_row(3), None);
 
         // Test with filtered data
         let filtered_data = vec!["yellow".to_string(), "purple".to_string()];
         set_table.dataset = DataSet::Filtered(filtered_data);
         assert_eq!(set_table.data_len(), 2);
-        assert_eq!(cow_vec_to_string_vec(set_table.get_row(0)), Some(vec!["yellow".to_string()]));
-        assert_eq!(cow_vec_to_string_vec(set_table.get_row(1)), Some(vec!["purple".to_string()]));
+        assert_eq!(
+            cow_vec_to_string_vec(set_table.get_row(0)),
+            Some(vec!["yellow".to_string()])
+        );
+        assert_eq!(
+            cow_vec_to_string_vec(set_table.get_row(1)),
+            Some(vec!["purple".to_string()])
+        );
         assert_eq!(set_table.get_row(2), None);
 
         // Test empty set
@@ -332,17 +358,32 @@ mod tests {
         ]));
 
         assert_eq!(list_table.data_len(), 6);
-        assert_eq!(cow_vec_to_string_vec(list_table.get_row(0)), Some(vec!["first".to_string()]));
-        assert_eq!(cow_vec_to_string_vec(list_table.get_row(1)), Some(vec!["".to_string()]));
-        assert_eq!(cow_vec_to_string_vec(list_table.get_row(5)), Some(vec!["🚀🌟".to_string()]));
+        assert_eq!(
+            cow_vec_to_string_vec(list_table.get_row(0)),
+            Some(vec!["first".to_string()])
+        );
+        assert_eq!(
+            cow_vec_to_string_vec(list_table.get_row(1)),
+            Some(vec!["".to_string()])
+        );
+        assert_eq!(
+            cow_vec_to_string_vec(list_table.get_row(5)),
+            Some(vec!["🚀🌟".to_string()])
+        );
         assert_eq!(list_table.get_row(6), None);
 
         // Test large list simulation
         let large_list: Vec<String> = (0..1000).map(|i| format!("item_{}", i)).collect();
         list_table.dataset = DataSet::Complete(DataContainer::List(large_list));
         assert_eq!(list_table.data_len(), 1000);
-        assert_eq!(cow_vec_to_string_vec(list_table.get_row(0)), Some(vec!["item_0".to_string()]));
-        assert_eq!(cow_vec_to_string_vec(list_table.get_row(999)), Some(vec!["item_999".to_string()]));
+        assert_eq!(
+            cow_vec_to_string_vec(list_table.get_row(0)),
+            Some(vec!["item_0".to_string()])
+        );
+        assert_eq!(
+            cow_vec_to_string_vec(list_table.get_row(999)),
+            Some(vec!["item_999".to_string()])
+        );
         assert_eq!(list_table.get_row(1000), None);
     }
 
@@ -362,8 +403,14 @@ mod tests {
         ]));
 
         assert_eq!(set_table.data_len(), 7);
-        assert_eq!(cow_vec_to_string_vec(set_table.get_row(0)), Some(vec!["user:123".to_string()]));
-        assert_eq!(cow_vec_to_string_vec(set_table.get_row(6)), Some(vec!["".to_string()]));
+        assert_eq!(
+            cow_vec_to_string_vec(set_table.get_row(0)),
+            Some(vec!["user:123".to_string()])
+        );
+        assert_eq!(
+            cow_vec_to_string_vec(set_table.get_row(6)),
+            Some(vec!["".to_string()])
+        );
 
         // Test filtered data with various types
         let filtered = vec![
@@ -374,8 +421,14 @@ mod tests {
         ];
         set_table.dataset = DataSet::Filtered(filtered);
         assert_eq!(set_table.data_len(), 4);
-        assert_eq!(cow_vec_to_string_vec(set_table.get_row(0)), Some(vec!["admin".to_string()]));
-        assert_eq!(cow_vec_to_string_vec(set_table.get_row(3)), Some(vec!["guest".to_string()]));
+        assert_eq!(
+            cow_vec_to_string_vec(set_table.get_row(0)),
+            Some(vec!["admin".to_string()])
+        );
+        assert_eq!(
+            cow_vec_to_string_vec(set_table.get_row(3)),
+            Some(vec!["guest".to_string()])
+        );
         assert_eq!(set_table.get_row(4), None);
     }
 
@@ -448,7 +501,10 @@ mod tests {
             string_table.dataset =
                 DataSet::Complete(DataContainer::String(Some(test_string.to_string())));
             assert_eq!(string_table.data_len(), 1);
-            assert_eq!(cow_vec_to_string_vec(string_table.get_row(0)), Some(vec![test_string.to_string()]));
+            assert_eq!(
+                cow_vec_to_string_vec(string_table.get_row(0)),
+                Some(vec![test_string.to_string()])
+            );
             assert_eq!(string_table.get_row(1), None);
         }
 
@@ -541,7 +597,10 @@ mod tests {
         // Test with single element
         list_table.dataset = DataSet::Complete(DataContainer::List(vec!["single".to_string()]));
         assert_eq!(list_table.data_len(), 1);
-        assert_eq!(cow_vec_to_string_vec(list_table.get_row(0)), Some(vec!["single".to_string()]));
+        assert_eq!(
+            cow_vec_to_string_vec(list_table.get_row(0)),
+            Some(vec!["single".to_string()])
+        );
 
         // Test with empty strings in list
         list_table.dataset = DataSet::Complete(DataContainer::List(vec![
@@ -550,9 +609,18 @@ mod tests {
             "".to_string(),
         ]));
         assert_eq!(list_table.data_len(), 3);
-        assert_eq!(cow_vec_to_string_vec(list_table.get_row(0)), Some(vec!["".to_string()]));
-        assert_eq!(cow_vec_to_string_vec(list_table.get_row(1)), Some(vec!["non-empty".to_string()]));
-        assert_eq!(cow_vec_to_string_vec(list_table.get_row(2)), Some(vec!["".to_string()]));
+        assert_eq!(
+            cow_vec_to_string_vec(list_table.get_row(0)),
+            Some(vec!["".to_string()])
+        );
+        assert_eq!(
+            cow_vec_to_string_vec(list_table.get_row(1)),
+            Some(vec!["non-empty".to_string()])
+        );
+        assert_eq!(
+            cow_vec_to_string_vec(list_table.get_row(2)),
+            Some(vec!["".to_string()])
+        );
 
         // Test with unicode characters
         list_table.dataset = DataSet::Complete(DataContainer::List(vec![
@@ -561,9 +629,18 @@ mod tests {
             "עברית".to_string(),
         ]));
         assert_eq!(list_table.data_len(), 3);
-        assert_eq!(cow_vec_to_string_vec(list_table.get_row(0)), Some(vec!["🚀".to_string()]));
-        assert_eq!(cow_vec_to_string_vec(list_table.get_row(1)), Some(vec!["测试".to_string()]));
-        assert_eq!(cow_vec_to_string_vec(list_table.get_row(2)), Some(vec!["עברית".to_string()]));
+        assert_eq!(
+            cow_vec_to_string_vec(list_table.get_row(0)),
+            Some(vec!["🚀".to_string()])
+        );
+        assert_eq!(
+            cow_vec_to_string_vec(list_table.get_row(1)),
+            Some(vec!["测试".to_string()])
+        );
+        assert_eq!(
+            cow_vec_to_string_vec(list_table.get_row(2)),
+            Some(vec!["עברית".to_string()])
+        );
     }
 
     #[test]
@@ -576,8 +653,14 @@ mod tests {
             "value".to_string(),
         ]));
         assert_eq!(set_table.data_len(), 2); // Our structure doesn't enforce uniqueness, Redis does
-        assert_eq!(cow_vec_to_string_vec(set_table.get_row(0)), Some(vec!["value".to_string()]));
-        assert_eq!(cow_vec_to_string_vec(set_table.get_row(1)), Some(vec!["value".to_string()]));
+        assert_eq!(
+            cow_vec_to_string_vec(set_table.get_row(0)),
+            Some(vec!["value".to_string()])
+        );
+        assert_eq!(
+            cow_vec_to_string_vec(set_table.get_row(1)),
+            Some(vec!["value".to_string()])
+        );
 
         // Test with numeric strings
         set_table.dataset = DataSet::Complete(DataContainer::Set(vec![
@@ -586,9 +669,18 @@ mod tests {
             "-10".to_string(),
         ]));
         assert_eq!(set_table.data_len(), 3);
-        assert_eq!(cow_vec_to_string_vec(set_table.get_row(0)), Some(vec!["1".to_string()]));
-        assert_eq!(cow_vec_to_string_vec(set_table.get_row(1)), Some(vec!["2.5".to_string()]));
-        assert_eq!(cow_vec_to_string_vec(set_table.get_row(2)), Some(vec!["-10".to_string()]));
+        assert_eq!(
+            cow_vec_to_string_vec(set_table.get_row(0)),
+            Some(vec!["1".to_string()])
+        );
+        assert_eq!(
+            cow_vec_to_string_vec(set_table.get_row(1)),
+            Some(vec!["2.5".to_string()])
+        );
+        assert_eq!(
+            cow_vec_to_string_vec(set_table.get_row(2)),
+            Some(vec!["-10".to_string()])
+        );
     }
 
     #[test]
@@ -676,14 +768,23 @@ mod tests {
         ];
         list_table.dataset = DataSet::Filtered(list_filtered);
         assert_eq!(list_table.data_len(), 3);
-        assert_eq!(cow_vec_to_string_vec(list_table.get_row(0)), Some(vec!["item1".to_string()]));
-        assert_eq!(cow_vec_to_string_vec(list_table.get_row(2)), Some(vec!["item3".to_string()]));
+        assert_eq!(
+            cow_vec_to_string_vec(list_table.get_row(0)),
+            Some(vec!["item1".to_string()])
+        );
+        assert_eq!(
+            cow_vec_to_string_vec(list_table.get_row(2)),
+            Some(vec!["item3".to_string()])
+        );
 
         // Test with filtered data for set
         let set_filtered = vec!["member1".to_string(), "member2".to_string()];
         set_table.dataset = DataSet::Filtered(set_filtered);
         assert_eq!(set_table.data_len(), 2);
-        assert_eq!(cow_vec_to_string_vec(set_table.get_row(0)), Some(vec!["member1".to_string()]));
+        assert_eq!(
+            cow_vec_to_string_vec(set_table.get_row(0)),
+            Some(vec!["member1".to_string()])
+        );
 
         // Test with filtered data for zset (member-score pairs)
         let zset_filtered = vec![
