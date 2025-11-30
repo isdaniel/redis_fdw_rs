@@ -133,23 +133,6 @@ pub fn string_from_cstr(c_str: *const i8) -> String {
     }
 }
 
-/// Convert a Rust string to a C string (CString)
-/// This function is safe because it uses `CString::new` which ensures that the string does
-/// not contain null bytes, making it suitable for use with C APIs.
-/// # Arguments
-/// * `s`: A string slice containing the value to convert.
-/// # Returns
-/// A `CString` containing the contents of the Rust string. If the string contains
-/// null bytes, it will panic at runtime.
-/// # Note
-/// This function is intended for use when passing strings to C APIs that expect null-terminated strings
-/// and do not allow null bytes within the string.
-/// It is safe to use as long as the input string does not contain null bytes.
-#[inline]
-pub fn string_to_cstr(s: &str) -> CString {
-    CString::new(s).unwrap()
-}
-
 /// Convert a string to a Datum using the type input function for the specified Oid
 /// This function is unsafe because it dereferences raw pointers and assumes that the type input function is
 /// valid for the given Oid. Ensure that the Oid corresponds to a valid data type in PostgreSQL.
