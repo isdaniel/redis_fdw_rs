@@ -1,5 +1,3 @@
-use pgrx::info;
-
 use crate::{
     query::{
         limit::LimitOffsetInfo,
@@ -8,7 +6,7 @@ use crate::{
     },
     tables::{
         interface::RedisTableOperations,
-        types::{DataContainer, DataSet, LoadDataResult},
+        types::{DataSet, LoadDataResult},
     },
 };
 
@@ -25,14 +23,18 @@ impl RedisSetTable {
         }
     }
 
-        fn match_equal(
+    fn match_equal(
         &self,
         conn: &mut dyn redis::ConnectionLike,
         key: &str,
         member: &str,
     ) -> redis::RedisResult<Vec<String>> {
         let exists: bool = redis::cmd("SISMEMBER").arg(key).arg(member).query(conn)?;
-        Ok(if exists { vec![member.to_string()] } else { vec![] })
+        Ok(if exists {
+            vec![member.to_string()]
+        } else {
+            vec![]
+        })
     }
 
     fn match_in(
@@ -77,9 +79,8 @@ impl RedisSetTable {
         redis::cmd("SMEMBERS").arg(key).query(conn)
     }
 
-
     /// Load data with SSCAN optimization for pattern matching
-     fn apply_conditions(
+    fn apply_conditions(
         &self,
         conn: &mut dyn redis::ConnectionLike,
         key: &str,
@@ -90,9 +91,7 @@ impl RedisSetTable {
 
         for cond in conditions {
             let matches = match cond.operator {
-                ComparisonOperator::Equal => {
-                    self.match_equal(conn, key, &cond.value)?
-                }
+                ComparisonOperator::Equal => self.match_equal(conn, key, &cond.value)?,
                 ComparisonOperator::In => {
                     let list: Vec<&str> = cond.value.split(',').collect();
                     self.match_in(conn, key, &list)?
@@ -118,7 +117,7 @@ impl RedisSetTable {
 }
 
 impl RedisTableOperations for RedisSetTable {
-     fn load_data(
+    fn load_data(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
         key: &str,

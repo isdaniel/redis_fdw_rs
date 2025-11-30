@@ -73,7 +73,10 @@ mod tests {
             IntegrationTestHelper::setup_string_table_with_data(Some("test_value".to_string()));
 
         assert_eq!(table.data_len(), 1);
-        assert_eq!(cow_vec_to_string_vec(table.get_row(0)), Some(vec!["test_value".to_string()]));
+        assert_eq!(
+            cow_vec_to_string_vec(table.get_row(0)),
+            Some(vec!["test_value".to_string()])
+        );
         assert_eq!(cow_vec_to_string_vec(table.get_row(1)), None);
     }
 
@@ -94,7 +97,10 @@ mod tests {
         let table = IntegrationTestHelper::setup_string_table_with_data(Some("".to_string()));
 
         assert_eq!(table.data_len(), 1);
-        assert_eq!(cow_vec_to_string_vec(table.get_row(0)), Some(vec!["".to_string()]));
+        assert_eq!(
+            cow_vec_to_string_vec(table.get_row(0)),
+            Some(vec!["".to_string()])
+        );
 
         // Test with special characters
         let table = IntegrationTestHelper::setup_string_table_with_data(Some(
@@ -116,7 +122,10 @@ mod tests {
             IntegrationTestHelper::setup_string_table_with_data(Some("Hello 世界 🌍".to_string()));
 
         assert_eq!(table.data_len(), 1);
-        assert_eq!(cow_vec_to_string_vec(table.get_row(0)), Some(vec!["Hello 世界 🌍".to_string()]));
+        assert_eq!(
+            cow_vec_to_string_vec(table.get_row(0)),
+            Some(vec!["Hello 世界 🌍".to_string()])
+        );
     }
 
     #[cfg(any(test, feature = "pg_test"))]
@@ -232,7 +241,10 @@ mod tests {
 
         // Check order preservation
         for (i, expected) in data.iter().enumerate() {
-            assert_eq!(cow_vec_to_string_vec(table.get_row(i)), Some(vec![expected.clone()]));
+            assert_eq!(
+                cow_vec_to_string_vec(table.get_row(i)),
+                Some(vec![expected.clone()])
+            );
         }
 
         assert_eq!(cow_vec_to_string_vec(table.get_row(3)), None);
@@ -261,7 +273,10 @@ mod tests {
 
         // Lists should preserve duplicates and order
         for (i, expected) in data.iter().enumerate() {
-            assert_eq!(cow_vec_to_string_vec(table.get_row(i)), Some(vec![expected.clone()]));
+            assert_eq!(
+                cow_vec_to_string_vec(table.get_row(i)),
+                Some(vec![expected.clone()])
+            );
         }
     }
 
@@ -274,8 +289,14 @@ mod tests {
         assert_eq!(table.data_len(), 100);
 
         // Check first few and last few items
-        assert_eq!(cow_vec_to_string_vec(table.get_row(0)), Some(vec!["item_0".to_string()]));
-        assert_eq!(cow_vec_to_string_vec(table.get_row(99)), Some(vec!["item_99".to_string()]));
+        assert_eq!(
+            cow_vec_to_string_vec(table.get_row(0)),
+            Some(vec!["item_0".to_string()])
+        );
+        assert_eq!(
+            cow_vec_to_string_vec(table.get_row(99)),
+            Some(vec!["item_99".to_string()])
+        );
         assert_eq!(cow_vec_to_string_vec(table.get_row(100)), None);
     }
 
@@ -347,7 +368,10 @@ mod tests {
 
         // Check filtered data access
         for (i, expected) in filtered_data.iter().enumerate() {
-            assert_eq!(cow_vec_to_string_vec(table.get_row(i)), Some(vec![expected.clone()]));
+            assert_eq!(
+                cow_vec_to_string_vec(table.get_row(i)),
+                Some(vec![expected.clone()])
+            );
         }
     }
 
@@ -558,7 +582,10 @@ mod tests {
     fn test_boundary_conditions() {
         // Test accessing rows beyond bounds
         let string_table = RedisStringTable::new();
-        assert_eq!(cow_vec_to_string_vec(string_table.get_row(usize::MAX)), None);
+        assert_eq!(
+            cow_vec_to_string_vec(string_table.get_row(usize::MAX)),
+            None
+        );
         assert_eq!(cow_vec_to_string_vec(string_table.get_row(1000)), None);
 
         let hash_table = RedisHashTable::new();
@@ -646,7 +673,10 @@ mod tests {
             ));
 
             assert_eq!(table.data_len(), 1);
-            assert_eq!(cow_vec_to_string_vec(table.get_row(0)), Some(vec![special_value.to_string()]));
+            assert_eq!(
+                cow_vec_to_string_vec(table.get_row(0)),
+                Some(vec![special_value.to_string()])
+            );
         }
     }
 
@@ -658,7 +688,10 @@ mod tests {
         let table = IntegrationTestHelper::setup_string_table_with_data(Some(large_string.clone()));
 
         assert_eq!(table.data_len(), 1);
-        assert_eq!(cow_vec_to_string_vec(table.get_row(0)), Some(vec![large_string]));
+        assert_eq!(
+            cow_vec_to_string_vec(table.get_row(0)),
+            Some(vec![large_string])
+        );
 
         // Test large hash
         let large_hash: Vec<(String, String)> =

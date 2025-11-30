@@ -113,7 +113,7 @@ impl WhereClausePushdown {
         let (column_name, value) = Self::extract_column_and_value(left_arg, right_arg, relation)?;
         // Determine operator type based on operator OID
         let operator = Self::get_operator_from_oid(op_expr.opno)?;
-        
+
         // Check if this condition is suitable for the table type
         if table_type.supports_pushdown(&operator) {
             Some(PushableCondition {

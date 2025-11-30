@@ -136,7 +136,7 @@ unsafe extern "C-unwind" fn get_foreign_plan(
             "Extracted LIMIT/OFFSET info: {:?}",
             pushdown_analysis.limit_offset
         );
-        
+
         if pushdown_analysis.has_optimizations() {
             log!(
                 "Pushdown optimizations enabled: WHERE conditions={:?}, LIMIT/OFFSET={:?}",

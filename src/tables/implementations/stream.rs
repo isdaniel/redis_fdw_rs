@@ -47,7 +47,6 @@ impl RedisStreamTable {
         end_id: &str,
         count: Option<usize>,
     ) -> Result<LoadDataResult, redis::RedisError> {
-
         // Use XRANGE to get stream entries
         let entries: Vec<(String, Vec<(String, String)>)> = match count {
             Some(c) => redis::cmd("XRANGE")
@@ -169,35 +168,6 @@ impl RedisStreamTable {
         let len: usize = redis::cmd("XLEN").arg(key_prefix).query(conn)?;
         Ok(len)
     }
-
-    /// Format stream data for display (used for LIMIT/OFFSET operations)
-    fn format_stream_data(&self, entries: &[(String, Vec<(String, String)>)]) -> Vec<String> {
-        entries
-            .iter()
-            .map(|(id, fields)| {
-                let fields_str = fields
-                    .iter()
-                    .map(|(field, value)| format!("{}:{}", field, value))
-                    .collect::<Vec<_>>()
-                    .join("|");
-                format!("{}:{}", id, fields_str)
-            })
-            .collect()
-    }
-
-    /// Extract stream data as strings for filtering/limiting
-    fn extract_stream_data(&self) -> Option<Vec<String>> {
-        match &self.dataset {
-            DataSet::Complete(_) => {
-                // For streams, we need to construct the data representation
-                // This is a simplified version - in practice, you might want to
-                // get the actual stream data from the complete dataset
-                Some(Vec::new()) // Placeholder implementation
-            }
-            DataSet::Filtered(data) => Some(data.clone()),
-            DataSet::Empty => None,
-        }
-    }
 }
 
 impl RedisTableOperations for RedisStreamTable {
@@ -261,7 +231,10 @@ impl RedisTableOperations for RedisStreamTable {
             DataSet::Filtered(entries) => {
                 entries.get(index).map(|entry| {
                     // Parse tab-separated entry back to fields
-                    entry.split('\t').map(|s| Cow::Owned(s.to_string())).collect()
+                    entry
+                        .split('\t')
+                        .map(|s| Cow::Owned(s.to_string()))
+                        .collect()
                 })
             }
             DataSet::Complete(container) => container.get_row(index),

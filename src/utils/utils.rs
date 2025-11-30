@@ -1,3 +1,4 @@
+use crate::utils::{cell::Cell, row::Row};
 use pgrx::{
     list::{self, List},
     memcx::{self, MemCx},
@@ -12,31 +13,6 @@ use std::{
     ffi::{c_void, CStr, CString},
     num::NonZeroUsize,
 };
-
-#[cfg(feature = "pg14")]
-use pgrx::pg_sys::Value;
-
-use crate::utils::{cell::Cell, row::Row};
-
-#[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
-#[repr(C)]
-pub struct Value {
-    pub type_: pgrx::pg_sys::NodeTag,
-    pub val: pgrx::pg_sys::ValUnion,
-}
-
-#[cfg(feature = "pg14")]
-pub unsafe fn pg_string_to_rust(val_value: *mut Value) -> String {
-    CStr::from_ptr((*val_value).val.str_)
-        .to_str()
-        .unwrap_or_default()
-        .to_string()
-}
-
-#[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
-pub unsafe fn pg_string_to_rust(val_value: *mut Value) -> String {
-    (*val_value).val.sval.to_string()
-}
 
 pub unsafe fn get_foreign_table_options(relid: pgrx::pg_sys::Oid) -> HashMap<String, String> {
     let mut options = HashMap::new();
