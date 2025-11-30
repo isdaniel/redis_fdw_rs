@@ -123,15 +123,6 @@ pub struct RedisScanBuilder {
 
 impl RedisScanBuilder {
     const SCAN_DEFAULT_COUNT: usize = 5000;
-    /// Create a new SCAN builder (default to key scan)
-    pub fn new() -> Self {
-        Self {
-            scan_type: ScanType::KeyScan,
-            key: None,
-            pattern: None,
-            limit: None,
-        }
-    }
 
     /// Create a new SCAN builder for database keys
     pub fn new_key_scan() -> Self {

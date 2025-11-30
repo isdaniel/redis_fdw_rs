@@ -1,11 +1,7 @@
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 mod tests {
-    use crate::utils::{
-        cell::Cell,
-        row::Row,
-        utils::{cell_to_string, string_from_cstr, string_to_cstr},
-    };
+    use crate::utils::{cell::Cell, row::Row, utils::cell_to_string};
     use pgrx::prelude::*;
 
     #[pg_test]
@@ -18,19 +14,6 @@ mod tests {
         // Test with None cell
         let result = cell_to_string(None);
         assert_eq!(result, "NULL");
-    }
-
-    #[pg_test]
-    fn test_string_conversions() {
-        let test_string = "Hello, Redis FDW!";
-
-        // Test string to CString conversion
-        let c_string = string_to_cstr(test_string);
-        assert_eq!(c_string.to_str().unwrap(), test_string);
-
-        // Test CString to string conversion
-        let back_to_string = string_from_cstr(c_string.as_ptr());
-        assert_eq!(back_to_string, test_string);
     }
 
     #[pg_test]
