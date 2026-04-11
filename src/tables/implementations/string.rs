@@ -79,9 +79,7 @@ impl RedisStringTable {
                 }
 
                 self.dataset = DataSet::Complete(DataContainer::String(Some(value)));
-                Ok(LoadDataResult::PushdownApplied(
-                    vec![key_prefix.to_string()],
-                ))
+                Ok(LoadDataResult::FullyLoaded)
             } else {
                 self.dataset = DataSet::Empty;
                 Ok(LoadDataResult::Empty)

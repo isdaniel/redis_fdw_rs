@@ -1,6 +1,9 @@
 use crate::{
     core::state_manager::RedisFdwState,
-    query::{limit::extract_limit_offset_info, pushdown::WhereClausePushdown},
+    query::{
+        limit::extract_limit_offset_info,
+        pushdown::WhereClausePushdown,
+    },
     tables::types::RedisTableType,
     utils::{memory::create_wrappers_memctx, row::Row, utils::*},
 };
@@ -69,9 +72,23 @@ extern "C-unwind" fn get_foreign_rel_size(
             state.table_type = RedisTableType::from_str(table_type_str);
         }
 
+        // Calculate cost estimate using actual Redis statistics
+        let cost_estimate = state.estimate_costs();
+        log!(
+            "Cost estimation: rows={}, startup_cost={}, total_cost={}, width={}",
+            cost_estimate.rows,
+            cost_estimate.startup_cost,
+            cost_estimate.total_cost,
+            cost_estimate.width
+        );
+        
+        // Store the estimate for use in get_foreign_paths
+        let estimated_rows = cost_estimate.rows;
+        state.cost_estimate = Some(cost_estimate);
+
         (*baserel).fdw_private =
             Box::into_raw(Box::new(state)) as *mut RedisFdwState as *mut std::os::raw::c_void;
-        (*baserel).rows = 1000.0;
+        (*baserel).rows = estimated_rows;
     }
 }
 
@@ -83,13 +100,34 @@ extern "C-unwind" fn get_foreign_paths(
 ) {
     log!("---> get_foreign_paths");
     unsafe {
+        // Retrieve cost estimate from state (calculated in get_foreign_rel_size)
+        let state = (*baserel).fdw_private as *mut RedisFdwState;
+        let (startup_cost, total_cost) = if !state.is_null() {
+            if let Some(ref estimate) = (*state).cost_estimate {
+                log!(
+                    "Using calculated costs: startup={}, total={}",
+                    estimate.startup_cost,
+                    estimate.total_cost
+                );
+                (estimate.startup_cost, estimate.total_cost)
+            } else {
+                // Fallback to quick estimate if no cached estimate
+                log!("No cached estimate, using fallback costs");
+                (10.0, (*baserel).rows * 0.1 + 10.0)
+            }
+        } else {
+            // Default fallback costs
+            log!("State not available, using default costs");
+            (10.0, 100.0)
+        };
+        
         let path = pgrx::pg_sys::create_foreignscan_path(
             _root,
             baserel,
             ptr::null_mut(),
             (*baserel).rows,
-            10.0,
-            100.0,
+            startup_cost,
+            total_cost,
             ptr::null_mut(),
             ptr::null_mut(),
             ptr::null_mut(),
@@ -244,9 +282,23 @@ extern "C-unwind" fn end_foreign_scan(node: *mut pgrx::pg_sys::ForeignScanState)
 }
 
 #[pg_guard]
-extern "C-unwind" fn re_scan_foreign_scan(_node: *mut pgrx::pg_sys::ForeignScanState) {
+extern "C-unwind" fn re_scan_foreign_scan(node: *mut pgrx::pg_sys::ForeignScanState) {
     log!("---> re_scan_foreign_scan");
-    // Reset or reinitialize scan state here if needed
+    unsafe {
+        let fdw_state = (*node).fdw_state as *mut RedisFdwState;
+        if fdw_state.is_null() {
+            return;
+        }
+        let mut state = PgBox::<RedisFdwState>::from_pg(fdw_state);
+
+        // Reset the row cursor so iteration starts from the beginning
+        state.row_count = 0;
+
+        // Reload data to handle parameterized rescans (e.g., nested loop joins)
+        let _ = state.reload_data();
+
+        (*node).fdw_state = state.into_pg() as _;
+    }
 }
 
 #[pg_guard]

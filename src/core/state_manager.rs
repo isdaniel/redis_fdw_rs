@@ -8,7 +8,10 @@ use crate::{
         data_loader::RedisDataLoader,
         pool_manager::PooledConnection,
     },
-    query::pushdown_types::PushdownAnalysis,
+    query::{
+        cost_estimation::{CostEstimate, CostEstimator},
+        pushdown_types::PushdownAnalysis,
+    },
     tables::types::RedisTableType,
 };
 use pgrx::{pg_sys::MemoryContext, prelude::*};
@@ -27,6 +30,8 @@ pub struct RedisFdwState {
     pub row_count: u32,
     pub key_attno: i16,
     pub pushdown_analysis: Option<PushdownAnalysis>,
+    /// Cached cost estimate for query planning
+    pub cost_estimate: Option<CostEstimate>,
 }
 
 impl RedisFdwState {
@@ -42,6 +47,7 @@ impl RedisFdwState {
             row_count: 0,
             key_attno: 0,
             pushdown_analysis: None,
+            cost_estimate: None,
         }
     }
 
@@ -113,6 +119,12 @@ impl RedisFdwState {
         }
     }
 
+    /// Reload data for rescan operations (e.g., nested loop joins)
+    /// Resets the table type's dataset and re-fetches from Redis
+    pub fn reload_data(&mut self) -> Result<(), String> {
+        self.load_data()
+    }
+
     /// Set pushdown analysis from planner
     pub fn set_pushdown_analysis(&mut self, analysis: PushdownAnalysis) {
         log!(
@@ -166,4 +178,32 @@ impl RedisFdwState {
     pub fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
         self.table_type.get_row(index)
     }
+
+    /// Estimate the cost for scanning this foreign relation
+    /// 
+    /// This method gathers statistics from Redis and calculates appropriate
+    /// cost estimates for the PostgreSQL query planner.
+    pub fn estimate_costs(&mut self) -> CostEstimate {
+        let estimator = CostEstimator::new(
+            &self.table_type,
+            &self.table_key_prefix,
+            self.pushdown_analysis.as_ref(),
+        );
+
+        if let Some(ref mut conn) = self.redis_connection {
+            let conn_like = conn.as_connection_like_mut();
+            let stats = estimator.gather_statistics(conn_like);
+            log!(
+                "Gathered Redis statistics: db_keys={:?}, key_cardinality={:?}, matching_keys={:?}",
+                stats.db_key_count,
+                stats.key_cardinality,
+                stats.matching_key_count
+            );
+            estimator.calculate_cost(&stats)
+        } else {
+            log!("No Redis connection available, using default estimates");
+            estimator.estimate_without_connection()
+        }
+    }
+
 }

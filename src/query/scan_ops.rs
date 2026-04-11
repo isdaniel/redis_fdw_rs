@@ -11,6 +11,7 @@ use redis::{ConnectionLike, RedisError, RedisResult};
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScanType {
     /// Database key scan (SCAN)
+    #[allow(dead_code)]
     KeyScan,
     /// Hash field scan (HSCAN)
     HashScan,
@@ -123,16 +124,6 @@ pub struct RedisScanBuilder {
 
 impl RedisScanBuilder {
     const SCAN_DEFAULT_COUNT: usize = 5000;
-
-    /// Create a new SCAN builder for database keys
-    pub fn new_key_scan() -> Self {
-        Self {
-            scan_type: ScanType::KeyScan,
-            key: None,
-            pattern: None,
-            limit: None,
-        }
-    }
 
     /// Create a new HSCAN builder for hash fields
     pub fn new_hash_scan(key: &str) -> Self {
@@ -320,46 +311,40 @@ impl ScanConditions {
     }
 }
 
-/// Simple glob pattern matching
+/// Iterative glob pattern matching — supports `*` (any sequence) and `?` (any single char).
+/// O(n*m) worst case, O(1) stack space — no recursion, no stack overflow risk.
 fn glob_match(pattern: &str, text: &str) -> bool {
-    let pattern_chars: Vec<char> = pattern.chars().collect();
-    let text_chars: Vec<char> = text.chars().collect();
+    let pattern = pattern.as_bytes();
+    let text = text.as_bytes();
 
-    fn match_recursive(pattern: &[char], text: &[char], p_idx: usize, t_idx: usize) -> bool {
-        if p_idx >= pattern.len() {
-            return t_idx >= text.len();
-        }
+    let (mut px, mut tx) = (0usize, 0usize);
+    let (mut star_px, mut star_tx) = (usize::MAX, 0usize);
 
-        match pattern[p_idx] {
-            '*' => {
-                // Try matching zero or more characters
-                for i in t_idx..=text.len() {
-                    if match_recursive(pattern, text, p_idx + 1, i) {
-                        return true;
-                    }
-                }
-                false
-            }
-            '?' => {
-                // Match exactly one character
-                if t_idx >= text.len() {
-                    false
-                } else {
-                    match_recursive(pattern, text, p_idx + 1, t_idx + 1)
-                }
-            }
-            c => {
-                // Match exact character
-                if t_idx >= text.len() || text[t_idx] != c {
-                    false
-                } else {
-                    match_recursive(pattern, text, p_idx + 1, t_idx + 1)
-                }
-            }
+    while tx < text.len() {
+        if px < pattern.len() && (pattern[px] == b'?' || pattern[px] == text[tx]) {
+            px += 1;
+            tx += 1;
+        } else if px < pattern.len() && pattern[px] == b'*' {
+            // Record star position; try matching * with empty string first
+            star_px = px;
+            star_tx = tx;
+            px += 1;
+        } else if star_px != usize::MAX {
+            // Backtrack: let the last * consume one more character
+            star_tx += 1;
+            tx = star_tx;
+            px = star_px + 1;
+        } else {
+            return false;
         }
     }
 
-    match_recursive(&pattern_chars, &text_chars, 0, 0)
+    // Remaining pattern characters must all be *
+    while px < pattern.len() && pattern[px] == b'*' {
+        px += 1;
+    }
+
+    px == pattern.len()
 }
 
 #[cfg(test)]

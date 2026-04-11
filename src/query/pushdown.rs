@@ -437,38 +437,61 @@ impl WhereClausePushdown {
         }
     }
 
-    /*
-        This function is a placeholder for looking up operator names from PostgreSQL's system catalog.
-        It would typically involve executing a SQL query like:
-
-        SELECT oid, oprname, oprleft::regtype, oprright::regtype
-        FROM pg_operator
-        WHERE oid IN (oid...);
-    */
     /// Determine operator type from PostgreSQL operator OID
-    /// Currently only supports a few common operators from Text type
+    /// Uses fast-path lookup for common text operators, then falls back to
+    /// dynamic PG catalog lookup via get_opname() for all other types
+    /// (integer, float, numeric, boolean, etc.)
     unsafe fn get_operator_from_oid(op_oid: pg_sys::Oid) -> Option<ComparisonOperator> {
+        // Fast path: known text operator OIDs (most common in Redis FDW usage)
         let oid_val = op_oid.to_u32();
         match oid_val {
-            98 => Some(ComparisonOperator::Equal),     // text = text
-            531 => Some(ComparisonOperator::NotEqual), // text <> text
-            1209 => Some(ComparisonOperator::Like),    // text LIKE text
-            664 => Some(ComparisonOperator::LessThan), // text < text
-            665 => Some(ComparisonOperator::LessThanOrEqual), // text <= text
-            666 => Some(ComparisonOperator::GreaterThan), // text > text
-            667 => Some(ComparisonOperator::GreaterThanOrEqual), // text >= text
-            _ => {
-                // Look up operator name from system catalog
-                Self::lookup_operator_name(op_oid)
-            }
+            98 => return Some(ComparisonOperator::Equal),     // text = text
+            531 => return Some(ComparisonOperator::NotEqual), // text <> text
+            1209 => return Some(ComparisonOperator::Like),    // text ~~ text (LIKE)
+            664 => return Some(ComparisonOperator::LessThan), // text < text
+            665 => return Some(ComparisonOperator::LessThanOrEqual), // text <= text
+            666 => return Some(ComparisonOperator::GreaterThan), // text > text
+            667 => return Some(ComparisonOperator::GreaterThanOrEqual), // text >= text
+            _ => {}
         }
+
+        // Dynamic fallback: look up operator name from PG system catalog
+        Self::lookup_operator_name(op_oid)
     }
 
-    /// Look up operator name from pg_operator
+    /// Look up operator name from pg_operator using get_opname()
+    /// This handles all operator types (integer, float, numeric, boolean, etc.)
     unsafe fn lookup_operator_name(op_oid: pg_sys::Oid) -> Option<ComparisonOperator> {
-        // This would require accessing PostgreSQL's system catalogs
-        // For now, return None for unknown operators
-        log!("Unknown operator OID: {}", op_oid.to_u32());
-        None
+        // get_opname returns a palloc'd string or NULL
+        let name_ptr = pg_sys::get_opname(op_oid);
+        if name_ptr.is_null() {
+            log!("Unknown operator OID: {} (get_opname returned null)", op_oid.to_u32());
+            return None;
+        }
+
+        let opname = match std::ffi::CStr::from_ptr(name_ptr).to_str() {
+            Ok(s) => s,
+            Err(_) => {
+                log!("Invalid UTF-8 in operator name for OID: {}", op_oid.to_u32());
+                return None;
+            }
+        };
+
+        let result = match opname {
+            "=" => Some(ComparisonOperator::Equal),
+            "<>" | "!=" => Some(ComparisonOperator::NotEqual),
+            "<" => Some(ComparisonOperator::LessThan),
+            "<=" => Some(ComparisonOperator::LessThanOrEqual),
+            ">" => Some(ComparisonOperator::GreaterThan),
+            ">=" => Some(ComparisonOperator::GreaterThanOrEqual),
+            "~~" => Some(ComparisonOperator::Like),       // LIKE
+            "!~~" => None,                                 // NOT LIKE — not supported yet
+            _ => {
+                log!("Unsupported operator '{}' (OID: {})", opname, op_oid.to_u32());
+                None
+            }
+        };
+
+        result
     }
 }

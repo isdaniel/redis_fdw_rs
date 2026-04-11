@@ -91,8 +91,8 @@ impl RedisListTable {
             self.dataset = DataSet::Empty;
             Ok(LoadDataResult::Empty)
         } else {
-            self.dataset = DataSet::Filtered(filtered_data.clone());
-            Ok(LoadDataResult::PushdownApplied(filtered_data))
+            self.dataset = DataSet::Filtered(filtered_data);
+            Ok(LoadDataResult::FullyLoaded)
         }
     }
 }
@@ -155,8 +155,8 @@ impl RedisTableOperations for RedisListTable {
                             self.dataset = DataSet::Empty;
                             Ok(LoadDataResult::Empty)
                         } else {
-                            self.dataset = DataSet::Filtered(filtered.clone());
-                            Ok(LoadDataResult::PushdownApplied(filtered))
+                            self.dataset = DataSet::Filtered(filtered);
+                            Ok(LoadDataResult::FullyLoaded)
                         };
                     }
                 }
@@ -202,8 +202,9 @@ impl RedisTableOperations for RedisListTable {
         key_prefix: &str,
         data: &[String],
     ) -> Result<(), redis::RedisError> {
-        for value in data {
-            let _: i32 = redis::cmd("RPUSH").arg(key_prefix).arg(value).query(conn)?;
+        if !data.is_empty() {
+            // Single RPUSH with all values (RPUSH supports multiple values)
+            let _: i32 = redis::cmd("RPUSH").arg(key_prefix).arg(data).query(conn)?;
         }
         Ok(())
     }
@@ -214,14 +215,27 @@ impl RedisTableOperations for RedisListTable {
         key_prefix: &str,
         data: &[String],
     ) -> Result<(), redis::RedisError> {
-        for value in data {
-            // LREM removes all occurrences of value from the list
-            // Using count = 0 to remove all occurrences
-            let _: i32 = redis::cmd("LREM")
-                .arg(key_prefix)
-                .arg(0)
-                .arg(value)
-                .query(conn)?;
+        if !data.is_empty() {
+            // LREM requires separate calls per value (different values to remove)
+            // Try pipeline first (single round-trip), fall back to individual commands for cluster
+            let pipe_result: Result<Vec<i32>, _> = {
+                let mut pipe = redis::pipe();
+                for value in data {
+                    pipe.cmd("LREM").arg(key_prefix).arg(0).arg(value);
+                }
+                pipe.query(conn)
+            };
+
+            if pipe_result.is_err() {
+                // Fallback: individual LREM commands (cluster mode)
+                for value in data {
+                    let _: i32 = redis::cmd("LREM")
+                        .arg(key_prefix)
+                        .arg(0)
+                        .arg(value)
+                        .query(conn)?;
+                }
+            }
         }
         Ok(())
     }

@@ -92,35 +92,30 @@ impl RedisZSetTable {
             }
         }
 
-        // Apply LIMIT/OFFSET to filtered results
+        // Apply LIMIT/OFFSET to filtered results at the pair level
         if limit_offset.has_constraints() {
-            // For zset data, we need to apply pagination at the member-score pair level
-            let pairs: Vec<String> = filtered_data
-                .chunks(2)
-                .map(|chunk| format!("{}\t{}", chunk[0], chunk[1]))
-                .collect();
+            let offset = limit_offset.offset.unwrap_or(0);
+            let limit = limit_offset.limit.unwrap_or(usize::MAX);
 
-            let paginated_pairs = limit_offset.apply_to_vec(pairs);
+            // filtered_data is [member1, score1, member2, score2, ...]
+            // Apply offset/limit at pair granularity (2 elements per pair)
+            let pair_start = offset * 2;
+            let pair_count = limit * 2;
 
-            filtered_data = paginated_pairs
-                .into_iter()
-                .flat_map(|pair| {
-                    let parts: Vec<&str> = pair.split('\t').collect();
-                    if parts.len() == 2 {
-                        vec![parts[0].to_string(), parts[1].to_string()]
-                    } else {
-                        vec![]
-                    }
-                })
-                .collect();
+            if pair_start >= filtered_data.len() {
+                filtered_data.clear();
+            } else {
+                let pair_end = (pair_start + pair_count).min(filtered_data.len());
+                filtered_data = filtered_data[pair_start..pair_end].to_vec();
+            }
         }
 
         if filtered_data.is_empty() {
             self.dataset = DataSet::Empty;
             Ok(LoadDataResult::Empty)
         } else {
-            self.dataset = DataSet::Filtered(filtered_data.clone());
-            Ok(LoadDataResult::PushdownApplied(filtered_data))
+            self.dataset = DataSet::Filtered(filtered_data);
+            Ok(LoadDataResult::FullyLoaded)
         }
     }
 }
@@ -134,21 +129,29 @@ impl RedisTableOperations for RedisZSetTable {
         limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(conditions) = conditions {
-            let scan_conditions = extract_scan_conditions(conditions);
+            // For ZSet, only pushdown conditions on the member column (first column)
+            // Score conditions are left to PostgreSQL's post-filter
+            let member_conditions: Vec<PushableCondition> = conditions
+                .iter()
+                .filter(|c| c.column_name != "score")
+                .cloned()
+                .collect();
 
-            // Check for SCAN-optimizable conditions first
-            if scan_conditions.has_optimizable_conditions() {
-                return self.load_with_scan_optimization(
-                    conn,
-                    key_prefix,
-                    &scan_conditions,
-                    limit_offset,
-                );
-            }
+            if !member_conditions.is_empty() {
+                let scan_conditions = extract_scan_conditions(&member_conditions);
 
-            // Legacy optimization for specific member lookups
-            if !conditions.is_empty() {
-                for condition in conditions {
+                // Check for SCAN-optimizable conditions first
+                if scan_conditions.has_optimizable_conditions() {
+                    return self.load_with_scan_optimization(
+                        conn,
+                        key_prefix,
+                        &scan_conditions,
+                        limit_offset,
+                    );
+                }
+
+                // Direct member lookups
+                for condition in &member_conditions {
                     match condition.operator {
                         ComparisonOperator::Equal => {
                             // Check if member exists and get its score
@@ -160,27 +163,71 @@ impl RedisTableOperations for RedisZSetTable {
                             return if let Some(score) = score {
                                 let filtered_data =
                                     vec![condition.value.clone(), score.to_string()];
-                                self.dataset = DataSet::Filtered(filtered_data.clone());
-                                Ok(LoadDataResult::PushdownApplied(filtered_data))
+                                self.dataset = DataSet::Filtered(filtered_data);
+                                Ok(LoadDataResult::FullyLoaded)
                             } else {
                                 self.dataset = DataSet::Empty;
                                 Ok(LoadDataResult::Empty)
                             };
                         }
                         ComparisonOperator::In => {
-                            // Check multiple members
+                            // Check multiple members using ZMSCORE (Redis 6.2+) or pipeline
                             let members: Vec<&str> = condition.value.split(',').collect();
                             let mut result = Vec::new();
 
-                            for member in members {
-                                let score: Option<f64> = redis::cmd("ZSCORE")
+                            // Try ZMSCORE first (single command, single round-trip)
+                            let zmscore_result: Result<Vec<Option<f64>>, _> =
+                                redis::cmd("ZMSCORE")
                                     .arg(key_prefix)
-                                    .arg(member)
-                                    .query(conn)?;
+                                    .arg(&members)
+                                    .query(conn);
 
-                                if let Some(score) = score {
-                                    result.push(member.to_string());
-                                    result.push(score.to_string());
+                            match zmscore_result {
+                                Ok(scores) => {
+                                    for (member, score) in members.iter().zip(scores.iter()) {
+                                        if let Some(s) = score {
+                                            result.push(member.to_string());
+                                            result.push(s.to_string());
+                                        }
+                                    }
+                                }
+                                Err(_) => {
+                                    // Try pipeline first, then individual commands for cluster
+                                    let pipe_result: Result<Vec<Option<f64>>, _> = {
+                                        let mut pipe = redis::pipe();
+                                        for member in &members {
+                                            pipe.cmd("ZSCORE")
+                                                .arg(key_prefix)
+                                                .arg(*member);
+                                        }
+                                        pipe.query(conn)
+                                    };
+
+                                    match pipe_result {
+                                        Ok(scores) => {
+                                            for (member, score) in
+                                                members.iter().zip(scores.iter())
+                                            {
+                                                if let Some(s) = score {
+                                                    result.push(member.to_string());
+                                                    result.push(s.to_string());
+                                                }
+                                            }
+                                        }
+                                        Err(_) => {
+                                            // Final fallback: individual ZSCORE (cluster mode)
+                                            for member in &members {
+                                                let score: Option<f64> = redis::cmd("ZSCORE")
+                                                    .arg(key_prefix)
+                                                    .arg(*member)
+                                                    .query(conn)?;
+                                                if let Some(s) = score {
+                                                    result.push(member.to_string());
+                                                    result.push(s.to_string());
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
@@ -188,8 +235,8 @@ impl RedisTableOperations for RedisZSetTable {
                                 self.dataset = DataSet::Empty;
                                 Ok(LoadDataResult::Empty)
                             } else {
-                                self.dataset = DataSet::Filtered(result.clone());
-                                Ok(LoadDataResult::PushdownApplied(result))
+                                self.dataset = DataSet::Filtered(result);
+                                Ok(LoadDataResult::FullyLoaded)
                             };
                         }
                         _ => {} // Fall back to full scan
@@ -276,12 +323,12 @@ impl RedisTableOperations for RedisZSetTable {
         data: &[String],
     ) -> Result<(), redis::RedisError> {
         // Expect data in pairs: [member1, score1, member2, score2, ...]
-        let items: Vec<(f64, String)> = data
+        let items: Vec<(f64, &str)> = data
             .chunks(2)
             .filter_map(|chunk| {
                 if chunk.len() == 2 {
                     if let Ok(score) = chunk[1].parse::<f64>() {
-                        Some((score, chunk[0].clone()))
+                        Some((score, chunk[0].as_str()))
                     } else {
                         None
                     }
@@ -291,12 +338,14 @@ impl RedisTableOperations for RedisZSetTable {
             })
             .collect();
 
-        for (score, member) in &items {
-            let _: () = redis::cmd("ZADD")
-                .arg(key_prefix)
-                .arg(*score)
-                .arg(member)
-                .query(conn)?;
+        if !items.is_empty() {
+            // Single ZADD with all score-member pairs
+            let mut cmd = redis::cmd("ZADD");
+            cmd.arg(key_prefix);
+            for (score, member) in &items {
+                cmd.arg(*score).arg(*member);
+            }
+            let _: () = cmd.query(conn)?;
         }
         Ok(())
     }
@@ -307,8 +356,9 @@ impl RedisTableOperations for RedisZSetTable {
         key_prefix: &str,
         data: &[String],
     ) -> Result<(), redis::RedisError> {
-        for member in data {
-            let _: i32 = redis::cmd("ZREM").arg(key_prefix).arg(member).query(conn)?;
+        if !data.is_empty() {
+            // Single ZREM with all members
+            let _: i32 = redis::cmd("ZREM").arg(key_prefix).arg(data).query(conn)?;
         }
         Ok(())
     }
