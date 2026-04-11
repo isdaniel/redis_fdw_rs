@@ -4,6 +4,7 @@
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
+#[allow(unused_imports)]
 mod tests {
     use crate::query::pushdown_types::{ComparisonOperator, PushableCondition};
     use pgrx::prelude::*;

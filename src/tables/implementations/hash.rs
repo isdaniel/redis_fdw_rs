@@ -48,8 +48,8 @@ impl RedisHashTable {
                     return Ok(LoadDataResult::Empty);
                 }
 
-                self.dataset = DataSet::Filtered(matching_fields.clone());
-                return Ok(LoadDataResult::PushdownApplied(matching_fields));
+                self.dataset = DataSet::Filtered(matching_fields);
+                return Ok(LoadDataResult::FullyLoaded);
             }
             //info!("scan_conditions:{:?}",scan_conditions);
             // exact match case
@@ -70,8 +70,8 @@ impl RedisHashTable {
 
         if let Some(v) = value {
             let result = vec![field.to_string(), v];
-            self.dataset = DataSet::Filtered(result.clone());
-            Ok(LoadDataResult::PushdownApplied(result))
+            self.dataset = DataSet::Filtered(result);
+            Ok(LoadDataResult::FullyLoaded)
         } else {
             self.dataset = DataSet::Empty;
             Ok(LoadDataResult::Empty)
@@ -97,8 +97,8 @@ impl RedisHashTable {
                 result.push(v.clone());
             }
         }
-        self.dataset = DataSet::Filtered(result.clone());
-        Ok(LoadDataResult::PushdownApplied(result))
+        self.dataset = DataSet::Filtered(result);
+        Ok(LoadDataResult::FullyLoaded)
     }
 
     /// Helper: Load full hash

@@ -85,6 +85,7 @@ impl RedisTableType {
     }
 
     /// Set filtered data result directly (for external filtering)
+    #[allow(dead_code)]
     pub fn set_filtered_data(&mut self, data: Vec<String>) {
         table_dispatch_mut_void!(self, set_filtered_data(data))
     }
@@ -93,9 +94,7 @@ impl RedisTableType {
 /// Result type for data loading operations
 #[derive(Debug)]
 pub enum LoadDataResult {
-    /// Data was loaded and optimized with pushdown conditions
-    PushdownApplied(Vec<String>),
-    /// Data was loaded into internal storage without optimization
+    /// Data was loaded into internal storage (possibly with pushdown applied)
     FullyLoaded,
     /// No data found or operation resulted in empty set
     Empty,
@@ -123,6 +122,7 @@ pub enum DataContainer {
     /// Ordered list of values (Redis List type)
     List(Vec<String>),
     /// Unordered set of values (Redis Set type)
+    #[allow(dead_code)]
     Set(Vec<String>),
     /// Sorted set with scores (Redis ZSet type)
     ZSet(Vec<(String, f64)>),

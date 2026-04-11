@@ -16,6 +16,7 @@ impl LimitOffsetInfo {
     }
 
     /// Create LimitOffsetInfo with both limit and offset
+    #[allow(dead_code)]
     pub fn with_limit_offset(limit: Option<usize>, offset: Option<usize>) -> Self {
         Self { limit, offset }
     }
@@ -28,6 +29,7 @@ impl LimitOffsetInfo {
     /// Calculate effective scan limit for Redis commands that need to account for offset
     /// When both limit and offset are present, returns limit + offset to ensure enough data is retrieved
     /// Otherwise returns the limit or a default value
+    #[allow(dead_code)]
     pub fn effective_scan_limit(&self, default_limit: usize) -> usize {
         if let (Some(limit), Some(offset)) = (self.limit, self.offset) {
             limit + offset

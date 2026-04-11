@@ -7,11 +7,11 @@
 use crate::auth::RedisAuthConfig;
 use redis::{cluster::ClusterClient, Client};
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 
 /// Global singleton for connection pools
-static POOL_MANAGER: OnceLock<Mutex<PoolManager>> = OnceLock::new();
+static POOL_MANAGER: OnceLock<RwLock<PoolManager>> = OnceLock::new();
 
 /// Configuration for connection pool behavior
 #[derive(Debug, Clone, PartialEq)]
@@ -278,8 +278,8 @@ impl PoolManager {
     }
 
     /// Get the global pool manager instance
-    pub fn global() -> &'static Mutex<PoolManager> {
-        POOL_MANAGER.get_or_init(|| Mutex::new(PoolManager::new()))
+    pub fn global() -> &'static RwLock<PoolManager> {
+        POOL_MANAGER.get_or_init(|| RwLock::new(PoolManager::new()))
     }
 
     /// Get or create a single-node Redis pool
@@ -418,9 +418,37 @@ pub fn get_pooled_connection(
     pool_config: &PoolConfig,
 ) -> Result<PooledConnection, PoolError> {
     let manager = PoolManager::global();
-    let mut manager = manager.lock().map_err(|_| PoolError::LockPoisoned)?;
 
-    let pool = manager.get_or_create_pool(host_port, database, auth_config, pool_config)?;
+    // Try read-lock first (fast path — pool already exists)
+    {
+        let reader = manager.read().map_err(|_| PoolError::LockPoisoned)?;
+        let conn_type = RedisConnectionType::from_host_port(host_port);
+        match conn_type {
+            RedisConnectionType::Single => {
+                let key = Client::cache_key(host_port, database, auth_config);
+                if let Some(pool) = reader.single_pools.get(&key) {
+                    let conn = pool
+                        .get()
+                        .map_err(|e| PoolError::ConnectionAcquisition(e.to_string()))?;
+                    return Ok(PooledConnection::Single(conn));
+                }
+            }
+            RedisConnectionType::Cluster => {
+                let key = ClusterClient::cache_key(host_port, database, auth_config);
+                if let Some(pool) = reader.cluster_pools.get(&key) {
+                    let conn = pool
+                        .get()
+                        .map_err(|e| PoolError::ConnectionAcquisition(e.to_string()))?;
+                    return Ok(PooledConnection::Cluster(conn));
+                }
+            }
+        }
+    }
+    // Read lock dropped here
+
+    // Pool doesn't exist — acquire write lock to create it
+    let mut writer = manager.write().map_err(|_| PoolError::LockPoisoned)?;
+    let pool = writer.get_or_create_pool(host_port, database, auth_config, pool_config)?;
     pool.get_connection()
 }
 

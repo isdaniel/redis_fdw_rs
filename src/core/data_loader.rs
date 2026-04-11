@@ -5,7 +5,7 @@
 use crate::{
     core::pool_manager::PooledConnection,
     query::{limit::LimitOffsetInfo, pushdown_types::PushdownAnalysis},
-    tables::types::{LoadDataResult, RedisTableType},
+    tables::types::RedisTableType,
 };
 use pgrx::prelude::*;
 
@@ -45,25 +45,19 @@ impl<'a> RedisDataLoader<'a> {
                         .as_ref()
                         .unwrap_or(&LimitOffsetInfo::default()),
                 ) {
-                    Ok(LoadDataResult::PushdownApplied(filtered_data)) => {
-                        // Apply LIMIT/OFFSET if specified
-                        if let Some(ref limit_offset) = analysis.limit_offset {
-                            if limit_offset.has_constraints() {
-                                // Update the internal data with the limited result
-                                self.table_type.set_filtered_data(filtered_data);
-                            }
-                        }
+                    Ok(_result) => {
                         log!(
-                            "Pushdown optimization applied, loaded {} items with LIMIT/OFFSET",
+                            "Pushdown optimization applied, loaded {} items",
                             self.table_type.data_len()
                         );
                         return Ok(());
                     }
                     Err(e) => {
-                        error!("Pushdown failed, falling back to full scan: {:?}", e);
-                    }
-                    _ => {
-                        return Ok(());
+                        // Graceful fallback: log warning and try full scan instead of aborting
+                        log!(
+                            "Pushdown failed, falling back to full scan: {:?}",
+                            e
+                        );
                     }
                 }
             } else if analysis.has_limit_pushdown() {

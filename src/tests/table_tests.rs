@@ -2,6 +2,7 @@
 /// These tests demonstrate how each table type can be used independently
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
+#[allow(unused_imports)]
 mod tests {
     use std::borrow::Cow;
 
@@ -13,6 +14,7 @@ mod tests {
         types::{DataContainer, DataSet, RedisTableType},
     };
 
+    #[allow(dead_code)]
     fn cow_vec_to_string_vec(row: Option<Vec<Cow<'_, str>>>) -> Option<Vec<String>> {
         row.map(|v| v.into_iter().map(|c| c.into_owned()).collect())
     }

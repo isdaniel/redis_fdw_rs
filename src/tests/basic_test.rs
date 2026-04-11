@@ -17,7 +17,6 @@ mod tests {
             types::{DataContainer, DataSet, RedisTableType},
         },
     };
-    use pgrx::prelude::*;
     use std::borrow::Cow;
 
     fn cow_vec_to_string_vec(row: Option<Vec<Cow<'_, str>>>) -> Option<Vec<String>> {

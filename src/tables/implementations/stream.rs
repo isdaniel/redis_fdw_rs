@@ -23,6 +23,8 @@ use crate::{
 #[derive(Debug, Clone, Default)]
 pub struct RedisStreamTable {
     pub dataset: DataSet,
+    /// Pre-split stream entries for zero-allocation row access
+    pub entries: Vec<Vec<String>>,
     /// Last processed stream ID for pagination
     pub last_id: Option<String>,
     /// Batch size for streaming operations to handle large data sets
@@ -33,6 +35,7 @@ impl RedisStreamTable {
     pub fn new(batch_size: usize) -> Self {
         Self {
             dataset: DataSet::Empty,
+            entries: Vec::new(),
             last_id: None,
             batch_size,
         }
@@ -70,15 +73,17 @@ impl RedisStreamTable {
         // Store last stream ID for pagination before processing entries
         let last_id = entries.last().map(|(id, _)| id.clone());
 
-        let mut data = Vec::new();
+        // Store as pre-split structured entries for zero-allocation row access
+        let mut structured_entries = Vec::with_capacity(entries.len());
+        let mut flat_data = Vec::with_capacity(entries.len());
         for (stream_id, fields) in entries {
-            // Create a row with stream_id followed by field-value pairs
-            let mut row = vec![stream_id];
+            let mut row = vec![stream_id.clone()];
             for (field, value) in fields {
                 row.push(field);
                 row.push(value);
             }
-            data.push(row.join("\t"));
+            flat_data.push(stream_id);
+            structured_entries.push(row);
         }
 
         // Store last stream ID for pagination
@@ -86,8 +91,9 @@ impl RedisStreamTable {
             self.last_id = Some(id);
         }
 
-        // Store data as filtered entries
-        self.dataset = DataSet::Filtered(data);
+        self.entries = structured_entries;
+        // Store flat_data for DataSet compatibility
+        self.dataset = DataSet::Filtered(flat_data);
         Ok(LoadDataResult::FullyLoaded)
     }
 
@@ -125,6 +131,7 @@ impl RedisStreamTable {
     }
 
     /// Get the next batch of data for streaming large data sets
+    #[allow(dead_code)]
     pub fn load_next_batch(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -160,6 +167,7 @@ impl RedisStreamTable {
     }
 
     /// Get stream length
+    #[allow(dead_code)]
     pub fn get_stream_length(
         &self,
         conn: &mut dyn redis::ConnectionLike,
@@ -222,23 +230,34 @@ impl RedisTableOperations for RedisStreamTable {
     }
 
     fn data_len(&self) -> usize {
-        self.dataset.len()
+        if !self.entries.is_empty() {
+            self.entries.len()
+        } else {
+            self.dataset.len()
+        }
     }
 
     #[inline]
     fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
-        match &self.dataset {
-            DataSet::Filtered(entries) => {
-                entries.get(index).map(|entry| {
-                    // Parse tab-separated entry back to fields
-                    entry
-                        .split('\t')
-                        .map(|s| Cow::Owned(s.to_string()))
-                        .collect()
-                })
+        // Use structured entries for zero-allocation access
+        if !self.entries.is_empty() {
+            self.entries.get(index).map(|row| {
+                row.iter().map(|s| Cow::Borrowed(s.as_str())).collect()
+            })
+        } else {
+            match &self.dataset {
+                DataSet::Filtered(entries) => {
+                    // Legacy path: parse tab-separated entry back to fields
+                    entries.get(index).map(|entry| {
+                        entry
+                            .split('\t')
+                            .map(|s| Cow::Owned(s.to_string()))
+                            .collect()
+                    })
+                }
+                DataSet::Complete(container) => container.get_row(index),
+                DataSet::Empty => None,
             }
-            DataSet::Complete(container) => container.get_row(index),
-            DataSet::Empty => None,
         }
     }
 

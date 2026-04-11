@@ -43,14 +43,61 @@ impl RedisSetTable {
         key: &str,
         members: &[&str],
     ) -> redis::RedisResult<Vec<String>> {
-        let mut result = Vec::new();
-        for m in members {
-            let exists: bool = redis::cmd("SISMEMBER").arg(key).arg(m).query(conn)?;
-            if exists {
-                result.push(m.to_string());
+        if members.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Try SMISMEMBER (Redis 6.2+) — single command, single round-trip
+        let smismember_result: Result<Vec<bool>, _> = redis::cmd("SMISMEMBER")
+            .arg(key)
+            .arg(members)
+            .query(conn);
+
+        match smismember_result {
+            Ok(results) => {
+                let matched: Vec<String> = members
+                    .iter()
+                    .zip(results.iter())
+                    .filter(|(_, &exists)| exists)
+                    .map(|(&m, _)| m.to_string())
+                    .collect();
+                Ok(matched)
+            }
+            Err(_) => {
+                // Fallback: try pipeline first, then individual commands for cluster
+                let pipe_result: Result<Vec<bool>, _> = {
+                    let mut pipe = redis::pipe();
+                    for m in members {
+                        pipe.cmd("SISMEMBER").arg(key).arg(*m);
+                    }
+                    pipe.query(conn)
+                };
+
+                match pipe_result {
+                    Ok(results) => {
+                        let matched: Vec<String> = members
+                            .iter()
+                            .zip(results.iter())
+                            .filter(|(_, &exists)| exists)
+                            .map(|(&m, _)| m.to_string())
+                            .collect();
+                        Ok(matched)
+                    }
+                    Err(_) => {
+                        // Final fallback: individual SISMEMBER commands (cluster mode)
+                        let mut matched = Vec::new();
+                        for m in members {
+                            let exists: bool =
+                                redis::cmd("SISMEMBER").arg(key).arg(*m).query(conn)?;
+                            if exists {
+                                matched.push(m.to_string());
+                            }
+                        }
+                        Ok(matched)
+                    }
+                }
             }
         }
-        Ok(result)
     }
 
     fn match_like(
@@ -140,13 +187,14 @@ impl RedisTableOperations for RedisSetTable {
         self.dataset = if members.is_empty() {
             DataSet::Empty
         } else {
-            DataSet::Filtered(members.clone())
+            DataSet::Filtered(members)
         };
 
-        Ok(if members.is_empty() {
+        Ok(if self.dataset.len() == 0 {
             LoadDataResult::Empty
         } else {
-            LoadDataResult::PushdownApplied(members)
+            // Return a reference-like result — the data is now owned by self.dataset
+            LoadDataResult::FullyLoaded
         })
     }
 
@@ -164,8 +212,8 @@ impl RedisTableOperations for RedisSetTable {
         key_prefix: &str,
         data: &[String],
     ) -> Result<(), redis::RedisError> {
-        for value in data {
-            let _added: i32 = redis::cmd("SADD").arg(key_prefix).arg(value).query(conn)?;
+        if !data.is_empty() {
+            let _added: i32 = redis::cmd("SADD").arg(key_prefix).arg(data).query(conn)?;
         }
         Ok(())
     }
@@ -176,8 +224,8 @@ impl RedisTableOperations for RedisSetTable {
         key_prefix: &str,
         data: &[String],
     ) -> Result<(), redis::RedisError> {
-        for value in data {
-            let _: i32 = redis::cmd("SREM").arg(key_prefix).arg(value).query(conn)?;
+        if !data.is_empty() {
+            let _: i32 = redis::cmd("SREM").arg(key_prefix).arg(data).query(conn)?;
         }
         Ok(())
     }

@@ -44,6 +44,7 @@ impl PushdownAnalysis {
     }
 
     /// Create analysis with both WHERE conditions and LIMIT/OFFSET
+    #[allow(dead_code)]
     pub fn with_conditions_and_limit(
         conditions: Vec<PushableCondition>,
         limit_offset: Option<LimitOffsetInfo>,

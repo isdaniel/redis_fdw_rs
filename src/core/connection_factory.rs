@@ -33,6 +33,7 @@ pub enum ConnectionFactoryError {
     MissingConfiguration(String),
 
     #[error("Configuration validation failed: {0}")]
+    #[allow(dead_code)]
     ValidationFailed(String),
 
     #[error("Connection pool error: {0}")]
@@ -99,11 +100,13 @@ impl RedisConnectionConfig {
     }
 
     /// Check if this configuration is for cluster mode
+    #[allow(dead_code)]
     pub fn is_cluster_mode(&self) -> bool {
         self.host_port.contains(',')
     }
 
     /// Parse host_port into individual node URLs for cluster mode
+    #[allow(dead_code)]
     pub fn parse_cluster_nodes(&self) -> ConnectionFactoryResult<Vec<String>> {
         if !self.is_cluster_mode() {
             return Err(ConnectionFactoryError::ValidationFailed(
@@ -140,6 +143,7 @@ impl RedisConnectionConfig {
     }
 
     /// Get the single node URL for non-cluster mode
+    #[allow(dead_code)]
     pub fn get_single_node_url(&self) -> ConnectionFactoryResult<String> {
         if self.is_cluster_mode() {
             return Err(ConnectionFactoryError::ValidationFailed(
