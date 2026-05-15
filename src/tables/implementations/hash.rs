@@ -230,6 +230,43 @@ impl RedisTableOperations for RedisHashTable {
         Ok(())
     }
 
+    fn update(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        old_data: &[String],
+        new_data: &[String],
+    ) -> Result<(), redis::RedisError> {
+        // new_data format: [field, new_value]
+        if new_data.len() >= 2 {
+            let new_field = &new_data[0];
+
+            // If field name changed, use pipeline for atomicity (HDEL + HSET)
+            if let Some(old_field) = old_data.first() {
+                if old_field != new_field {
+                    redis::pipe()
+                        .atomic()
+                        .cmd("HDEL")
+                        .arg(key_prefix)
+                        .arg(old_field)
+                        .cmd("HSET")
+                        .arg(key_prefix)
+                        .arg(new_field)
+                        .arg(&new_data[1])
+                        .query::<()>(conn)?;
+                    return Ok(());
+                }
+            }
+
+            let _: () = redis::cmd("HSET")
+                .arg(key_prefix)
+                .arg(new_field)
+                .arg(&new_data[1])
+                .query(conn)?;
+        }
+        Ok(())
+    }
+
     fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
         matches!(
             operator,

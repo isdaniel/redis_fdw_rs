@@ -273,7 +273,7 @@ impl RedisTableOperations for RedisStreamTable {
 
         // For streams, we expect data format: [id?, field1, value1, field2, value2, ...]
         // If first element looks like a stream ID, use it; otherwise auto-generate
-        let (id, field_start) = if data.len() >= 1 && (data[0] == "*" || data[0].contains('-')) {
+        let (id, field_start) = if !data.is_empty() && (data[0] == "*" || data[0].contains('-')) {
             (data[0].as_str(), 1)
         } else {
             ("*", 0) // Auto-generate ID
@@ -309,6 +309,19 @@ impl RedisTableOperations for RedisStreamTable {
         let _deleted_count: usize = redis::cmd("XDEL").arg(key_prefix).arg(&ids).query(conn)?;
 
         Ok(())
+    }
+
+    fn update(
+        &mut self,
+        _conn: &mut dyn redis::ConnectionLike,
+        _key_prefix: &str,
+        _old_data: &[String],
+        _new_data: &[String],
+    ) -> Result<(), redis::RedisError> {
+        Err(redis::RedisError::from((
+            redis::ErrorKind::InvalidClientConfig,
+            "UPDATE is not supported for Redis Stream (append-only data structure)",
+        )))
     }
 
     fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {

@@ -10,7 +10,6 @@
 ///
 /// The cost model aims to provide accurate estimates to help PostgreSQL's
 /// planner make optimal join ordering and access method decisions.
-
 use crate::{
     query::pushdown_types::PushdownAnalysis,
     tables::types::RedisTableType,
