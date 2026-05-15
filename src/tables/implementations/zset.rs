@@ -370,7 +370,7 @@ impl RedisTableOperations for RedisZSetTable {
         old_data: &[String],
         new_data: &[String],
     ) -> Result<(), redis::RedisError> {
-        // old_data: [member, score], new_data: [member, score]
+        // old_data: [member], new_data: [member, score]
         if new_data.len() >= 2 {
             let new_member = &new_data[0];
             let new_score: f64 = new_data[1].parse().map_err(|e: std::num::ParseFloatError| {
@@ -381,17 +381,24 @@ impl RedisTableOperations for RedisZSetTable {
                 ))
             })?;
 
-            // If member name changed, remove old member first
+            // If member name changed, use atomic pipeline (ZREM old + ZADD new)
             if let Some(old_member) = old_data.first() {
                 if old_member != new_member {
-                    let _: i32 = redis::cmd("ZREM")
+                    redis::pipe()
+                        .atomic()
+                        .cmd("ZREM")
                         .arg(key_prefix)
                         .arg(old_member)
-                        .query(conn)?;
+                        .cmd("ZADD")
+                        .arg(key_prefix)
+                        .arg(new_score)
+                        .arg(new_member)
+                        .query::<()>(conn)?;
+                    return Ok(());
                 }
             }
 
-            // ZADD with new score (works for both new member and score-only update)
+            // Score-only update (no rename needed)
             let _: () = redis::cmd("ZADD")
                 .arg(key_prefix)
                 .arg(new_score)

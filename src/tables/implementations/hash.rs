@@ -241,13 +241,20 @@ impl RedisTableOperations for RedisHashTable {
         if new_data.len() >= 2 {
             let new_field = &new_data[0];
 
-            // If field name changed, remove old field first
+            // If field name changed, use pipeline for atomicity (HDEL + HSET)
             if let Some(old_field) = old_data.first() {
                 if old_field != new_field {
-                    let _: () = redis::cmd("HDEL")
+                    redis::pipe()
+                        .atomic()
+                        .cmd("HDEL")
                         .arg(key_prefix)
                         .arg(old_field)
-                        .query(conn)?;
+                        .cmd("HSET")
+                        .arg(key_prefix)
+                        .arg(new_field)
+                        .arg(&new_data[1])
+                        .query::<()>(conn)?;
+                    return Ok(());
                 }
             }
 
