@@ -112,6 +112,44 @@ mod tests {
         cleanup_redis_fdw();
     }
 
+    #[pg_test]
+    fn test_hash_update_field_rename() {
+        setup_redis_fdw();
+
+        create_foreign_table(
+            "test_hash_upd_rename",
+            "key text, value text",
+            "hash",
+            "test_hash_update_rename_key",
+        );
+
+        Spi::run("INSERT INTO test_hash_upd_rename (key, value) VALUES ('old_field', 'data');")
+            .unwrap();
+
+        // Rename field: old_field -> new_field (should HDEL old, HSET new)
+        Spi::run(
+            "UPDATE test_hash_upd_rename SET key = 'new_field', value = 'data' WHERE key = 'old_field';",
+        )
+        .unwrap();
+
+        let old_count = Spi::get_one::<i64>(
+            "SELECT count(*) FROM test_hash_upd_rename WHERE key = 'old_field';",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(old_count, 0);
+
+        let new_value = Spi::get_one::<String>(
+            "SELECT value FROM test_hash_upd_rename WHERE key = 'new_field';",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(new_value, "data");
+
+        Spi::run("DELETE FROM test_hash_upd_rename WHERE key = 'new_field';").unwrap();
+        cleanup_redis_fdw();
+    }
+
     // --- Set UPDATE Tests ---
 
     #[pg_test]

@@ -373,7 +373,13 @@ impl RedisTableOperations for RedisZSetTable {
         // old_data: [member, score], new_data: [member, score]
         if new_data.len() >= 2 {
             let new_member = &new_data[0];
-            let new_score: f64 = new_data[1].parse().unwrap_or(0.0);
+            let new_score: f64 = new_data[1].parse().map_err(|e: std::num::ParseFloatError| {
+                redis::RedisError::from((
+                    redis::ErrorKind::TypeError,
+                    "Invalid score format",
+                    e.to_string(),
+                ))
+            })?;
 
             // If member name changed, remove old member first
             if let Some(old_member) = old_data.first() {

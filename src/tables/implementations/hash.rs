@@ -234,14 +234,26 @@ impl RedisTableOperations for RedisHashTable {
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
-        _old_data: &[String],
+        old_data: &[String],
         new_data: &[String],
     ) -> Result<(), redis::RedisError> {
         // new_data format: [field, new_value]
         if new_data.len() >= 2 {
+            let new_field = &new_data[0];
+
+            // If field name changed, remove old field first
+            if let Some(old_field) = old_data.first() {
+                if old_field != new_field {
+                    let _: () = redis::cmd("HDEL")
+                        .arg(key_prefix)
+                        .arg(old_field)
+                        .query(conn)?;
+                }
+            }
+
             let _: () = redis::cmd("HSET")
                 .arg(key_prefix)
-                .arg(&new_data[0])
+                .arg(new_field)
                 .arg(&new_data[1])
                 .query(conn)?;
         }

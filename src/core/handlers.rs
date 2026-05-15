@@ -417,8 +417,8 @@ unsafe extern "C-unwind" fn exec_foreign_update(
     let mut state = PgBox::<RedisFdwState>::from_pg((*rinfo).ri_FdwState as _);
 
     // Extract old key from plan_slot (junk attribute set by add_foreign_update_targets)
-    let old_data = match extract_delete_key(&state, plan_slot) {
-        Ok(key) => vec![key],
+    let old_key = match extract_delete_key(&state, plan_slot) {
+        Ok(key) => key,
         Err(err_msg) => {
             error!("Failed to extract old key for update: {}", err_msg);
         }
@@ -433,12 +433,12 @@ unsafe extern "C-unwind" fn exec_foreign_update(
         .collect();
 
     log!(
-        "Update: old_data={:?}, new_data={:?}",
-        old_data,
+        "Update: old_key={:?}, new_data={:?}",
+        old_key,
         new_data
     );
 
-    if let Err(e) = state.update_data(&old_data, &new_data) {
+    if let Err(e) = state.update_data(std::slice::from_ref(&old_key), &new_data) {
         error!("Failed to update data: {:?}", e);
     }
 
