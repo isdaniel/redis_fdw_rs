@@ -249,6 +249,9 @@ impl RedisTableOperations for RedisListTable {
     ) -> Result<(), redis::RedisError> {
         // Find the position of old value, then LSET at that index
         if let (Some(old_value), Some(new_value)) = (old_data.first(), new_data.first()) {
+            if old_value == new_value {
+                return Ok(());
+            }
             let positions: Vec<i64> = redis::cmd("LPOS")
                 .arg(key_prefix)
                 .arg(old_value)

@@ -239,6 +239,9 @@ impl RedisTableOperations for RedisSetTable {
     ) -> Result<(), redis::RedisError> {
         // Atomic swap: SREM old member + SADD new member
         if let (Some(old_member), Some(new_member)) = (old_data.first(), new_data.first()) {
+            if old_member == new_member {
+                return Ok(());
+            }
             let _: i32 = redis::cmd("SREM")
                 .arg(key_prefix)
                 .arg(old_member)
