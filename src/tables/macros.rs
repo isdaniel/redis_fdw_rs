@@ -2,8 +2,6 @@
 ///
 /// This module provides macros to reduce boilerplate code when implementing
 /// operations that need to be applied to all table type variants.
-
-/// Macro to apply a method call to all variants of RedisTableType
 macro_rules! table_dispatch {
     ($self:expr, $method:ident($($args:expr),*)) => {
         match $self {

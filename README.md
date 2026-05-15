@@ -11,7 +11,7 @@ A high-performance Redis Foreign Data Wrapper (FDW) for PostgreSQL written in Ru
 - **Redis data types support**: Hash, List, Set, ZSet, String, and Stream (with varying levels of implementation)
 - **Redis Streams support**: Full implementation with large data set handling, pagination, and time-based queries
 - **Large data set optimization**: Configurable batch processing and streaming access for Redis Streams
-- **Supported operations**: SELECT, INSERT, DELETE (UPDATE operations are not supported due to Redis data model differences)
+- **Supported operations**: SELECT, INSERT, UPDATE, DELETE (UPDATE supported for all types except Stream)
 - **Connection management** and memory optimization
 - **Built with Rust** for memory safety and performance
 - **Unified trait interface** providing consistent behavior across all Redis table types
@@ -303,36 +303,42 @@ SELECT * FROM user_sessions WHERE field = 'user123';
 - **SQL Columns**: 1 column (value)
 - **Use Cases**: Configuration values, counters, simple key-value storage
 - **Redis Commands**: SET, GET, DEL
+- **UPDATE**: Replaces the stored value via `SET`
 
 #### Hash Table (`table_type 'hash'`)
 - **Purpose**: Store field-value pairs (like a dictionary/map)
 - **SQL Columns**: 2 columns (field, value)  
 - **Use Cases**: User profiles, object attributes, structured data
 - **Redis Commands**: HSET, HGETALL, HDEL
+- **UPDATE**: Updates field value via `HSET`
 
 #### List Table (`table_type 'list'`)
 - **Purpose**: Store ordered sequence of elements
 - **SQL Columns**: 1 column (element)
 - **Use Cases**: Task queues, activity feeds, ordered collections
-- **Redis Commands**: RPUSH, LRANGE, LREM
+- **Redis Commands**: RPUSH, LRANGE, LREM, LPOS, LSET
+- **UPDATE**: Locates element with `LPOS` and replaces via `LSET`
 
 #### Set Table (`table_type 'set'`)
 - **Purpose**: Store unordered collection of unique elements
 - **SQL Columns**: 1 column (member)
 - **Use Cases**: Tags, categories, unique collections
 - **Redis Commands**: SADD, SMEMBERS, SREM
+- **UPDATE**: Removes old member (`SREM`) and adds new member (`SADD`)
 
 #### Sorted Set Table (`table_type 'zset'`)
 - **Purpose**: Store ordered collection with scores
 - **SQL Columns**: 2 columns (member, score)
 - **Use Cases**: Leaderboards, rankings, priority queues
 - **Redis Commands**: ZADD, ZRANGE, ZREM
+- **UPDATE**: Updates score via `ZADD`; renames member via `ZREM` + `ZADD`
 
 #### Stream Table (`table_type 'stream'`)
 - **Purpose**: Store append-only log of structured entries with automatic IDs
 - **SQL Columns**: Multiple columns (stream_id, field1, value1, field2, value2, ...)
 - **Use Cases**: Event logs, time-series data, message streams, audit trails
 - **Redis Commands**: XADD, XRANGE, XDEL, XLEN
+- **UPDATE**: Not supported (append-only data structure)
 - **Features**: 
   - **Large Data Set Support**: Configurable batch processing (default: 1000 entries)
   - **Time-based Queries**: Efficient range queries using stream IDs
@@ -377,28 +383,29 @@ SERVER redis_server OPTIONS (table_type 'stream', table_key_prefix 'events');
 -- String operations
 INSERT INTO redis_string VALUES ('MyApplicationName');
 SELECT * FROM redis_string;
--- UPDATE is not supported for Redis FDW
--- To change a value, delete and insert:
-DELETE FROM redis_string WHERE value = 'MyApplicationName';
-INSERT INTO redis_string VALUES ('UpdatedAppName');
+UPDATE redis_string SET value = 'UpdatedAppName';
 
 -- Hash operations
 INSERT INTO redis_hash VALUES ('name', 'John'), ('age', '30');
 SELECT * FROM redis_hash;
+UPDATE redis_hash SET value = 'Jane' WHERE key = 'name';
 
 -- List operations
 INSERT INTO redis_list VALUES ('apple'), ('banana');
 SELECT * FROM redis_list;
+UPDATE redis_list SET element = 'cherry' WHERE element = 'apple';
 
 -- Set operations  
 INSERT INTO redis_set VALUES ('red'), ('green'), ('blue');
 SELECT * FROM redis_set;
+UPDATE redis_set SET member = 'yellow' WHERE member = 'red';
 
 -- Sorted set operations
 INSERT INTO redis_zset VALUES ('player1', 100.5), ('player2', 95.0);
 SELECT * FROM redis_zset ORDER BY score DESC;
+UPDATE redis_zset SET score = '200' WHERE member = 'player1';
 
--- Stream operations
+-- Stream operations (INSERT and SELECT only, UPDATE not supported)
 INSERT INTO redis_stream VALUES ('*', 'user_id', '123', 'action', 'login');
 INSERT INTO redis_stream VALUES ('*', 'user_id', '456', 'action', 'logout');
 SELECT * FROM redis_stream ORDER BY stream_id;
@@ -420,12 +427,12 @@ SELECT * FROM redis_stream LIMIT 1000;
 ### Table Options
 - `database`: Redis database number (default: 0) - **Optional**
 - `table_type`: Redis data type - **Required**
-  - `'string'` - Partial implementation ✅ (SELECT, INSERT, DELETE; UPDATE not supported)
-  - `'hash'` - Partial implementation ✅ (SELECT, INSERT, DELETE; UPDATE not supported)
-  - `'list'` - Partial implementation ✅ (SELECT, INSERT, DELETE; UPDATE not supported)
-  - `'set'` - Partial implementation ✅ (SELECT, INSERT, DELETE; UPDATE not supported)
-  - `'zset'` - Partial implementation ✅ (SELECT, INSERT, DELETE; UPDATE not supported)
-  - `'stream'` - Full implementation ✅ (SELECT, INSERT, DELETE; Large data set support with pagination)
+  - `'string'` - Full implementation ✅ (SELECT, INSERT, UPDATE, DELETE)
+  - `'hash'` - Full implementation ✅ (SELECT, INSERT, UPDATE, DELETE)
+  - `'list'` - Full implementation ✅ (SELECT, INSERT, UPDATE, DELETE)
+  - `'set'` - Full implementation ✅ (SELECT, INSERT, UPDATE, DELETE)
+  - `'zset'` - Full implementation ✅ (SELECT, INSERT, UPDATE, DELETE)
+  - `'stream'` - Full implementation ✅ (SELECT, INSERT, DELETE; Large data set support with pagination; UPDATE not supported - append-only)
 - `table_key_prefix`: Key prefix for Redis operations - **Required**
 
 ### User Mapping Options
@@ -526,10 +533,8 @@ INSERT INTO app_version VALUES ('1.2.3');
 SELECT 'Database URL: ' || value FROM app_config;
 SELECT 'App Version: ' || value FROM app_version;
 
--- Update configuration (Note: Redis FDW does not support UPDATE operations)
--- To update a string value, you need to DELETE and INSERT:
-DELETE FROM app_config WHERE value = 'postgresql://localhost:5432/mydb';
-INSERT INTO app_config VALUES ('postgresql://newhost:5432/mydb');
+-- Update configuration directly
+UPDATE app_config SET value = 'postgresql://newhost:5432/mydb';
 ```
 
 ### Complex Queries
@@ -567,16 +572,17 @@ INSERT INTO redis_list_table VALUES
 
 | Redis Type | SELECT | INSERT | UPDATE | DELETE | Status |
 |------------|--------|--------|--------|--------|--------|
-| Hash       | ✅     | ✅     | ❌     | ✅     | **Partial** (UPDATE not supported) |
-| List       | ✅     | ✅     | ❌     | ✅     | **Partial** (UPDATE not supported) |
-| Set        | ✅     | ✅     | ❌     | ✅     | **Partial** (UPDATE not supported) |
-| ZSet       | ✅     | ✅     | ❌     | ✅     | **Partial** (UPDATE not supported) |
-| String     | ✅     | ✅     | ❌     | ✅     | **Partial** (UPDATE not supported) |
-| Stream     | ✅     | ✅     | ❌     | ✅     | **Full** (Large data set support with pagination) |
+| Hash       | ✅     | ✅     | ✅     | ✅     | **Full** |
+| List       | ✅     | ✅     | ✅     | ✅     | **Full** |
+| Set        | ✅     | ✅     | ✅     | ✅     | **Full** |
+| ZSet       | ✅     | ✅     | ✅     | ✅     | **Full** |
+| String     | ✅     | ✅     | ✅     | ✅     | **Full** |
+| Stream     | ✅     | ✅     | ❌     | ✅     | **Full** (UPDATE not supported - append-only) |
 
 ## Current Limitations
 
 - **Transactions**: Redis operations are not transactional with PostgreSQL
+- **Stream UPDATE**: Stream tables do not support UPDATE (append-only data structure)
 - **Large Data Sets**: For most table types, all data is loaded at scan initialization. Stream tables support efficient pagination for large data sets.
 
 ## Development
@@ -596,12 +602,15 @@ src/
 │   └── state_manager.rs     # FDW state management
 ├── query/                   # Query processing & optimization
 │   ├── mod.rs              # Query module organization
+│   ├── cost_estimation.rs  # Cost estimation for query planning
+│   ├── limit.rs            # LIMIT clause handling
 │   ├── pushdown.rs         # WHERE clause pushdown logic
 │   ├── pushdown_types.rs   # Pushdown type definitions
 │   └── scan_ops.rs         # Redis scan operation builders
 ├── tables/                  # Table implementations
 │   ├── mod.rs              # Tables module organization
 │   ├── interface.rs        # RedisTableOperations trait
+│   ├── macros.rs           # Dispatch macros for table type variants
 │   ├── types.rs           # Table type definitions (RedisTableType enum)
 │   └── implementations/    # Actual Redis table implementations
 │       ├── mod.rs         # Implementations organization
@@ -627,6 +636,7 @@ src/
     ├── cluster_integration_tests.rs # Cluster integration tests
     ├── pushdown_tests.rs # Query pushdown tests
     ├── stream_test.rs    # Stream-specific tests
+    ├── update_tests.rs   # UPDATE operation tests
     └── utils_tests.rs    # Utility function tests
 ```
 
@@ -686,7 +696,7 @@ All Redis table types implement this unified interface providing:
 - **`load_data()`**: Unified data loading with optional pushdown conditions
 - **`data_len()`**: Length calculation with optional filtered data support
 - **`get_row()`**: Row retrieval with optional filtered data support
-- **`insert()`**, **`delete()`**: CRUD operations (UPDATE not supported)
+- **`insert()`**, **`delete()`**, **`update()`**: CRUD operations (UPDATE not supported for Stream)
 - **`supports_pushdown()`**: Pushdown capability checking
 
 #### Table Type Implementations
@@ -774,9 +784,9 @@ SELECT EXISTS(SELECT 1 FROM user_roles WHERE member = 'admin');
    - `table_type` (table option) 
    - `table_key_prefix` (table option)
 
-5. **Unsupported table type**: All Redis table types (`hash`, `list`, `set`, `zset`, `string`) are supported for SELECT and INSERT operations
+5. **Unsupported table type**: All Redis table types (`hash`, `list`, `set`, `zset`, `string`, `stream`) are supported for SELECT, INSERT, and DELETE operations. UPDATE is supported for all types except `stream`.
 
-6. **UPDATE operations failing**: UPDATE operations are not supported by design and will not work with Redis FDW
+6. **Stream UPDATE operations failing**: Stream tables do not support UPDATE because Redis Streams are append-only. Use INSERT for new entries and DELETE to remove entries.
 
 7. **Connection pool exhaustion**: If you encounter connection timeout errors:
    - Check Redis server connection limits (`redis-cli CONFIG GET maxclients`)
@@ -889,8 +899,6 @@ export REDIS_CLUSTER_NODES="127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003,127.0.0
 cargo pgrx test pg14
 ```
 
-
-**Note**: UPDATE operations are intentionally not supported due to fundamental differences between Redis data models and SQL UPDATE semantics. Redis operations like HSET, SADD, etc. are inherently insert-or-update operations, making traditional SQL UPDATE behavior problematic.
 
 ## Contributing
 

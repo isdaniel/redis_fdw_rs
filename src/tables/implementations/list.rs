@@ -240,6 +240,33 @@ impl RedisTableOperations for RedisListTable {
         Ok(())
     }
 
+    fn update(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        old_data: &[String],
+        new_data: &[String],
+    ) -> Result<(), redis::RedisError> {
+        // Find the position of old value, then LSET at that index
+        if let (Some(old_value), Some(new_value)) = (old_data.first(), new_data.first()) {
+            let positions: Vec<i64> = redis::cmd("LPOS")
+                .arg(key_prefix)
+                .arg(old_value)
+                .arg("COUNT")
+                .arg(1)
+                .query(conn)?;
+
+            if let Some(&idx) = positions.first() {
+                let _: () = redis::cmd("LSET")
+                    .arg(key_prefix)
+                    .arg(idx)
+                    .arg(new_value)
+                    .query(conn)?;
+            }
+        }
+        Ok(())
+    }
+
     fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
         matches!(
             operator,

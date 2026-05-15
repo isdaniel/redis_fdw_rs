@@ -51,33 +51,6 @@ unsafe fn get_options_from_fdw(relid: Oid) -> *mut pg_sys::List {
     opts_list
 }
 
-/// Clear the contents of a `TupleTableSlot`
-/// This function is unsafe because it dereferences raw pointers and assumes that the `TupleTableSlot
-/// is valid and properly initialized.
-/// # Arguments
-/// * `slot`: A pointer to a `TupleTableSlot` structure.
-/// # Note
-/// This function calls the `clear` method of the `tts_ops` structure associated with the
-/// `TupleTableSlot`. It is intended to reset the slot to an empty state, clearing any data it holds.
-/// The `tts_ops` structure contains function pointers for various operations on the slot, and the
-/// `clear` function is expected to be defined for the specific slot type being used.
-/// If the `clear` function is not defined, this function will do nothing.
-/// It is the caller's responsibility to ensure that the `TupleTableSlot` is valid and
-/// that the `tts_ops` structure is properly initialized.
-/// This function is typically used in the context of PostgreSQL foreign data wrappers (FDWs)
-/// to reset the slot before reusing it for a new tuple.
-/// It is important to ensure that the slot is not in use by any other operation when calling this function, as it will clear the contents of the slot and may lead to undefined behavior if the slot is still being accessed elsewhere.
-/// # Safety
-/// This function is unsafe because it dereferences raw pointers and assumes that the `TupleTableSlot
-/// is valid and properly initialized. It is the caller's responsibility to ensure that the slot
-/// is in a valid state before calling this function. If the slot is not valid, dere
-/// ferencing it may lead to undefined behavior, including segmentation faults or data corruption.
-/// It is also the caller's responsibility to ensure that the `tts_ops` structure is properly
-/// initialized and that the `clear` function is defined for the specific slot type being used.
-/// If the `clear` function is not defined, this function will do nothing, but it
-/// is still considered unsafe because it dereferences raw pointers and assumes that the
-/// `TupleTableSlot` is valid.
-/// It is recommended to use this function only in the context of PostgreSQL foreign data wrappers (FDWs) or other PostgreSQL extensions where the `TupleTableSlot` is properly managed and initialized.
 #[inline]
 pub unsafe fn exec_clear_tuple(slot: *mut pgrx::pg_sys::TupleTableSlot) {
     if let Some(clear) = (*(*slot).tts_ops).clear {
@@ -85,12 +58,6 @@ pub unsafe fn exec_clear_tuple(slot: *mut pgrx::pg_sys::TupleTableSlot) {
     }
 }
 
-/// Convert a `TupleTableSlot` to a `Row`
-/// This function is unsafe because it dereferences raw pointers and assumes that the `TupleTableSlot` is valid and properly initialized.
-/// # Arguments
-/// * `slot`: A pointer to a `TupleTableSlot` structure.
-/// # Returns
-/// A `Row` containing the data from the `TupleTableSlot`. The row will contain cells for each attribute in the tuple descriptor, excluding dropped attributes.
 pub unsafe fn tuple_table_slot_to_row(slot: *mut pgrx::pg_sys::TupleTableSlot) -> Row {
     let tup_desc = PgTupleDesc::from_pg_copy((*slot).tts_tupleDescriptor);
 
@@ -109,17 +76,6 @@ pub unsafe fn tuple_table_slot_to_row(slot: *mut pgrx::pg_sys::TupleTableSlot) -
     row
 }
 
-/// Convert a C string pointer to a Rust String
-/// # Safety
-/// This function is unsafe because it dereferences a raw pointer. Ensure that the pointer is valid and points to a null-terminated C string.
-/// Convert a C string pointer to a Rust String
-/// # Safety
-/// This function is unsafe because it dereferences a raw pointer. Ensure that the pointer is valid and points to a null-terminated C string.
-/// # Arguments
-/// * `c_str`: A pointer to a null-terminated C string.
-///
-/// # Returns
-/// A Rust `String` containing the contents of the C string. If the pointer is null, an empty string is returned.
 #[inline]
 pub fn string_from_cstr(c_str: *const i8) -> String {
     if c_str.is_null() {
@@ -133,25 +89,6 @@ pub fn string_from_cstr(c_str: *const i8) -> String {
     }
 }
 
-/// Convert a string to a Datum using the type input function for the specified Oid
-/// This function is unsafe because it dereferences raw pointers and assumes that the type input function is
-/// valid for the given Oid. Ensure that the Oid corresponds to a valid data type in PostgreSQL.
-/// # Arguments
-/// * `value_str`: A string slice containing the value to convert.
-/// * `typid`: The Oid of the data type to which the string should be
-/// converted.
-/// # Returns
-/// A `Datum` representing the converted value. If the input string is empty, a null
-/// `Datum` is returned.
-/// # Note
-/// This function uses the PostgreSQL type input function to convert the string to a `Datum`.
-/// It is intended for use with PostgreSQL data types that have a defined input function.
-/// The function retrieves the type input information for the specified Oid and calls the input function to
-/// perform the conversion. If the input string is empty, it returns a null `Datum`.
-/// This function is unsafe because it relies on the PostgreSQL C API and assumes that the input
-/// function for the specified Oid is correctly defined and available in the PostgreSQL environment.
-/// It is the caller's responsibility to ensure that the Oid corresponds to a valid data type
-/// and that the input function is properly registered in the PostgreSQL system.
 pub unsafe fn get_datum(value_str: &str, typid: Oid) -> Datum {
     if value_str.is_empty() {
         return Datum::null();
@@ -243,24 +180,6 @@ pub unsafe fn tuple_desc_attr_address(desc: *mut TupleDescData) -> *mut FormData
     base.add(offset) as *mut FormData_pg_attribute
 }
 
-/// Get a pointer to the attribute at the specified index in the tuple descriptor
-/// # Safety
-/// This function is unsafe because it dereferences raw pointers and assumes that the tuple descriptor
-/// is valid and that the index is within bounds.
-/// # Arguments
-/// * `desc`: A pointer to a `TupleDescData` structure.
-/// * `i`: The index of the attribute to retrieve.
-/// # Returns
-/// A pointer to the `FormData_pg_attribute` structure representing the attribute at the specified index
-/// in the tuple descriptor.
-/// # Note
-/// This function is intended to be used in the context of PostgreSQL foreign data wrappers (FDW) or other PostgreSQL extensions where the tuple descriptor is properly managed and initialized.
-/// It is the caller's responsibility to ensure that the tuple descriptor is valid and that the index
-/// is within bounds. If the index is out of bounds, dereferencing the pointer may lead
-/// to undefined behavior, including segmentation faults or data corruption.
-/// It is recommended to use this function only in the context of PostgreSQL foreign data wrappers (FDWs) or other PostgreSQL extensions where the tuple descriptor is properly managed and initialized.
-/// It is also the caller's responsibility to ensure that the tuple descriptor is not modified while
-/// this function is being used, as modifying the tuple descriptor may lead to undefined behavior.
 pub unsafe fn tuple_desc_attr(desc: *mut TupleDescData, i: usize) -> *mut FormData_pg_attribute {
     assert!(!desc.is_null());
     assert!(i < (*desc).natts as usize);

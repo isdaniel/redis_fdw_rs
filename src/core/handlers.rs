@@ -41,9 +41,9 @@ pub extern "C" fn redis_fdw_handler() -> FdwRoutine {
         fdw_routine.BeginForeignModify = Some(begin_foreign_modify);
         fdw_routine.ExecForeignInsert = Some(exec_foreign_insert);
         fdw_routine.ExecForeignDelete = Some(exec_foreign_delete);
-        //fdw_routine.ExecForeignUpdate = Some(exec_foreign_update);
+        fdw_routine.ExecForeignUpdate = Some(exec_foreign_update);
         fdw_routine.EndForeignModify = Some(end_foreign_modify);
-        //fdw_routine.IsForeignRelUpdatable =
+        fdw_routine.IsForeignRelUpdatable = Some(is_foreign_rel_updatable);
 
         fdw_routine
     }
@@ -87,7 +87,7 @@ extern "C-unwind" fn get_foreign_rel_size(
         state.cost_estimate = Some(cost_estimate);
 
         (*baserel).fdw_private =
-            Box::into_raw(Box::new(state)) as *mut RedisFdwState as *mut std::os::raw::c_void;
+            Box::into_raw(Box::new(state)) as *mut std::os::raw::c_void;
         (*baserel).rows = estimated_rows;
     }
 }
@@ -406,18 +406,45 @@ unsafe extern "C-unwind" fn exec_foreign_insert(
     slot
 }
 
-// #[pg_guard]
-// unsafe extern "C-unwind" fn exec_foreign_update(
-//     _estate: *mut pgrx::pg_sys::EState,
-//     _rinfo: *mut pgrx::pg_sys::ResultRelInfo,
-//     _slot: *mut pgrx::pg_sys::TupleTableSlot,
-//     plan_slot: *mut pgrx::pg_sys::TupleTableSlot,
-// ) -> *mut pgrx::pg_sys::TupleTableSlot {
-//     log!("---> exec_foreign_update");
-//     let new_row = tuple_table_slot_to_row(plan_slot);
-//     log!("New row for update: {:?}", new_row);
-//     unimplemented!("Update operations are not yet implemented for Redis FDW");
-// }
+#[pg_guard]
+unsafe extern "C-unwind" fn exec_foreign_update(
+    _estate: *mut pgrx::pg_sys::EState,
+    rinfo: *mut pgrx::pg_sys::ResultRelInfo,
+    slot: *mut pgrx::pg_sys::TupleTableSlot,
+    plan_slot: *mut pgrx::pg_sys::TupleTableSlot,
+) -> *mut pgrx::pg_sys::TupleTableSlot {
+    log!("---> exec_foreign_update");
+    let mut state = PgBox::<RedisFdwState>::from_pg((*rinfo).ri_FdwState as _);
+
+    // Extract old key from plan_slot (junk attribute set by add_foreign_update_targets)
+    let old_data = match extract_delete_key(&state, plan_slot) {
+        Ok(key) => vec![key],
+        Err(err_msg) => {
+            error!("Failed to extract old key for update: {}", err_msg);
+        }
+    };
+
+    // Extract new row from the slot
+    let new_row: Row = tuple_table_slot_to_row(slot);
+    let new_data: Vec<String> = new_row
+        .cells
+        .iter()
+        .map(|cell| cell_to_string(cell.as_ref()))
+        .collect();
+
+    log!(
+        "Update: old_data={:?}, new_data={:?}",
+        old_data,
+        new_data
+    );
+
+    if let Err(e) = state.update_data(&old_data, &new_data) {
+        error!("Failed to update data: {:?}", e);
+    }
+
+    (*slot).tts_tableOid = pgrx::pg_sys::InvalidOid;
+    slot
+}
 
 #[pg_guard]
 unsafe extern "C-unwind" fn exec_foreign_delete(
@@ -437,9 +464,8 @@ unsafe extern "C-unwind" fn exec_foreign_delete(
             log!("Attempting to delete key: '{}'", key);
 
             // Perform the deletion operation
-            if let Err(e) = state.delete_data(&[key.clone()]) {
+            if let Err(e) = state.delete_data(std::slice::from_ref(&key)) {
                 error!("Failed to delete key '{}': {:?}", key, e);
-                // Note: We continue rather than panic to maintain PostgreSQL stability
             } else {
                 log!("Successfully deleted key: '{}'", key);
             }
@@ -474,10 +500,30 @@ unsafe extern "C-unwind" fn end_foreign_modify(
     }
 }
 
-/// Extract the key to be deleted from the plan slot
-///
-/// # Safety
-/// This function assumes valid pointers for state and plan_slot
+#[pg_guard]
+extern "C-unwind" fn is_foreign_rel_updatable(
+    rel: pgrx::pg_sys::Relation,
+) -> ::std::os::raw::c_int {
+    log!("---> is_foreign_rel_updatable");
+    // CmdType: CMD_UPDATE=2, CMD_INSERT=3, CMD_DELETE=4
+    // Return bitmask: (1 << CMD_INSERT) | (1 << CMD_UPDATE) | (1 << CMD_DELETE)
+    // = 8 | 4 | 16 = 28 for updatable types
+    // = 8 | 16 = 24 for stream (no UPDATE)
+    unsafe {
+        let relid = (*rel).rd_id;
+        let options = get_foreign_table_options(relid);
+        let table_type = options
+            .get("table_type")
+            .map(|s| s.as_str())
+            .unwrap_or("");
+
+        match table_type.to_lowercase().as_str() {
+            "stream" => (1 << 3) | (1 << 4), // INSERT | DELETE = 24
+            _ => (1 << 2) | (1 << 3) | (1 << 4), // UPDATE | INSERT | DELETE = 28
+        }
+    }
+}
+
 unsafe fn extract_delete_key(
     state: &RedisFdwState,
     plan_slot: *mut pgrx::pg_sys::TupleTableSlot,

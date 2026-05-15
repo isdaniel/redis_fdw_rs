@@ -21,6 +21,18 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-pg${{ matrix.pg-version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-pg${{ matrix.pg-version }}-
+
       - name: Install PostgreSQL ${{ env.PG_VER }} APT repository and system dependencies
         run: |
           sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'

@@ -79,6 +79,16 @@ impl RedisTableType {
         table_dispatch_mut_result!(self, delete(conn, key_prefix, data) -> Result<(), redis::RedisError>, Ok(()))
     }
 
+    pub fn update(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        old_data: &[String],
+        new_data: &[String],
+    ) -> Result<(), redis::RedisError> {
+        table_dispatch_mut_result!(self, update(conn, key_prefix, old_data, new_data) -> Result<(), redis::RedisError>, Ok(()))
+    }
+
     /// Check if this table type supports a specific pushdown operator
     pub fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
         table_dispatch!(self, supports_pushdown(operator) -> false)
