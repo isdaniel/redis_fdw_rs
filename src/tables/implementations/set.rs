@@ -230,6 +230,31 @@ impl RedisTableOperations for RedisSetTable {
         Ok(())
     }
 
+    fn update(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        old_data: &[String],
+        new_data: &[String],
+    ) -> Result<(), redis::RedisError> {
+        if let (Some(old_member), Some(new_member)) = (old_data.first(), new_data.first()) {
+            if old_member == new_member {
+                return Ok(());
+            }
+            // Atomic swap via pipeline: SREM old + SADD new
+            redis::pipe()
+                .atomic()
+                .cmd("SREM")
+                .arg(key_prefix)
+                .arg(old_member)
+                .cmd("SADD")
+                .arg(key_prefix)
+                .arg(new_member)
+                .query::<()>(conn)?;
+        }
+        Ok(())
+    }
+
     fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
         matches!(
             operator,

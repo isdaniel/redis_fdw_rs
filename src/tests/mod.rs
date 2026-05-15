@@ -35,3 +35,6 @@ pub mod stream_test;
 
 #[cfg(any(test, feature = "pg_test"))]
 pub mod fdw_lifecycle_tests;
+
+#[cfg(any(test, feature = "pg_test"))]
+pub mod update_tests;

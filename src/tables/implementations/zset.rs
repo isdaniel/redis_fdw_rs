@@ -363,6 +363,51 @@ impl RedisTableOperations for RedisZSetTable {
         Ok(())
     }
 
+    fn update(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        old_data: &[String],
+        new_data: &[String],
+    ) -> Result<(), redis::RedisError> {
+        // old_data: [member], new_data: [member, score]
+        if new_data.len() >= 2 {
+            let new_member = &new_data[0];
+            let new_score: f64 = new_data[1].parse().map_err(|e: std::num::ParseFloatError| {
+                redis::RedisError::from((
+                    redis::ErrorKind::TypeError,
+                    "Invalid score format",
+                    e.to_string(),
+                ))
+            })?;
+
+            // If member name changed, use atomic pipeline (ZREM old + ZADD new)
+            if let Some(old_member) = old_data.first() {
+                if old_member != new_member {
+                    redis::pipe()
+                        .atomic()
+                        .cmd("ZREM")
+                        .arg(key_prefix)
+                        .arg(old_member)
+                        .cmd("ZADD")
+                        .arg(key_prefix)
+                        .arg(new_score)
+                        .arg(new_member)
+                        .query::<()>(conn)?;
+                    return Ok(());
+                }
+            }
+
+            // Score-only update (no rename needed)
+            let _: () = redis::cmd("ZADD")
+                .arg(key_prefix)
+                .arg(new_score)
+                .arg(new_member)
+                .query(conn)?;
+        }
+        Ok(())
+    }
+
     fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
         matches!(
             operator,
