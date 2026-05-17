@@ -21,6 +21,7 @@ impl LimitOffsetInfo {
     }
 
     /// Apply limit and offset to a vector of data
+    #[allow(dead_code)]
     pub fn apply_to_vec<T>(&self, mut data: Vec<T>) -> Vec<T> {
         // Apply offset first
         if let Some(offset) = self.offset {

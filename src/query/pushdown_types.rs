@@ -2,6 +2,7 @@
 /// This module contains types used for analyzing and representing WHERE clause conditions
 use crate::query::limit::LimitOffsetInfo;
 
+#[allow(dead_code)]
 /// Represents a pushable condition from WHERE clause
 #[derive(Debug, Clone)]
 pub struct PushableCondition {
@@ -56,6 +57,7 @@ impl PushdownAnalysis {
     }
 
     /// Check if LIMIT/OFFSET pushdown is possible
+    #[allow(dead_code)]
     pub fn has_limit_pushdown(&self) -> bool {
         self.limit_offset
             .as_ref()

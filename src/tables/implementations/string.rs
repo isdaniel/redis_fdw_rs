@@ -23,6 +23,7 @@ impl RedisStringTable {
         }
     }
 
+    #[allow(dead_code)]
     /// Load data with SCAN optimization for value matching
     fn load_with_scan_optimization(
         &mut self,
@@ -191,10 +192,25 @@ impl RedisTableOperations for RedisStringTable {
         key_prefix: &str,
         _cursor: u64,
         _batch_size: usize,
-        _conditions: Option<&[PushableCondition]>,
+        conditions: Option<&[PushableCondition]>,
     ) -> Result<(u64, usize), redis::RedisError> {
         // String type is always a single value — no cursor needed
         let value: Option<String> = redis::cmd("GET").arg(key_prefix).query(conn)?;
+
+        // Apply conditions client-side on the single value
+        let value = value.filter(|v| {
+            conditions.is_none_or(|conds| {
+                conds.iter().all(|c| match c.operator {
+                    ComparisonOperator::Equal => v == &c.value,
+                    ComparisonOperator::NotEqual => v != &c.value,
+                    ComparisonOperator::Like => {
+                        PatternMatcher::from_like_pattern(&c.value).matches(v)
+                    }
+                    _ => true,
+                })
+            })
+        });
+
         let row_count = if value.is_some() { 1 } else { 0 };
         self.dataset = DataSet::Complete(DataContainer::String(value));
         Ok((0, row_count)) // cursor=0 means done

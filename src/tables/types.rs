@@ -41,6 +41,7 @@ impl RedisTableType {
         }
     }
 
+    #[allow(dead_code)]
     pub fn load_data(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -64,6 +65,18 @@ impl RedisTableType {
 
     pub fn data_len(&self) -> usize {
         table_dispatch!(self, data_len() -> 0)
+    }
+
+    pub fn clear_data(&mut self) {
+        match self {
+            RedisTableType::String(t) => t.dataset = DataSet::default(),
+            RedisTableType::Hash(t) => t.dataset = DataSet::default(),
+            RedisTableType::List(t) => t.dataset = DataSet::default(),
+            RedisTableType::Set(t) => t.dataset = DataSet::default(),
+            RedisTableType::ZSet(t) => t.dataset = DataSet::default(),
+            RedisTableType::Stream(t) => t.dataset = DataSet::default(),
+            RedisTableType::None => {}
+        }
     }
 
     /// Get a row at the specified index
@@ -108,6 +121,7 @@ impl RedisTableType {
 
 /// Result type for data loading operations
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum LoadDataResult {
     /// Data was loaded into internal storage (possibly with pushdown applied)
     FullyLoaded,
@@ -129,6 +143,7 @@ pub enum DataSet {
 
 /// Container for complete data sets with type-specific storage
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum DataContainer {
     /// Single string value (Redis String type)
     String(Option<String>),

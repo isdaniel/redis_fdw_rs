@@ -2,9 +2,10 @@
 
 .PHONY: help build build-release install test test-all test-unit \
         clean format lint check setup-redis setup-cluster cleanup-redis redis-status \
-        test-pg14 test-pg15 test-pg16 test-pg17 stop-pg
+        test-pg14 test-pg15 test-pg16 test-pg17 stop-pg before-git-push
 
 # Default PG version for single-target commands
+# VERSIONS = pg14 pg15 pg16 pg17
 PG ?= pg14
 
 # Default target
@@ -27,6 +28,8 @@ help:
 	@echo "  make format          cargo fmt"
 	@echo "  make lint            cargo clippy"
 	@echo "  make clean           cargo clean"
+	@echo ""
+	@echo "  make before-git-push Run all CI checks locally (fmt, clippy, tests)"
 
 # ─── Build ────────────────────────────────────────────────────────────────────
 
@@ -119,5 +122,11 @@ check:
 
 clean:
 	cargo clean
+
+# Pre-push verification: mirrors CI pipeline checks
+before-git-push: format stop-pg
+	cargo fmt -- --check
+	cargo clippy --no-default-features --all-targets --features $(PG) -- -D warnings -A clippy::enum-variant-names
+	$(MAKE) test-all PG=$(PG)
 
 .DEFAULT_GOAL := help

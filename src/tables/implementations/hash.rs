@@ -25,6 +25,7 @@ impl RedisHashTable {
         }
     }
 
+    #[allow(dead_code)]
     /// Load data with HSCAN optimization for pattern matching
     fn load_with_scan_optimization(
         &mut self,
@@ -59,6 +60,7 @@ impl RedisHashTable {
         self.hgetall_all(conn, key_prefix)
     }
 
+    #[allow(dead_code)]
     fn hget_exact(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -77,7 +79,7 @@ impl RedisHashTable {
         }
     }
 
-    /// Helper: Fetch multiple fields
+    #[allow(dead_code)]
     fn hmget_fields(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -100,7 +102,7 @@ impl RedisHashTable {
         Ok(LoadDataResult::FullyLoaded)
     }
 
-    /// Helper: Load full hash
+    #[allow(dead_code)]
     fn hgetall_all(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -277,16 +279,55 @@ impl RedisTableOperations for RedisHashTable {
         key_prefix: &str,
         cursor: u64,
         batch_size: usize,
-        _conditions: Option<&[PushableCondition]>,
+        conditions: Option<&[PushableCondition]>,
     ) -> Result<(u64, usize), redis::RedisError> {
         let mut cmd = redis::cmd("HSCAN");
-        cmd.arg(key_prefix).arg(cursor).arg("COUNT").arg(batch_size);
+        cmd.arg(key_prefix).arg(cursor);
+
+        // Apply LIKE condition as MATCH pattern for server-side filtering
+        let like_pattern = conditions.and_then(|conds| {
+            conds.iter().find_map(|c| {
+                if c.operator == ComparisonOperator::Like {
+                    Some(PatternMatcher::from_like_pattern(&c.value))
+                } else {
+                    None
+                }
+            })
+        });
+        if let Some(ref matcher) = like_pattern {
+            cmd.arg("MATCH").arg(matcher.get_pattern());
+        }
+        cmd.arg("COUNT").arg(batch_size);
+
         let (new_cursor, pairs): (u64, Vec<(String, String)>) = cmd.query(conn)?;
-        let row_count = pairs.len();
-        self.dataset = if pairs.is_empty() {
+
+        // Apply non-LIKE conditions as client-side post-filter
+        let filtered: Vec<(String, String)> = if let Some(conds) = conditions {
+            let has_non_like = conds.iter().any(|c| c.operator != ComparisonOperator::Like);
+            if has_non_like {
+                pairs
+                    .into_iter()
+                    .filter(|(field, _)| {
+                        conds.iter().all(|c| match c.operator {
+                            ComparisonOperator::Equal => field == &c.value,
+                            ComparisonOperator::NotEqual => field != &c.value,
+                            ComparisonOperator::Like => true, // already handled by MATCH
+                            _ => true,
+                        })
+                    })
+                    .collect()
+            } else {
+                pairs
+            }
+        } else {
+            pairs
+        };
+
+        let row_count = filtered.len();
+        self.dataset = if filtered.is_empty() {
             DataSet::Empty
         } else {
-            DataSet::Complete(DataContainer::Hash(pairs))
+            DataSet::Complete(DataContainer::Hash(filtered))
         };
         Ok((new_cursor, row_count))
     }

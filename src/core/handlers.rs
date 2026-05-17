@@ -318,6 +318,7 @@ extern "C-unwind" fn re_scan_foreign_scan(node: *mut pgrx::pg_sys::ForeignScanSt
         state.row_count = 0;
         state.scan_cursor = 0;
         state.scan_complete = false;
+        state.table_type.clear_data();
     }
 }
 

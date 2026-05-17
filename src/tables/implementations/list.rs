@@ -2,7 +2,7 @@ use crate::{
     query::{
         limit::LimitOffsetInfo,
         pushdown_types::{ComparisonOperator, PushableCondition},
-        scan_ops::{extract_scan_conditions, ScanConditions},
+        scan_ops::{extract_scan_conditions, PatternMatcher, ScanConditions},
     },
     tables::{
         interface::RedisTableOperations,
@@ -23,6 +23,7 @@ impl RedisListTable {
         }
     }
 
+    #[allow(dead_code)]
     fn load_with_pattern_optimization(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -283,7 +284,7 @@ impl RedisTableOperations for RedisListTable {
         key_prefix: &str,
         cursor: u64,
         batch_size: usize,
-        _conditions: Option<&[PushableCondition]>,
+        conditions: Option<&[PushableCondition]>,
     ) -> Result<(u64, usize), redis::RedisError> {
         // Lists use offset-based pagination (cursor = offset index)
         let start = cursor as isize;
@@ -299,11 +300,38 @@ impl RedisTableOperations for RedisListTable {
         } else {
             cursor + row_count as u64
         };
-        self.dataset = if data.is_empty() {
+
+        // Apply conditions as client-side post-filter (no LSCAN in Redis)
+        let filtered: Vec<String> = if let Some(conds) = conditions {
+            let like_matcher = conds.iter().find_map(|c| {
+                if c.operator == ComparisonOperator::Like {
+                    Some(PatternMatcher::from_like_pattern(&c.value))
+                } else {
+                    None
+                }
+            });
+            data.into_iter()
+                .filter(|item| {
+                    conds.iter().all(|c| match c.operator {
+                        ComparisonOperator::Equal => item == &c.value,
+                        ComparisonOperator::NotEqual => item != &c.value,
+                        ComparisonOperator::Like => {
+                            like_matcher.as_ref().is_none_or(|m| m.matches(item))
+                        }
+                        _ => true,
+                    })
+                })
+                .collect()
+        } else {
+            data
+        };
+
+        let filtered_count = filtered.len();
+        self.dataset = if filtered.is_empty() {
             DataSet::Empty
         } else {
-            DataSet::Complete(DataContainer::List(data))
+            DataSet::Complete(DataContainer::List(filtered))
         };
-        Ok((new_cursor, row_count))
+        Ok((new_cursor, filtered_count))
     }
 }

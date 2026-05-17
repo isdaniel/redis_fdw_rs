@@ -28,6 +28,7 @@ pub struct RedisStreamTable {
     /// Last processed stream ID for pagination
     pub last_id: Option<String>,
     /// Batch size for streaming operations to handle large data sets
+    #[allow(dead_code)]
     pub batch_size: usize,
 }
 
@@ -41,7 +42,7 @@ impl RedisStreamTable {
         }
     }
 
-    /// Load data using XRANGE with streaming support for large data sets
+    #[allow(dead_code)]
     fn load_with_xrange(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -97,7 +98,7 @@ impl RedisStreamTable {
         Ok(LoadDataResult::FullyLoaded)
     }
 
-    /// Load data with stream-specific optimizations and pushdown conditions
+    #[allow(dead_code)]
     fn load_with_stream_optimization(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -312,30 +313,60 @@ impl RedisTableOperations for RedisStreamTable {
         key_prefix: &str,
         _cursor: u64,
         batch_size: usize,
-        _conditions: Option<&[PushableCondition]>,
+        conditions: Option<&[PushableCondition]>,
     ) -> Result<(u64, usize), redis::RedisError> {
-        // Streams use last_id as cursor for XRANGE pagination
-        let start_id = match &self.last_id {
-            Some(id) => {
-                // Increment the sequence to avoid re-reading the last entry
-                let parts: Vec<&str> = id.splitn(2, '-').collect();
-                if parts.len() == 2 {
-                    if let Ok(seq) = parts[1].parse::<u64>() {
-                        format!("{}-{}", parts[0], seq.saturating_add(1))
+        // Determine start/end IDs from conditions
+        let (start_id, end_id) = if let Some(conds) = conditions {
+            let mut start = None;
+            let mut end = None;
+            for c in conds {
+                if c.operator == ComparisonOperator::Equal {
+                    start = Some(c.value.clone());
+                    end = Some(c.value.clone());
+                    break;
+                }
+            }
+            (
+                start.unwrap_or_else(|| match &self.last_id {
+                    Some(id) => {
+                        let parts: Vec<&str> = id.splitn(2, '-').collect();
+                        if parts.len() == 2 {
+                            if let Ok(seq) = parts[1].parse::<u64>() {
+                                format!("{}-{}", parts[0], seq.saturating_add(1))
+                            } else {
+                                id.clone()
+                            }
+                        } else {
+                            id.clone()
+                        }
+                    }
+                    None => "-".to_string(),
+                }),
+                end.unwrap_or_else(|| "+".to_string()),
+            )
+        } else {
+            let start = match &self.last_id {
+                Some(id) => {
+                    let parts: Vec<&str> = id.splitn(2, '-').collect();
+                    if parts.len() == 2 {
+                        if let Ok(seq) = parts[1].parse::<u64>() {
+                            format!("{}-{}", parts[0], seq.saturating_add(1))
+                        } else {
+                            id.clone()
+                        }
                     } else {
                         id.clone()
                     }
-                } else {
-                    id.clone()
                 }
-            }
-            None => "-".to_string(),
+                None => "-".to_string(),
+            };
+            (start, "+".to_string())
         };
 
         let entries: Vec<(String, Vec<(String, String)>)> = redis::cmd("XRANGE")
             .arg(key_prefix)
             .arg(&start_id)
-            .arg("+")
+            .arg(&end_id)
             .arg("COUNT")
             .arg(batch_size)
             .query(conn)?;

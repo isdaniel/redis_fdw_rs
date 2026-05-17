@@ -4,7 +4,7 @@ use crate::{
     query::{
         limit::LimitOffsetInfo,
         pushdown_types::{ComparisonOperator, PushableCondition},
-        scan_ops::{extract_scan_conditions, RedisScanBuilder, ScanConditions},
+        scan_ops::{extract_scan_conditions, PatternMatcher, RedisScanBuilder, ScanConditions},
     },
     tables::{
         interface::RedisTableOperations,
@@ -25,6 +25,7 @@ impl RedisZSetTable {
         }
     }
 
+    #[allow(dead_code)]
     fn load_with_scan_optimization(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -412,16 +413,61 @@ impl RedisTableOperations for RedisZSetTable {
         key_prefix: &str,
         cursor: u64,
         batch_size: usize,
-        _conditions: Option<&[PushableCondition]>,
+        conditions: Option<&[PushableCondition]>,
     ) -> Result<(u64, usize), redis::RedisError> {
         let mut cmd = redis::cmd("ZSCAN");
-        cmd.arg(key_prefix).arg(cursor).arg("COUNT").arg(batch_size);
+        cmd.arg(key_prefix).arg(cursor);
+
+        // Apply LIKE condition as MATCH pattern for server-side filtering
+        let like_pattern = conditions.and_then(|conds| {
+            conds.iter().find_map(|c| {
+                if c.operator == ComparisonOperator::Like {
+                    Some(PatternMatcher::from_like_pattern(&c.value))
+                } else {
+                    None
+                }
+            })
+        });
+        if let Some(ref matcher) = like_pattern {
+            cmd.arg("MATCH").arg(matcher.get_pattern());
+        }
+        cmd.arg("COUNT").arg(batch_size);
+
         let (new_cursor, flat_data): (u64, Vec<String>) = cmd.query(conn)?;
-        let row_count = flat_data.len() / 2;
-        self.dataset = if flat_data.is_empty() {
+
+        // Apply non-LIKE conditions as client-side post-filter on members
+        let filtered: Vec<String> = if let Some(conds) = conditions {
+            let has_non_like = conds.iter().any(|c| c.operator != ComparisonOperator::Like);
+            if has_non_like {
+                flat_data
+                    .chunks(2)
+                    .filter(|chunk| {
+                        if chunk.len() == 2 {
+                            let member = &chunk[0];
+                            conds.iter().all(|c| match c.operator {
+                                ComparisonOperator::Equal => member == &c.value,
+                                ComparisonOperator::NotEqual => member != &c.value,
+                                ComparisonOperator::Like => true,
+                                _ => true,
+                            })
+                        } else {
+                            false
+                        }
+                    })
+                    .flat_map(|chunk| chunk.iter().cloned())
+                    .collect()
+            } else {
+                flat_data
+            }
+        } else {
+            flat_data
+        };
+
+        let row_count = filtered.len() / 2;
+        self.dataset = if filtered.is_empty() {
             DataSet::Empty
         } else {
-            DataSet::Filtered(flat_data)
+            DataSet::Filtered(filtered)
         };
         Ok((new_cursor, row_count))
     }
