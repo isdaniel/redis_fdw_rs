@@ -42,6 +42,24 @@ impl RedisStreamTable {
         }
     }
 
+    fn next_start_id(&self) -> String {
+        match &self.last_id {
+            Some(id) => {
+                let parts: Vec<&str> = id.splitn(2, '-').collect();
+                if parts.len() == 2 {
+                    if let Ok(seq) = parts[1].parse::<u64>() {
+                        format!("{}-{}", parts[0], seq.saturating_add(1))
+                    } else {
+                        id.clone()
+                    }
+                } else {
+                    id.clone()
+                }
+            }
+            None => "-".to_string(),
+        }
+    }
+
     #[allow(dead_code)]
     fn load_with_xrange(
         &mut self,
@@ -315,52 +333,23 @@ impl RedisTableOperations for RedisStreamTable {
         batch_size: usize,
         conditions: Option<&[PushableCondition]>,
     ) -> Result<(u64, usize), redis::RedisError> {
-        // Determine start/end IDs from conditions
+        // Determine start/end IDs from ID-column conditions only
         let (start_id, end_id) = if let Some(conds) = conditions {
             let mut start = None;
             let mut end = None;
             for c in conds {
-                if c.operator == ComparisonOperator::Equal {
+                if c.operator == ComparisonOperator::Equal && c.column_name == "id" {
                     start = Some(c.value.clone());
                     end = Some(c.value.clone());
                     break;
                 }
             }
             (
-                start.unwrap_or_else(|| match &self.last_id {
-                    Some(id) => {
-                        let parts: Vec<&str> = id.splitn(2, '-').collect();
-                        if parts.len() == 2 {
-                            if let Ok(seq) = parts[1].parse::<u64>() {
-                                format!("{}-{}", parts[0], seq.saturating_add(1))
-                            } else {
-                                id.clone()
-                            }
-                        } else {
-                            id.clone()
-                        }
-                    }
-                    None => "-".to_string(),
-                }),
+                start.unwrap_or_else(|| self.next_start_id()),
                 end.unwrap_or_else(|| "+".to_string()),
             )
         } else {
-            let start = match &self.last_id {
-                Some(id) => {
-                    let parts: Vec<&str> = id.splitn(2, '-').collect();
-                    if parts.len() == 2 {
-                        if let Ok(seq) = parts[1].parse::<u64>() {
-                            format!("{}-{}", parts[0], seq.saturating_add(1))
-                        } else {
-                            id.clone()
-                        }
-                    } else {
-                        id.clone()
-                    }
-                }
-                None => "-".to_string(),
-            };
-            (start, "+".to_string())
+            (self.next_start_id(), "+".to_string())
         };
 
         let entries: Vec<(String, Vec<(String, String)>)> = redis::cmd("XRANGE")

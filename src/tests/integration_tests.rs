@@ -189,7 +189,7 @@ mod tests {
 
         // Perform SELECT with LIKE and LIMIT
         let result = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM {} WHERE field LIKE 'pattern%' LIMIT 2;",
+            "SELECT COUNT(*) FROM (SELECT * FROM {} WHERE field LIKE 'pattern%' LIMIT 2) sub;",
             table_name
         ));
         assert!(result.is_ok());
@@ -407,7 +407,7 @@ mod tests {
 
         // Perform SELECT with LIKE and LIMIT
         let result = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM {} WHERE member LIKE 'pattern%' LIMIT 2;",
+            "SELECT COUNT(*) FROM (SELECT * FROM {} WHERE member LIKE 'pattern%' LIMIT 2) sub;",
             table_name
         ));
         assert!(result.is_ok());
@@ -614,7 +614,7 @@ mod tests {
 
         // Perform SELECT with LIKE and LIMIT
         let result = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM {} WHERE member LIKE 'pattern%' LIMIT 2;",
+            "SELECT COUNT(*) FROM (SELECT * FROM {} WHERE member LIKE 'pattern%' LIMIT 2) sub;",
             table_name
         ));
         assert!(result.is_ok());

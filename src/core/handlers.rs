@@ -133,12 +133,14 @@ extern "C-unwind" fn get_foreign_paths(
             baserel,
             ptr::null_mut(),
             (*baserel).rows,
+            #[cfg(feature = "pg18")]
+            0, // disabled_nodes
             startup_cost,
             total_cost,
             ptr::null_mut(),
             ptr::null_mut(),
             ptr::null_mut(),
-            #[cfg(feature = "pg17")]
+            #[cfg(any(feature = "pg17", feature = "pg18"))]
             ptr::null_mut(),
             ptr::null_mut(),
         );
@@ -273,12 +275,11 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
             write_datum_to_slot(slot, tupdesc, col_idx, value.as_ref());
         }
     } else {
-        log!(
-            "Warning: get_row returned None at index {} (data_len={})",
+        error!(
+            "Failed to get row data at index: {} (data_len={})",
             state.row_count,
             state.data_len()
         );
-        return slot;
     }
 
     state.row_count += 1;

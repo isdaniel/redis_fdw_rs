@@ -281,11 +281,17 @@ impl RedisTableOperations for RedisHashTable {
         batch_size: usize,
         conditions: Option<&[PushableCondition]>,
     ) -> Result<(u64, usize), redis::RedisError> {
+        // Only apply conditions on the field/key column (first column) to Redis
+        // Value column conditions must be handled by PG post-filter
+        let field_conditions: Option<Vec<&PushableCondition>> =
+            conditions.map(|conds| conds.iter().filter(|c| c.column_name != "value").collect());
+        let field_conds: Option<&[&PushableCondition]> = field_conditions.as_deref();
+
         let mut cmd = redis::cmd("HSCAN");
         cmd.arg(key_prefix).arg(cursor);
 
         // Apply LIKE condition as MATCH pattern for server-side filtering
-        let like_pattern = conditions.and_then(|conds| {
+        let like_pattern = field_conds.and_then(|conds| {
             conds.iter().find_map(|c| {
                 if c.operator == ComparisonOperator::Like {
                     Some(PatternMatcher::from_like_pattern(&c.value))
@@ -301,23 +307,37 @@ impl RedisTableOperations for RedisHashTable {
 
         let (new_cursor, pairs): (u64, Vec<(String, String)>) = cmd.query(conn)?;
 
-        // Apply non-LIKE conditions as client-side post-filter
-        let filtered: Vec<(String, String)> = if let Some(conds) = conditions {
-            let has_non_like = conds.iter().any(|c| c.operator != ComparisonOperator::Like);
-            if has_non_like {
+        // Apply field conditions as client-side post-filter
+        // Note: Only the first LIKE condition was used for server-side MATCH;
+        // all other conditions (including additional LIKEs) must be verified here
+        let filtered: Vec<(String, String)> = if let Some(conds) = field_conds {
+            if conds.is_empty() {
+                pairs
+            } else {
+                let first_like_value = conds.iter().find_map(|c| {
+                    if c.operator == ComparisonOperator::Like {
+                        Some(&c.value)
+                    } else {
+                        None
+                    }
+                });
                 pairs
                     .into_iter()
                     .filter(|(field, _)| {
                         conds.iter().all(|c| match c.operator {
                             ComparisonOperator::Equal => field == &c.value,
                             ComparisonOperator::NotEqual => field != &c.value,
-                            ComparisonOperator::Like => true, // already handled by MATCH
+                            ComparisonOperator::Like => {
+                                if Some(&c.value) == first_like_value {
+                                    true // handled by MATCH
+                                } else {
+                                    PatternMatcher::from_like_pattern(&c.value).matches(field)
+                                }
+                            }
                             _ => true,
                         })
                     })
                     .collect()
-            } else {
-                pairs
             }
         } else {
             pairs

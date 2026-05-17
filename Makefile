@@ -2,10 +2,10 @@
 
 .PHONY: help build build-release install test test-all test-unit \
         clean format lint check setup-redis setup-cluster cleanup-redis redis-status \
-        test-pg14 test-pg15 test-pg16 test-pg17 stop-pg before-git-push
+        test-pg14 test-pg15 test-pg16 test-pg17 test-pg18 stop-pg before-git-push before-git-push-all
 
 # Default PG version for single-target commands
-# VERSIONS = pg14 pg15 pg16 pg17
+VERSIONS = pg14 pg15 pg16 pg17 pg18
 PG ?= pg14
 
 # Default target
@@ -30,6 +30,7 @@ help:
 	@echo "  make clean           cargo clean"
 	@echo ""
 	@echo "  make before-git-push Run all CI checks locally (fmt, clippy, tests)"
+	@echo "  make before-git-push-all  Run CI checks for all PG versions ($(VERSIONS))"
 
 # ─── Build ────────────────────────────────────────────────────────────────────
 
@@ -59,6 +60,9 @@ test-pg16:
 
 test-pg17:
 	cargo pgrx test pg17
+
+test-pg18:
+	cargo pgrx test pg18
 
 # Quick compile + lint check, no Redis needed
 test-unit:
@@ -128,5 +132,12 @@ before-git-push: format stop-pg
 	cargo fmt -- --check
 	cargo clippy --no-default-features --all-targets --features $(PG) -- -D warnings -A clippy::enum-variant-names
 	$(MAKE) test-all PG=$(PG)
+
+# Pre-push verification for all PG versions (pg14~pg17)
+before-git-push-all:
+	@for pg in $(VERSIONS); do \
+		echo "=== Running before-git-push for $$pg ==="; \
+		$(MAKE) before-git-push PG=$$pg || exit 1; \
+	done
 
 .DEFAULT_GOAL := help

@@ -154,9 +154,8 @@ impl RedisFdwState {
                             return false;
                         }
                     }
-                    Err(_) => {
-                        self.scan_complete = true;
-                        return false;
+                    Err(e) => {
+                        pgrx::error!("Redis error during batch fetch: {}", e);
                     }
                 }
             }
@@ -194,7 +193,7 @@ impl RedisFdwState {
                 .insert(conn_like, &self.table_key_prefix, data)
         } else {
             Err(redis::RedisError::from((
-                redis::ErrorKind::IoError,
+                redis::ErrorKind::Io,
                 "Redis connection not initialized",
             )))
         }
@@ -208,7 +207,7 @@ impl RedisFdwState {
                 .delete(conn_like, &self.table_key_prefix, data)
         } else {
             Err(redis::RedisError::from((
-                redis::ErrorKind::IoError,
+                redis::ErrorKind::Io,
                 "Redis connection not initialized",
             )))
         }
@@ -226,7 +225,7 @@ impl RedisFdwState {
                 .update(conn_like, &self.table_key_prefix, old_data, new_data)
         } else {
             Err(redis::RedisError::from((
-                redis::ErrorKind::IoError,
+                redis::ErrorKind::Io,
                 "Redis connection not initialized",
             )))
         }

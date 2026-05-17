@@ -367,7 +367,7 @@ impl RedisTableOperations for RedisZSetTable {
                 .parse()
                 .map_err(|e: std::num::ParseFloatError| {
                     redis::RedisError::from((
-                        redis::ErrorKind::TypeError,
+                        redis::ErrorKind::InvalidClientConfig,
                         "Invalid score format",
                         e.to_string(),
                     ))
@@ -415,11 +415,16 @@ impl RedisTableOperations for RedisZSetTable {
         batch_size: usize,
         conditions: Option<&[PushableCondition]>,
     ) -> Result<(u64, usize), redis::RedisError> {
+        // Filter out score conditions — Redis ZSCAN can only match on member names
+        let member_conditions: Option<Vec<&PushableCondition>> =
+            conditions.map(|conds| conds.iter().filter(|c| c.column_name != "score").collect());
+        let member_conds: Option<&[&PushableCondition]> = member_conditions.as_deref();
+
         let mut cmd = redis::cmd("ZSCAN");
         cmd.arg(key_prefix).arg(cursor);
 
         // Apply LIKE condition as MATCH pattern for server-side filtering
-        let like_pattern = conditions.and_then(|conds| {
+        let like_pattern = member_conds.and_then(|conds| {
             conds.iter().find_map(|c| {
                 if c.operator == ComparisonOperator::Like {
                     Some(PatternMatcher::from_like_pattern(&c.value))
@@ -435,10 +440,20 @@ impl RedisTableOperations for RedisZSetTable {
 
         let (new_cursor, flat_data): (u64, Vec<String>) = cmd.query(conn)?;
 
-        // Apply non-LIKE conditions as client-side post-filter on members
-        let filtered: Vec<String> = if let Some(conds) = conditions {
-            let has_non_like = conds.iter().any(|c| c.operator != ComparisonOperator::Like);
-            if has_non_like {
+        // Apply member conditions as client-side post-filter
+        // Note: Only the first LIKE condition was used for server-side MATCH;
+        // all other conditions (including additional LIKEs) must be verified here
+        let filtered: Vec<String> = if let Some(conds) = member_conds {
+            if conds.is_empty() {
+                flat_data
+            } else {
+                let first_like_value = conds.iter().find_map(|c| {
+                    if c.operator == ComparisonOperator::Like {
+                        Some(&c.value)
+                    } else {
+                        None
+                    }
+                });
                 flat_data
                     .chunks(2)
                     .filter(|chunk| {
@@ -447,7 +462,13 @@ impl RedisTableOperations for RedisZSetTable {
                             conds.iter().all(|c| match c.operator {
                                 ComparisonOperator::Equal => member == &c.value,
                                 ComparisonOperator::NotEqual => member != &c.value,
-                                ComparisonOperator::Like => true,
+                                ComparisonOperator::Like => {
+                                    if Some(&c.value) == first_like_value {
+                                        true // handled by MATCH
+                                    } else {
+                                        PatternMatcher::from_like_pattern(&c.value).matches(member)
+                                    }
+                                }
                                 _ => true,
                             })
                         } else {
@@ -456,8 +477,6 @@ impl RedisTableOperations for RedisZSetTable {
                     })
                     .flat_map(|chunk| chunk.iter().cloned())
                     .collect()
-            } else {
-                flat_data
             }
         } else {
             flat_data

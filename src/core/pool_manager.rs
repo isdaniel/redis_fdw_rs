@@ -392,6 +392,7 @@ impl RedisPool {
 }
 
 /// Wrapper for pooled connections that implements ConnectionLike access
+#[allow(clippy::large_enum_variant)]
 pub enum PooledConnection {
     Single(r2d2::PooledConnection<Client>),
     Cluster(r2d2::PooledConnection<ClusterClient>),

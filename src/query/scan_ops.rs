@@ -188,7 +188,7 @@ impl RedisScanBuilder {
         // Validate key requirement
         if config.requires_key && self.key.is_none() {
             return Err(RedisError::from((
-                redis::ErrorKind::TypeError,
+                redis::ErrorKind::InvalidClientConfig,
                 config.default_error_msg,
             )));
         }
