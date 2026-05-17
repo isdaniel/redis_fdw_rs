@@ -130,22 +130,6 @@ impl RedisStreamTable {
         self.load_with_xrange(conn, key_prefix, &start_id, &end_id, count)
     }
 
-    /// Get the next batch of data for streaming large data sets
-    #[allow(dead_code)]
-    pub fn load_next_batch(
-        &mut self,
-        conn: &mut dyn redis::ConnectionLike,
-        key_prefix: &str,
-    ) -> Result<LoadDataResult, redis::RedisError> {
-        let start_id = if let Some(ref last_id) = self.last_id {
-            format!("({}", last_id) // Exclusive start from last processed ID
-        } else {
-            "-".to_string() // Start from beginning
-        };
-
-        self.load_with_xrange(conn, key_prefix, &start_id, "+", Some(self.batch_size))
-    }
-
     /// Add a new entry to the stream
     pub fn add_entry(
         &mut self,
@@ -164,17 +148,6 @@ impl RedisStreamTable {
 
         let stream_id: String = cmd.query(conn)?;
         Ok(stream_id)
-    }
-
-    /// Get stream length
-    #[allow(dead_code)]
-    pub fn get_stream_length(
-        &self,
-        conn: &mut dyn redis::ConnectionLike,
-        key_prefix: &str,
-    ) -> Result<usize, redis::RedisError> {
-        let len: usize = redis::cmd("XLEN").arg(key_prefix).query(conn)?;
-        Ok(len)
     }
 }
 
@@ -241,9 +214,9 @@ impl RedisTableOperations for RedisStreamTable {
     fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
         // Use structured entries for zero-allocation access
         if !self.entries.is_empty() {
-            self.entries.get(index).map(|row| {
-                row.iter().map(|s| Cow::Borrowed(s.as_str())).collect()
-            })
+            self.entries
+                .get(index)
+                .map(|row| row.iter().map(|s| Cow::Borrowed(s.as_str())).collect())
         } else {
             match &self.dataset {
                 DataSet::Filtered(entries) => {

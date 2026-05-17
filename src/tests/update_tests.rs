@@ -92,20 +92,18 @@ mod tests {
 
         Spi::run("INSERT INTO test_hash_upd (key, value) VALUES ('field1', 'value1');").unwrap();
 
-        let original = Spi::get_one::<String>(
-            "SELECT value FROM test_hash_upd WHERE key = 'field1';",
-        )
-        .unwrap()
-        .unwrap();
+        let original =
+            Spi::get_one::<String>("SELECT value FROM test_hash_upd WHERE key = 'field1';")
+                .unwrap()
+                .unwrap();
         assert_eq!(original, "value1");
 
         Spi::run("UPDATE test_hash_upd SET value = 'new_value' WHERE key = 'field1';").unwrap();
 
-        let updated = Spi::get_one::<String>(
-            "SELECT value FROM test_hash_upd WHERE key = 'field1';",
-        )
-        .unwrap()
-        .unwrap();
+        let updated =
+            Spi::get_one::<String>("SELECT value FROM test_hash_upd WHERE key = 'field1';")
+                .unwrap()
+                .unwrap();
         assert_eq!(updated, "new_value");
 
         Spi::run("DELETE FROM test_hash_upd WHERE key = 'field1';").unwrap();
@@ -156,35 +154,29 @@ mod tests {
     fn test_set_update_member() {
         setup_redis_fdw();
 
-        create_foreign_table(
-            "test_set_upd",
-            "member text",
-            "set",
-            "test_set_update_key",
-        );
+        create_foreign_table("test_set_upd", "member text", "set", "test_set_update_key");
 
         Spi::run("INSERT INTO test_set_upd (member) VALUES ('old_member');").unwrap();
 
-        let count = Spi::get_one::<i64>("SELECT count(*) FROM test_set_upd WHERE member = 'old_member';")
-            .unwrap()
-            .unwrap();
+        let count =
+            Spi::get_one::<i64>("SELECT count(*) FROM test_set_upd WHERE member = 'old_member';")
+                .unwrap()
+                .unwrap();
         assert_eq!(count, 1);
 
         Spi::run("UPDATE test_set_upd SET member = 'new_member' WHERE member = 'old_member';")
             .unwrap();
 
-        let old_count = Spi::get_one::<i64>(
-            "SELECT count(*) FROM test_set_upd WHERE member = 'old_member';",
-        )
-        .unwrap()
-        .unwrap();
+        let old_count =
+            Spi::get_one::<i64>("SELECT count(*) FROM test_set_upd WHERE member = 'old_member';")
+                .unwrap()
+                .unwrap();
         assert_eq!(old_count, 0);
 
-        let new_count = Spi::get_one::<i64>(
-            "SELECT count(*) FROM test_set_upd WHERE member = 'new_member';",
-        )
-        .unwrap()
-        .unwrap();
+        let new_count =
+            Spi::get_one::<i64>("SELECT count(*) FROM test_set_upd WHERE member = 'new_member';")
+                .unwrap()
+                .unwrap();
         assert_eq!(new_count, 1);
 
         Spi::run("DELETE FROM test_set_upd WHERE member = 'new_member';").unwrap();
@@ -214,10 +206,7 @@ mod tests {
         .unwrap();
         assert_eq!(original_score, "100");
 
-        Spi::run(
-            "UPDATE test_zset_upd_score SET score = '200' WHERE member = 'player1';",
-        )
-        .unwrap();
+        Spi::run("UPDATE test_zset_upd_score SET score = '200' WHERE member = 'player1';").unwrap();
 
         let updated_score = Spi::get_one::<String>(
             "SELECT score FROM test_zset_upd_score WHERE member = 'player1';",
@@ -285,18 +274,16 @@ mod tests {
 
         Spi::run("UPDATE test_list_upd SET value = 'item_c' WHERE value = 'item_a';").unwrap();
 
-        let count_old = Spi::get_one::<i64>(
-            "SELECT count(*) FROM test_list_upd WHERE value = 'item_a';",
-        )
-        .unwrap()
-        .unwrap();
+        let count_old =
+            Spi::get_one::<i64>("SELECT count(*) FROM test_list_upd WHERE value = 'item_a';")
+                .unwrap()
+                .unwrap();
         assert_eq!(count_old, 0);
 
-        let count_new = Spi::get_one::<i64>(
-            "SELECT count(*) FROM test_list_upd WHERE value = 'item_c';",
-        )
-        .unwrap()
-        .unwrap();
+        let count_new =
+            Spi::get_one::<i64>("SELECT count(*) FROM test_list_upd WHERE value = 'item_c';")
+                .unwrap()
+                .unwrap();
         assert_eq!(count_new, 1);
 
         Spi::run("DELETE FROM test_list_upd;").unwrap();

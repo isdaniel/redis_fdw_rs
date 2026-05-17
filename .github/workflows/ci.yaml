@@ -77,6 +77,9 @@ jobs:
           sudo chmod 777 /usr/share/postgresql/${{ env.PG_VER }} -R
           sudo chmod 777 /usr/lib/postgresql/${{ env.PG_VER }} -R
 
+      - name: Run clippy
+        run: cargo clippy --all-targets --features pg${{ env.PG_VER }} -- -D warnings -A clippy::enum-variant-names
+
       - name: Run Tests for PostgreSQL ${{ env.PG_VER }}
         env:
           REDIS_CLUSTER_NODES: "127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003,127.0.0.1:7004,127.0.0.1:7005,127.0.0.1:7006"
@@ -87,13 +90,49 @@ jobs:
       - name: Package for PostgreSQL ${{ env.PG_VER }}
         run: cargo pgrx package --pg-config=${{ env.PG_BIN }}/pg_config
 
-      - name: Setup tmate session
-        if: ${{ failure() }}
-        uses: mxschmitt/action-tmate@v3
-        
       - name: Cleanup Redis Cluster
         if: always()
         run: |
           docker ps -a --filter "name=redis-cluster-test" --format "{{.Names}}" | xargs -r docker rm -f || true
           docker rm -f redis-server || true
           echo "Cleanup completed"
+
+  coverage:
+    runs-on: ubuntu-latest
+    env:
+      PG_VER: 14
+      PG_BIN: /usr/lib/postgresql/14/bin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PostgreSQL 14 and system dependencies
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang llvm libreadline-dev zlib1g-dev \
+            postgresql-14 postgresql-server-dev-14
+
+      - name: Install cargo-pgrx and cargo-tarpaulin
+        run: |
+          cargo install cargo-pgrx --version 0.16.1
+          cargo install cargo-tarpaulin
+
+      - name: Initialize pgrx for PostgreSQL 14
+        run: cargo pgrx init --pg14 ${{ env.PG_BIN }}/pg_config
+
+      - name: Chmod pg_config
+        run: |
+          sudo chmod 777 /usr/share/postgresql/14 -R
+          sudo chmod 777 /usr/lib/postgresql/14 -R
+
+      - name: Run coverage
+        run: cargo tarpaulin --features pg14 --out xml --skip-clean --lib
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: cobertura.xml
+          fail_ci_if_error: false

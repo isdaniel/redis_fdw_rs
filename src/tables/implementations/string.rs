@@ -41,11 +41,9 @@ impl RedisStringTable {
 
             // Check exact match conditions
             for condition in &scan_conditions.exact_conditions {
-                if condition.operator == ComparisonOperator::Equal {
-                    if value != condition.value {
-                        matches = false;
-                        break;
-                    }
+                if condition.operator == ComparisonOperator::Equal && value != condition.value {
+                    matches = false;
+                    break;
                 }
             }
 

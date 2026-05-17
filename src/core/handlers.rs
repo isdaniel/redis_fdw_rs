@@ -1,11 +1,8 @@
 use crate::{
     core::state_manager::RedisFdwState,
-    query::{
-        limit::extract_limit_offset_info,
-        pushdown::WhereClausePushdown,
-    },
+    query::{limit::extract_limit_offset_info, pushdown::WhereClausePushdown},
     tables::types::RedisTableType,
-    utils::{memory::create_wrappers_memctx, row::Row, utils::*},
+    utils::{helpers::*, memory::create_wrappers_memctx, row::Row},
 };
 use pgrx::{
     pg_sys::{Index, MemoryContextData, ModifyTable, PlannerInfo},
@@ -81,13 +78,12 @@ extern "C-unwind" fn get_foreign_rel_size(
             cost_estimate.total_cost,
             cost_estimate.width
         );
-        
+
         // Store the estimate for use in get_foreign_paths
         let estimated_rows = cost_estimate.rows;
         state.cost_estimate = Some(cost_estimate);
 
-        (*baserel).fdw_private =
-            Box::into_raw(Box::new(state)) as *mut std::os::raw::c_void;
+        (*baserel).fdw_private = Box::into_raw(Box::new(state)) as *mut std::os::raw::c_void;
         (*baserel).rows = estimated_rows;
     }
 }
@@ -120,7 +116,7 @@ extern "C-unwind" fn get_foreign_paths(
             log!("State not available, using default costs");
             (10.0, 100.0)
         };
-        
+
         let path = pgrx::pg_sys::create_foreignscan_path(
             _root,
             baserel,
@@ -432,11 +428,7 @@ unsafe extern "C-unwind" fn exec_foreign_update(
         .map(|cell| cell_to_string(cell.as_ref()))
         .collect();
 
-    log!(
-        "Update: old_key={:?}, new_data={:?}",
-        old_key,
-        new_data
-    );
+    log!("Update: old_key={:?}, new_data={:?}", old_key, new_data);
 
     if let Err(e) = state.update_data(std::slice::from_ref(&old_key), &new_data) {
         error!("Failed to update data: {:?}", e);
@@ -512,13 +504,10 @@ extern "C-unwind" fn is_foreign_rel_updatable(
     unsafe {
         let relid = (*rel).rd_id;
         let options = get_foreign_table_options(relid);
-        let table_type = options
-            .get("table_type")
-            .map(|s| s.as_str())
-            .unwrap_or("");
+        let table_type = options.get("table_type").map(|s| s.as_str()).unwrap_or("");
 
         match table_type.to_lowercase().as_str() {
-            "stream" => (1 << 3) | (1 << 4), // INSERT | DELETE = 24
+            "stream" => (1 << 3) | (1 << 4),     // INSERT | DELETE = 24
             _ => (1 << 2) | (1 << 3) | (1 << 4), // UPDATE | INSERT | DELETE = 28
         }
     }

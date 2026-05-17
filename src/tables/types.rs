@@ -11,7 +11,7 @@ use crate::{
             RedisZSetTable,
         },
         interface::RedisTableOperations,
-        macros::{table_dispatch, table_dispatch_mut_result, table_dispatch_mut_void},
+        macros::{table_dispatch, table_dispatch_mut_result},
     },
 };
 use std::borrow::Cow;
@@ -93,12 +93,6 @@ impl RedisTableType {
     pub fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
         table_dispatch!(self, supports_pushdown(operator) -> false)
     }
-
-    /// Set filtered data result directly (for external filtering)
-    #[allow(dead_code)]
-    pub fn set_filtered_data(&mut self, data: Vec<String>) {
-        table_dispatch_mut_void!(self, set_filtered_data(data))
-    }
 }
 
 /// Result type for data loading operations
@@ -127,13 +121,10 @@ pub enum DataSet {
 pub enum DataContainer {
     /// Single string value (Redis String type)
     String(Option<String>),
-    /// Key-value pairs (Redis Hash type)  
+    /// Key-value pairs (Redis Hash type)
     Hash(Vec<(String, String)>),
     /// Ordered list of values (Redis List type)
     List(Vec<String>),
-    /// Unordered set of values (Redis Set type)
-    #[allow(dead_code)]
-    Set(Vec<String>),
     /// Sorted set with scores (Redis ZSet type)
     ZSet(Vec<(String, f64)>),
 }
@@ -184,7 +175,6 @@ impl DataContainer {
             }
             DataContainer::Hash(pairs) => pairs.len(),
             DataContainer::List(items) => items.len(),
-            DataContainer::Set(items) => items.len(),
             DataContainer::ZSet(items) => items.len(),
         }
     }
@@ -206,9 +196,6 @@ impl DataContainer {
             DataContainer::List(items) => items
                 .get(index)
                 .map(|item| vec![Cow::Borrowed(item.as_str())]),
-            DataContainer::Set(items) => items
-                .get(index)
-                .map(|item| vec![Cow::Borrowed(item.as_str())]),
             DataContainer::ZSet(items) => items.get(index).map(|(member, score)| {
                 vec![
                     Cow::Borrowed(member.as_str()),
@@ -216,5 +203,142 @@ impl DataContainer {
                 ]
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_redis_table_type_from_str() {
+        assert!(matches!(
+            RedisTableType::from_str("string"),
+            RedisTableType::String(_)
+        ));
+        assert!(matches!(
+            RedisTableType::from_str("hash"),
+            RedisTableType::Hash(_)
+        ));
+        assert!(matches!(
+            RedisTableType::from_str("list"),
+            RedisTableType::List(_)
+        ));
+        assert!(matches!(
+            RedisTableType::from_str("set"),
+            RedisTableType::Set(_)
+        ));
+        assert!(matches!(
+            RedisTableType::from_str("zset"),
+            RedisTableType::ZSet(_)
+        ));
+        assert!(matches!(
+            RedisTableType::from_str("stream"),
+            RedisTableType::Stream(_)
+        ));
+        assert!(matches!(
+            RedisTableType::from_str("unknown"),
+            RedisTableType::None
+        ));
+        assert!(matches!(
+            RedisTableType::from_str("STRING"),
+            RedisTableType::String(_)
+        ));
+        assert!(matches!(
+            RedisTableType::from_str("Hash"),
+            RedisTableType::Hash(_)
+        ));
+    }
+
+    #[test]
+    fn test_dataset_empty() {
+        let ds = DataSet::Empty;
+        assert_eq!(ds.len(), 0);
+        assert!(ds.get_row(0).is_none());
+    }
+
+    #[test]
+    fn test_dataset_filtered() {
+        let ds = DataSet::Filtered(vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+        assert_eq!(ds.len(), 3);
+        let row = ds.get_row(0).unwrap();
+        assert_eq!(row, vec![Cow::Borrowed("a")]);
+        let row2 = ds.get_row(2).unwrap();
+        assert_eq!(row2, vec![Cow::Borrowed("c")]);
+        assert!(ds.get_row(3).is_none());
+    }
+
+    #[test]
+    fn test_dataset_complete_string() {
+        let ds = DataSet::Complete(DataContainer::String(Some("hello".to_string())));
+        assert_eq!(ds.len(), 1);
+        let row = ds.get_row(0).unwrap();
+        assert_eq!(row, vec![Cow::Borrowed("hello")]);
+        assert!(ds.get_row(1).is_none());
+    }
+
+    #[test]
+    fn test_dataset_complete_string_none() {
+        let ds = DataSet::Complete(DataContainer::String(None));
+        assert_eq!(ds.len(), 0);
+        assert!(ds.get_row(0).is_none());
+    }
+
+    #[test]
+    fn test_data_container_hash() {
+        let container = DataContainer::Hash(vec![
+            ("key1".to_string(), "val1".to_string()),
+            ("key2".to_string(), "val2".to_string()),
+        ]);
+        assert_eq!(container.len(), 2);
+        let row = container.get_row(0).unwrap();
+        assert_eq!(row, vec![Cow::Borrowed("key1"), Cow::Borrowed("val1")]);
+        let row2 = container.get_row(1).unwrap();
+        assert_eq!(row2, vec![Cow::Borrowed("key2"), Cow::Borrowed("val2")]);
+        assert!(container.get_row(2).is_none());
+    }
+
+    #[test]
+    fn test_data_container_list() {
+        let container = DataContainer::List(vec![
+            "item1".to_string(),
+            "item2".to_string(),
+            "item3".to_string(),
+        ]);
+        assert_eq!(container.len(), 3);
+        let row = container.get_row(1).unwrap();
+        assert_eq!(row, vec![Cow::Borrowed("item2")]);
+    }
+
+    #[test]
+    fn test_data_container_zset() {
+        let container = DataContainer::ZSet(vec![
+            ("member1".to_string(), 1.5),
+            ("member2".to_string(), 2.7),
+        ]);
+        assert_eq!(container.len(), 2);
+        let row = container.get_row(0).unwrap();
+        assert_eq!(row[0], Cow::Borrowed("member1"));
+        assert_eq!(row[1], Cow::<str>::Owned("1.5".to_string()));
+    }
+
+    #[test]
+    fn test_redis_table_type_data_len_none() {
+        let table = RedisTableType::None;
+        assert_eq!(table.data_len(), 0);
+    }
+
+    #[test]
+    fn test_redis_table_type_get_row_none() {
+        let table = RedisTableType::None;
+        assert!(table.get_row(0).is_none());
+    }
+
+    #[test]
+    fn test_load_data_result_variants() {
+        let loaded = LoadDataResult::FullyLoaded;
+        assert!(matches!(loaded, LoadDataResult::FullyLoaded));
+        let empty = LoadDataResult::Empty;
+        assert!(matches!(empty, LoadDataResult::Empty));
     }
 }

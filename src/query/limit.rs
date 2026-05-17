@@ -15,46 +15,25 @@ impl LimitOffsetInfo {
         Self::default()
     }
 
-    /// Create LimitOffsetInfo with both limit and offset
-    #[allow(dead_code)]
-    pub fn with_limit_offset(limit: Option<usize>, offset: Option<usize>) -> Self {
-        Self { limit, offset }
-    }
-
     /// Check if this info represents any constraints that can be pushed down
     pub fn has_constraints(&self) -> bool {
         self.limit.is_some() || self.offset.is_some()
-    }
-
-    /// Calculate effective scan limit for Redis commands that need to account for offset
-    /// When both limit and offset are present, returns limit + offset to ensure enough data is retrieved
-    /// Otherwise returns the limit or a default value
-    #[allow(dead_code)]
-    pub fn effective_scan_limit(&self, default_limit: usize) -> usize {
-        if let (Some(limit), Some(offset)) = (self.limit, self.offset) {
-            limit + offset
-        } else {
-            self.limit.unwrap_or(default_limit)
-        }
     }
 
     /// Apply limit and offset to a vector of data
     pub fn apply_to_vec<T>(&self, mut data: Vec<T>) -> Vec<T> {
         // Apply offset first
         if let Some(offset) = self.offset {
-            let offset_usize = offset.max(0) as usize;
-            if offset_usize < data.len() {
-                data.drain(0..offset_usize);
+            if offset < data.len() {
+                data.drain(0..offset);
             } else {
-                // Offset is beyond data length, return empty
                 return Vec::new();
             }
         }
 
         // Apply limit
         if let Some(limit) = self.limit {
-            let limit_usize = limit.max(0) as usize;
-            data.truncate(limit_usize);
+            data.truncate(limit);
         }
 
         data
@@ -118,5 +97,103 @@ pub unsafe fn extract_limit_offset_info(root: *mut pg_sys::PlannerInfo) -> Optio
         Some(limit_info)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_limit_offset_new() {
+        let info = LimitOffsetInfo::new();
+        assert_eq!(info.limit, None);
+        assert_eq!(info.offset, None);
+        assert!(!info.has_constraints());
+    }
+
+    #[test]
+    fn test_has_constraints_with_limit() {
+        let info = LimitOffsetInfo {
+            limit: Some(10),
+            offset: None,
+        };
+        assert!(info.has_constraints());
+    }
+
+    #[test]
+    fn test_has_constraints_with_offset() {
+        let info = LimitOffsetInfo {
+            limit: None,
+            offset: Some(5),
+        };
+        assert!(info.has_constraints());
+    }
+
+    #[test]
+    fn test_apply_to_vec_limit_only() {
+        let data = vec![1, 2, 3, 4, 5];
+        let info = LimitOffsetInfo {
+            limit: Some(3),
+            offset: None,
+        };
+        assert_eq!(info.apply_to_vec(data), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_apply_to_vec_offset_only() {
+        let data = vec![1, 2, 3, 4, 5];
+        let info = LimitOffsetInfo {
+            limit: None,
+            offset: Some(2),
+        };
+        assert_eq!(info.apply_to_vec(data), vec![3, 4, 5]);
+    }
+
+    #[test]
+    fn test_apply_to_vec_limit_and_offset() {
+        let data = vec![1, 2, 3, 4, 5];
+        let info = LimitOffsetInfo {
+            limit: Some(2),
+            offset: Some(1),
+        };
+        assert_eq!(info.apply_to_vec(data), vec![2, 3]);
+    }
+
+    #[test]
+    fn test_apply_to_vec_offset_beyond_length() {
+        let data = vec![1, 2, 3];
+        let info = LimitOffsetInfo {
+            limit: Some(5),
+            offset: Some(10),
+        };
+        assert!(info.apply_to_vec(data).is_empty());
+    }
+
+    #[test]
+    fn test_apply_to_vec_zero_limit() {
+        let data = vec![1, 2, 3];
+        let info = LimitOffsetInfo {
+            limit: Some(0),
+            offset: None,
+        };
+        assert!(info.apply_to_vec(data).is_empty());
+    }
+
+    #[test]
+    fn test_apply_to_vec_empty_input() {
+        let data: Vec<i32> = vec![];
+        let info = LimitOffsetInfo {
+            limit: Some(5),
+            offset: Some(0),
+        };
+        assert!(info.apply_to_vec(data).is_empty());
+    }
+
+    #[test]
+    fn test_apply_to_vec_no_constraints() {
+        let data = vec![1, 2, 3, 4, 5];
+        let info = LimitOffsetInfo::new();
+        assert_eq!(info.apply_to_vec(data.clone()), data);
     }
 }

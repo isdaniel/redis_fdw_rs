@@ -346,19 +346,19 @@ impl PoolManager {
     }
 
     /// Get the number of cached single-node pools (for testing/monitoring)
-    #[cfg(any(test, feature = "pg_test"))]
+    #[cfg(test)]
     pub fn single_pool_count(&self) -> usize {
         self.single_pools.len()
     }
 
     /// Get the number of cached cluster pools (for testing/monitoring)
-    #[cfg(any(test, feature = "pg_test"))]
+    #[cfg(test)]
     pub fn cluster_pool_count(&self) -> usize {
         self.cluster_pools.len()
     }
 
     /// Clear all cached pools (useful for testing)
-    #[cfg(any(test, feature = "pg_test"))]
+    #[cfg(test)]
     pub fn clear_all(&mut self) {
         self.single_pools.clear();
         self.cluster_pools.clear();

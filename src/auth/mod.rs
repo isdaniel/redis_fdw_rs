@@ -79,3 +79,123 @@ impl RedisAuthConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from_empty_options() {
+        let opts = HashMap::new();
+        let config = RedisAuthConfig::from_user_mapping_options(&opts);
+        assert!(!config.is_auth_required());
+        assert_eq!(config.password, None);
+        assert_eq!(config.username, None);
+    }
+
+    #[test]
+    fn test_from_password_only() {
+        let mut opts = HashMap::new();
+        opts.insert("password".to_string(), "secret".to_string());
+        let config = RedisAuthConfig::from_user_mapping_options(&opts);
+        assert!(config.is_auth_required());
+        assert_eq!(config.password, Some("secret".to_string()));
+        assert_eq!(config.username, None);
+    }
+
+    #[test]
+    fn test_from_username_and_password() {
+        let mut opts = HashMap::new();
+        opts.insert("password".to_string(), "secret".to_string());
+        opts.insert("username".to_string(), "admin".to_string());
+        let config = RedisAuthConfig::from_user_mapping_options(&opts);
+        assert!(config.is_auth_required());
+        assert_eq!(config.password, Some("secret".to_string()));
+        assert_eq!(config.username, Some("admin".to_string()));
+    }
+
+    #[test]
+    fn test_auth_url_component_no_auth() {
+        let config = RedisAuthConfig::default();
+        assert_eq!(config.get_auth_url_component(), "");
+    }
+
+    #[test]
+    fn test_auth_url_component_password_only() {
+        let config = RedisAuthConfig {
+            password: Some("pass123".to_string()),
+            username: None,
+        };
+        assert_eq!(config.get_auth_url_component(), ":pass123@");
+    }
+
+    #[test]
+    fn test_auth_url_component_username_and_password() {
+        let config = RedisAuthConfig {
+            password: Some("pass123".to_string()),
+            username: Some("user1".to_string()),
+        };
+        assert_eq!(config.get_auth_url_component(), "user1:pass123@");
+    }
+
+    #[test]
+    fn test_apply_to_url_no_auth() {
+        let config = RedisAuthConfig::default();
+        let url = "redis://127.0.0.1:6379/0";
+        assert_eq!(config.apply_to_url(url), url);
+    }
+
+    #[test]
+    fn test_apply_to_url_with_password() {
+        let config = RedisAuthConfig {
+            password: Some("secret".to_string()),
+            username: None,
+        };
+        assert_eq!(
+            config.apply_to_url("redis://127.0.0.1:6379/0"),
+            "redis://:secret@127.0.0.1:6379/0"
+        );
+    }
+
+    #[test]
+    fn test_apply_to_url_plain_host() {
+        let config = RedisAuthConfig {
+            password: Some("secret".to_string()),
+            username: None,
+        };
+        assert_eq!(
+            config.apply_to_url("127.0.0.1:6379"),
+            "redis://:secret@127.0.0.1:6379"
+        );
+    }
+
+    #[test]
+    fn test_apply_to_url_replace_existing() {
+        let config = RedisAuthConfig {
+            password: Some("new_pass".to_string()),
+            username: Some("new_user".to_string()),
+        };
+        assert_eq!(
+            config.apply_to_url("redis://old:old@127.0.0.1:6379/0"),
+            "redis://new_user:new_pass@127.0.0.1:6379/0"
+        );
+    }
+
+    #[test]
+    fn test_cache_key_variants() {
+        let no_auth = RedisAuthConfig::default();
+        assert_eq!(no_auth.cache_key(), "noauth");
+
+        let pass_only = RedisAuthConfig {
+            password: Some("x".to_string()),
+            username: None,
+        };
+        assert_eq!(pass_only.cache_key(), "auth:password");
+
+        let full_auth = RedisAuthConfig {
+            password: Some("x".to_string()),
+            username: Some("admin".to_string()),
+        };
+        assert_eq!(full_auth.cache_key(), "auth:user:admin");
+    }
+}
