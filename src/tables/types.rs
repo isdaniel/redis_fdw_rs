@@ -51,8 +51,35 @@ impl RedisTableType {
         table_dispatch_mut_result!(self, load_data(conn, key_prefix, conditions, limit_offset))
     }
 
+    pub fn load_batch(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        cursor: u64,
+        batch_size: usize,
+        conditions: Option<&[PushableCondition]>,
+    ) -> Result<(u64, usize), redis::RedisError> {
+        table_dispatch_mut_result!(self, load_batch(conn, key_prefix, cursor, batch_size, conditions) -> Result<(u64, usize), redis::RedisError>, Ok((0, 0)))
+    }
+
     pub fn data_len(&self) -> usize {
         table_dispatch!(self, data_len() -> 0)
+    }
+
+    pub fn clear_data(&mut self) {
+        match self {
+            RedisTableType::String(t) => t.dataset = DataSet::default(),
+            RedisTableType::Hash(t) => t.dataset = DataSet::default(),
+            RedisTableType::List(t) => t.dataset = DataSet::default(),
+            RedisTableType::Set(t) => t.dataset = DataSet::default(),
+            RedisTableType::ZSet(t) => t.dataset = DataSet::default(),
+            RedisTableType::Stream(t) => {
+                t.dataset = DataSet::default();
+                t.entries.clear();
+                t.last_id = None;
+            }
+            RedisTableType::None => {}
+        }
     }
 
     /// Get a row at the specified index

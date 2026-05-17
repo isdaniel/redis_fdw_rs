@@ -41,7 +41,24 @@ impl RedisStreamTable {
         }
     }
 
-    /// Load data using XRANGE with streaming support for large data sets
+    fn next_start_id(&self) -> String {
+        match &self.last_id {
+            Some(id) => {
+                let parts: Vec<&str> = id.splitn(2, '-').collect();
+                if parts.len() == 2 {
+                    if let Ok(seq) = parts[1].parse::<u64>() {
+                        format!("{}-{}", parts[0], seq.saturating_add(1))
+                    } else {
+                        id.clone()
+                    }
+                } else {
+                    id.clone()
+                }
+            }
+            None => "-".to_string(),
+        }
+    }
+
     fn load_with_xrange(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -97,7 +114,6 @@ impl RedisStreamTable {
         Ok(LoadDataResult::FullyLoaded)
     }
 
-    /// Load data with stream-specific optimizations and pushdown conditions
     fn load_with_stream_optimization(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -197,10 +213,6 @@ impl RedisTableOperations for RedisStreamTable {
 
     fn get_dataset(&self) -> &DataSet {
         &self.dataset
-    }
-
-    fn get_dataset_mut(&mut self) -> &mut DataSet {
-        &mut self.dataset
     }
 
     fn data_len(&self) -> usize {
@@ -304,5 +316,108 @@ impl RedisTableOperations for RedisStreamTable {
             operator,
             ComparisonOperator::Equal | ComparisonOperator::NotEqual | ComparisonOperator::Like
         )
+    }
+
+    fn load_batch(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        _cursor: u64,
+        batch_size: usize,
+        conditions: Option<&[PushableCondition]>,
+    ) -> Result<(u64, usize), redis::RedisError> {
+        // Determine start/end IDs from ID-column conditions only
+        let (start_id, end_id) = if let Some(conds) = conditions {
+            let mut start = None;
+            let mut end = None;
+            for c in conds {
+                if c.operator == ComparisonOperator::Equal && c.column_name == "id" {
+                    start = Some(c.value.clone());
+                    end = Some(c.value.clone());
+                    break;
+                }
+            }
+            (
+                start.unwrap_or_else(|| self.next_start_id()),
+                end.unwrap_or_else(|| "+".to_string()),
+            )
+        } else {
+            (self.next_start_id(), "+".to_string())
+        };
+
+        let entries: Vec<(String, Vec<(String, String)>)> = redis::cmd("XRANGE")
+            .arg(key_prefix)
+            .arg(&start_id)
+            .arg(&end_id)
+            .arg("COUNT")
+            .arg(batch_size)
+            .query(conn)?;
+
+        let row_count = entries.len();
+        let new_cursor = if row_count < batch_size { 0 } else { 1 };
+
+        if entries.is_empty() {
+            self.dataset = DataSet::Empty;
+            self.entries = Vec::new();
+            return Ok((0, 0));
+        }
+
+        self.last_id = entries.last().map(|(id, _)| id.clone());
+
+        // Collect non-ID conditions for client-side filtering
+        let non_id_conds: Vec<&PushableCondition> = conditions
+            .map(|conds| conds.iter().filter(|c| c.column_name != "id").collect())
+            .unwrap_or_default();
+
+        // Pre-calculate PatternMatchers for LIKE conditions (index-based)
+        let like_matchers: Vec<(usize, crate::query::scan_ops::PatternMatcher)> = non_id_conds
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.operator == ComparisonOperator::Like)
+            .map(|(i, c)| {
+                (
+                    i,
+                    crate::query::scan_ops::PatternMatcher::from_like_pattern(&c.value),
+                )
+            })
+            .collect();
+
+        let mut structured_entries = Vec::with_capacity(entries.len());
+        let mut flat_data = Vec::with_capacity(entries.len());
+        for (stream_id, fields) in entries {
+            // Apply client-side filtering for non-ID conditions
+            if !non_id_conds.is_empty() {
+                let matches = non_id_conds.iter().enumerate().all(|(i, c)| {
+                    fields.iter().any(|(f, v)| {
+                        let target = if c.column_name == "field" { f } else { v };
+                        match c.operator {
+                            ComparisonOperator::Equal => target == &c.value,
+                            ComparisonOperator::NotEqual => target != &c.value,
+                            ComparisonOperator::Like => like_matchers
+                                .iter()
+                                .find(|(idx, _)| *idx == i)
+                                .is_some_and(|(_, m)| m.matches(target)),
+                            _ => true,
+                        }
+                    })
+                });
+                if !matches {
+                    continue;
+                }
+            }
+
+            let mut row = vec![stream_id.clone()];
+            for (field, value) in fields {
+                row.push(field);
+                row.push(value);
+            }
+            flat_data.push(stream_id);
+            structured_entries.push(row);
+        }
+
+        let filtered_count = structured_entries.len();
+        self.entries = structured_entries;
+        self.dataset = DataSet::Filtered(flat_data);
+        Ok((new_cursor, filtered_count))
     }
 }

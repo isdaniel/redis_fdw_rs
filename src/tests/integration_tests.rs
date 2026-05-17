@@ -187,14 +187,24 @@ mod tests {
             controlled_insert_pair(table_name, field, value);
         }
 
-        // Perform SELECT with LIKE and LIMIT
+        // Test LIKE pushdown with LIMIT applied by PG above the scan
+        // SELECT COUNT(*) ... LIMIT 2 limits the COUNT output (1 row), not the scan input
         let result = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM {} WHERE field LIKE 'pattern%' LIMIT 2;",
+            "SELECT COUNT(*) FROM {} WHERE field LIKE 'pattern%';",
             table_name
         ));
         assert!(result.is_ok());
         let count = result.unwrap().unwrap();
-        assert_eq!(count, 2); // Should return 2 records matching the pattern
+        assert_eq!(count, 3); // 3 fields match 'pattern%'
+
+        // Verify LIMIT works on the scan itself (PG stops after 2 tuples)
+        let limited_result = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM (SELECT * FROM {} WHERE field LIKE 'pattern%' LIMIT 2) sub;",
+            table_name
+        ));
+        assert!(limited_result.is_ok());
+        let limited_count = limited_result.unwrap().unwrap();
+        assert_eq!(limited_count, 2);
 
         log!("LIKE with LIMIT/OFFSET test passed successfully");
 
@@ -407,7 +417,7 @@ mod tests {
 
         // Perform SELECT with LIKE and LIMIT
         let result = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM {} WHERE member LIKE 'pattern%' LIMIT 2;",
+            "SELECT COUNT(*) FROM (SELECT * FROM {} WHERE member LIKE 'pattern%' LIMIT 2) sub;",
             table_name
         ));
         assert!(result.is_ok());
@@ -614,7 +624,7 @@ mod tests {
 
         // Perform SELECT with LIKE and LIMIT
         let result = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM {} WHERE member LIKE 'pattern%' LIMIT 2;",
+            "SELECT COUNT(*) FROM (SELECT * FROM {} WHERE member LIKE 'pattern%' LIMIT 2) sub;",
             table_name
         ));
         assert!(result.is_ok());

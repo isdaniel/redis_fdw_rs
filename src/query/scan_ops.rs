@@ -8,11 +8,9 @@ use crate::query::{
 use redis::{ConnectionLike, RedisError, RedisResult};
 
 /// Redis SCAN operation types
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScanType {
-    /// Database key scan (SCAN)
-    #[allow(dead_code)]
-    KeyScan,
     /// Hash field scan (HSCAN)
     HashScan,
     /// Set member scan (SSCAN)
@@ -85,12 +83,6 @@ struct ScanConfig {
 impl ScanConfig {
     fn for_scan_type(scan_type: &ScanType) -> Self {
         match scan_type {
-            ScanType::KeyScan => ScanConfig {
-                command_name: "SCAN",
-                requires_key: false,
-                limit_multiply_size: 2,
-                default_error_msg: "Key scan error",
-            },
             ScanType::HashScan => ScanConfig {
                 command_name: "HSCAN",
                 requires_key: true,
@@ -106,7 +98,7 @@ impl ScanConfig {
             ScanType::ZSetScan => ScanConfig {
                 command_name: "ZSCAN",
                 requires_key: true,
-                limit_multiply_size: 1,
+                limit_multiply_size: 2,
                 default_error_msg: "ZSet key is required for ZSCAN",
             },
         }
@@ -188,7 +180,7 @@ impl RedisScanBuilder {
         // Validate key requirement
         if config.requires_key && self.key.is_none() {
             return Err(RedisError::from((
-                redis::ErrorKind::TypeError,
+                redis::ErrorKind::InvalidClientConfig,
                 config.default_error_msg,
             )));
         }
@@ -200,7 +192,7 @@ impl RedisScanBuilder {
             limit = base_limit * config.limit_multiply_size;
         }
 
-        let mut collected_results = Vec::with_capacity(limit);
+        let mut collected_results = Vec::with_capacity(limit.min(65536));
         let mut cursor = 0;
 
         loop {
@@ -219,23 +211,16 @@ impl RedisScanBuilder {
                 cmd.arg("MATCH").arg(pattern);
             }
 
-            // Add COUNT for most scan types (ZSCAN has special handling)
-            if self.scan_type != ScanType::ZSetScan {
-                cmd.arg("COUNT").arg(Self::SCAN_DEFAULT_COUNT);
-            }
+            // Add COUNT for scan pagination
+            cmd.arg("COUNT").arg(Self::SCAN_DEFAULT_COUNT);
 
             let (new_cursor, results): (u64, Vec<T>) = cmd.query(conn)?;
 
-            // Handle limit checking - ZSCAN doesn't apply limit during scanning
-            if self.scan_type == ScanType::ZSetScan {
-                collected_results.extend(results);
-            } else {
-                for item in results {
-                    if collected_results.len() < limit {
-                        collected_results.push(item);
-                    } else {
-                        return Ok(collected_results);
-                    }
+            for item in results {
+                if collected_results.len() < limit {
+                    collected_results.push(item);
+                } else {
+                    return Ok(collected_results);
                 }
             }
 
