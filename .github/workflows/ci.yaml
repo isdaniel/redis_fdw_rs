@@ -12,7 +12,7 @@ jobs:
 
     strategy:
       matrix:
-        pg-version: [ 14, 15, 16, 17]
+        pg-version: [ 14, 15, 16, 17, 18]
       fail-fast: false
 
     env:
@@ -62,7 +62,7 @@ jobs:
           ./scripts/start-redis-cluster.sh
 
       - name: Install cargo-pgrx
-        run: cargo install cargo-pgrx --version 0.16.1
+        run: cargo install cargo-pgrx --version 0.18.0
 
       - name: Initialize pgrx for PostgreSQL ${{ env.PG_VER }}
         run: cargo pgrx init --pg${{ env.PG_VER }} ${{ env.PG_BIN }}/pg_config
