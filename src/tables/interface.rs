@@ -8,6 +8,7 @@ use crate::{
 use std::borrow::Cow;
 
 /// Trait defining common operations for Redis table types
+#[allow(dead_code)]
 pub trait RedisTableOperations {
     /// Load data from Redis for scanning operations
     /// If conditions are provided, will attempt to apply pushdown optimizations

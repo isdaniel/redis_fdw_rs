@@ -1,7 +1,7 @@
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 mod tests {
-    use crate::utils::{cell::Cell, row::Row, utils::cell_to_string};
+    use crate::utils::{cell::Cell, helpers::cell_to_string, row::Row};
     use pgrx::prelude::*;
 
     #[pg_test]

@@ -51,7 +51,7 @@ mod tests {
         /// Setup a set table with test data
         pub fn setup_set_table_with_data(data: Vec<String>) -> RedisSetTable {
             let mut table = RedisSetTable::new();
-            table.dataset = DataSet::Complete(DataContainer::Set(data));
+            table.dataset = DataSet::Filtered(data);
             table
         }
 

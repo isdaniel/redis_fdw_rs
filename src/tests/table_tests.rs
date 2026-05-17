@@ -132,11 +132,11 @@ mod tests {
         assert_eq!(set_table.get_row(0), None);
 
         // Add some data
-        set_table.dataset = DataSet::Complete(DataContainer::Set(vec![
+        set_table.dataset = DataSet::Filtered(vec![
             "red".to_string(),
             "green".to_string(),
             "blue".to_string(),
-        ]));
+        ]);
 
         // Check data
         assert_eq!(set_table.data_len(), 3);
@@ -394,7 +394,7 @@ mod tests {
         let mut set_table = RedisSetTable::new();
 
         // Test with various member types
-        set_table.dataset = DataSet::Complete(DataContainer::Set(vec![
+        set_table.dataset = DataSet::Filtered(vec![
             "user:123".to_string(),
             "tag:urgent".to_string(),
             "category:work".to_string(),
@@ -402,7 +402,7 @@ mod tests {
             "123".to_string(),
             "true".to_string(),
             "".to_string(), // empty string member
-        ]));
+        ]);
 
         assert_eq!(set_table.data_len(), 7);
         assert_eq!(
@@ -650,10 +650,7 @@ mod tests {
         let mut set_table = RedisSetTable::new();
 
         // Test with duplicate-like values (sets should handle uniqueness in Redis, but we test the structure)
-        set_table.dataset = DataSet::Complete(DataContainer::Set(vec![
-            "value".to_string(),
-            "value".to_string(),
-        ]));
+        set_table.dataset = DataSet::Filtered(vec!["value".to_string(), "value".to_string()]);
         assert_eq!(set_table.data_len(), 2); // Our structure doesn't enforce uniqueness, Redis does
         assert_eq!(
             cow_vec_to_string_vec(set_table.get_row(0)),
@@ -665,11 +662,8 @@ mod tests {
         );
 
         // Test with numeric strings
-        set_table.dataset = DataSet::Complete(DataContainer::Set(vec![
-            "1".to_string(),
-            "2.5".to_string(),
-            "-10".to_string(),
-        ]));
+        set_table.dataset =
+            DataSet::Filtered(vec!["1".to_string(), "2.5".to_string(), "-10".to_string()]);
         assert_eq!(set_table.data_len(), 3);
         assert_eq!(
             cow_vec_to_string_vec(set_table.get_row(0)),

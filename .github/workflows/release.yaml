@@ -80,14 +80,6 @@ jobs:
           name: redis_fdw_rs-pg${{ matrix.pg-version }}
           path: "*.tar.gz"
 
-      - name: Create GitHub Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --title "Release ${GITHUB_REF_NAME}" \
-            --generate-notes
-            
   create-release:
     needs: build-release
     runs-on: ubuntu-latest

@@ -59,29 +59,22 @@ impl RedisZSetTable {
 
                 // Check pattern conditions
                 for condition in &scan_conditions.pattern_conditions {
-                    match &condition.operator {
-                        ComparisonOperator::Like => {
-                            if let Some(matcher) = &scan_conditions.pattern_matcher {
-                                if !matcher.matches(member) {
-                                    matches = false;
-                                    break;
-                                }
+                    if condition.operator == ComparisonOperator::Like {
+                        if let Some(matcher) = &scan_conditions.pattern_matcher {
+                            if !matcher.matches(member) {
+                                matches = false;
+                                break;
                             }
                         }
-                        _ => {}
                     }
                 }
 
                 // Check exact conditions
                 for condition in &scan_conditions.exact_conditions {
-                    match &condition.operator {
-                        ComparisonOperator::Equal => {
-                            if member != &condition.value {
-                                matches = false;
-                                break;
-                            }
-                        }
-                        _ => {}
+                    if condition.operator == ComparisonOperator::Equal && member != &condition.value
+                    {
+                        matches = false;
+                        break;
                     }
                 }
 
@@ -176,11 +169,10 @@ impl RedisTableOperations for RedisZSetTable {
                             let mut result = Vec::new();
 
                             // Try ZMSCORE first (single command, single round-trip)
-                            let zmscore_result: Result<Vec<Option<f64>>, _> =
-                                redis::cmd("ZMSCORE")
-                                    .arg(key_prefix)
-                                    .arg(&members)
-                                    .query(conn);
+                            let zmscore_result: Result<Vec<Option<f64>>, _> = redis::cmd("ZMSCORE")
+                                .arg(key_prefix)
+                                .arg(&members)
+                                .query(conn);
 
                             match zmscore_result {
                                 Ok(scores) => {
@@ -196,17 +188,14 @@ impl RedisTableOperations for RedisZSetTable {
                                     let pipe_result: Result<Vec<Option<f64>>, _> = {
                                         let mut pipe = redis::pipe();
                                         for member in &members {
-                                            pipe.cmd("ZSCORE")
-                                                .arg(key_prefix)
-                                                .arg(*member);
+                                            pipe.cmd("ZSCORE").arg(key_prefix).arg(*member);
                                         }
                                         pipe.query(conn)
                                     };
 
                                     match pipe_result {
                                         Ok(scores) => {
-                                            for (member, score) in
-                                                members.iter().zip(scores.iter())
+                                            for (member, score) in members.iter().zip(scores.iter())
                                             {
                                                 if let Some(s) = score {
                                                     result.push(member.to_string());
@@ -373,13 +362,15 @@ impl RedisTableOperations for RedisZSetTable {
         // old_data: [member], new_data: [member, score]
         if new_data.len() >= 2 {
             let new_member = &new_data[0];
-            let new_score: f64 = new_data[1].parse().map_err(|e: std::num::ParseFloatError| {
-                redis::RedisError::from((
-                    redis::ErrorKind::TypeError,
-                    "Invalid score format",
-                    e.to_string(),
-                ))
-            })?;
+            let new_score: f64 = new_data[1]
+                .parse()
+                .map_err(|e: std::num::ParseFloatError| {
+                    redis::RedisError::from((
+                        redis::ErrorKind::TypeError,
+                        "Invalid score format",
+                        e.to_string(),
+                    ))
+                })?;
 
             // If member name changed, use atomic pipeline (ZREM old + ZADD new)
             if let Some(old_member) = old_data.first() {
