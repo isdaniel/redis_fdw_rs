@@ -41,6 +41,12 @@ pub mod costs {
 
     /// Selectivity estimate for LIKE conditions
     pub const LIKE_SELECTIVITY: f64 = 0.25;
+
+    /// Number of keys to request per SCAN iteration for sampling
+    pub const SCAN_SAMPLE_SIZE: u64 = 100;
+
+    /// Minimum selectivity when SCAN sample finds no matches but DB is non-empty
+    pub const MIN_SCAN_SELECTIVITY: f64 = 0.01;
 }
 
 /// Statistics gathered from Redis for cost estimation
@@ -196,25 +202,29 @@ impl<'a> CostEstimator<'a> {
             format!("{}*", self.key_prefix)
         };
 
-        // Single SCAN iteration with COUNT 100 to sample key distribution
+        let sample_size = costs::SCAN_SAMPLE_SIZE;
         let result: Result<(i64, Vec<String>), _> = cmd("SCAN")
             .arg(0)
             .arg("MATCH")
             .arg(&pattern)
             .arg("COUNT")
-            .arg(100)
+            .arg(sample_size)
             .query(conn);
 
         match result {
             Ok((cursor, keys)) => {
                 let count = keys.len() as u64;
                 if cursor == 0 {
-                    // Full scan completed in one iteration
                     return Some(count);
                 }
-                // Extrapolate based on sample ratio
                 if let Ok(db_size) = cmd("DBSIZE").query::<u64>(conn) {
-                    let sample_ratio = count as f64 / 100.0;
+                    if count == 0 {
+                        // No matches in sample but DB is non-empty — use minimum selectivity
+                        return Some(
+                            (db_size as f64 * costs::MIN_SCAN_SELECTIVITY).max(1.0) as u64
+                        );
+                    }
+                    let sample_ratio = count as f64 / sample_size as f64;
                     Some((db_size as f64 * sample_ratio).max(count as f64) as u64)
                 } else {
                     Some(count)

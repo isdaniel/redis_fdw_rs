@@ -181,9 +181,8 @@ impl RedisTableOperations for RedisStreamTable {
             Ok(result) => {
                 // Apply LIMIT/OFFSET to loaded stream data if constraints are present
                 if limit_offset.has_constraints() {
-                    if let DataSet::Filtered(ref data) = self.dataset {
-                        let paginated_data = limit_offset.apply_to_vec(data.clone());
-                        self.dataset = DataSet::Filtered(paginated_data);
+                    if let DataSet::Filtered(data) = std::mem::take(&mut self.dataset) {
+                        self.dataset = DataSet::Filtered(limit_offset.apply_to_vec(data));
                     }
                     // Also paginate structured entries to keep them in sync
                     let paginated_entries =
