@@ -6,7 +6,7 @@ use crate::{
     tables::types::RedisTableType,
     utils::{
         cell::Cell,
-        utils::{relation_get_descr, tuple_desc_attr},
+        helpers::{relation_get_descr, tuple_desc_attr},
     },
 };
 use pgrx::{pg_sys, prelude::*};
@@ -445,9 +445,9 @@ impl WhereClausePushdown {
         // Fast path: known text operator OIDs (most common in Redis FDW usage)
         let oid_val = op_oid.to_u32();
         match oid_val {
-            98 => return Some(ComparisonOperator::Equal),     // text = text
+            98 => return Some(ComparisonOperator::Equal), // text = text
             531 => return Some(ComparisonOperator::NotEqual), // text <> text
-            1209 => return Some(ComparisonOperator::Like),    // text ~~ text (LIKE)
+            1209 => return Some(ComparisonOperator::Like), // text ~~ text (LIKE)
             664 => return Some(ComparisonOperator::LessThan), // text < text
             665 => return Some(ComparisonOperator::LessThanOrEqual), // text <= text
             666 => return Some(ComparisonOperator::GreaterThan), // text > text
@@ -465,14 +465,20 @@ impl WhereClausePushdown {
         // get_opname returns a palloc'd string or NULL
         let name_ptr = pg_sys::get_opname(op_oid);
         if name_ptr.is_null() {
-            log!("Unknown operator OID: {} (get_opname returned null)", op_oid.to_u32());
+            log!(
+                "Unknown operator OID: {} (get_opname returned null)",
+                op_oid.to_u32()
+            );
             return None;
         }
 
         let opname = match std::ffi::CStr::from_ptr(name_ptr).to_str() {
             Ok(s) => s,
             Err(_) => {
-                log!("Invalid UTF-8 in operator name for OID: {}", op_oid.to_u32());
+                log!(
+                    "Invalid UTF-8 in operator name for OID: {}",
+                    op_oid.to_u32()
+                );
                 return None;
             }
         };
@@ -484,10 +490,14 @@ impl WhereClausePushdown {
             "<=" => Some(ComparisonOperator::LessThanOrEqual),
             ">" => Some(ComparisonOperator::GreaterThan),
             ">=" => Some(ComparisonOperator::GreaterThanOrEqual),
-            "~~" => Some(ComparisonOperator::Like),       // LIKE
-            "!~~" => None,                                 // NOT LIKE — not supported yet
+            "~~" => Some(ComparisonOperator::Like), // LIKE
+            "!~~" => None,                          // NOT LIKE — not supported yet
             _ => {
-                log!("Unsupported operator '{}' (OID: {})", opname, op_oid.to_u32());
+                log!(
+                    "Unsupported operator '{}' (OID: {})",
+                    opname,
+                    op_oid.to_u32()
+                );
                 None
             }
         };

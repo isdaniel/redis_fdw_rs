@@ -89,7 +89,10 @@ mod tests {
 
         // SELECT full
         assert_eq!(count(t), 1);
-        assert_eq!(get_one_text(&format!("SELECT value FROM {t};")), "hello world");
+        assert_eq!(
+            get_one_text(&format!("SELECT value FROM {t};")),
+            "hello world"
+        );
 
         // SELECT with WHERE = pushdown
         assert_eq!(count_where(t, "value = 'hello world'"), 1);
@@ -100,9 +103,7 @@ mod tests {
         assert_eq!(count_where(t, "value LIKE 'goodbye%'"), 0);
 
         // SELECT with OFFSET beyond data
-        let offset_result = Spi::get_one::<String>(&format!(
-            "SELECT value FROM {t} OFFSET 1;"
-        ));
+        let offset_result = Spi::get_one::<String>(&format!("SELECT value FROM {t} OFFSET 1;"));
         // Should return no rows
         assert!(offset_result.is_err() || offset_result.unwrap().is_none());
 
@@ -126,7 +127,10 @@ mod tests {
 
         // INSERT multiple fields
         Spi::run(&format!("INSERT INTO {t} VALUES ('name','Alice');")).unwrap();
-        Spi::run(&format!("INSERT INTO {t} VALUES ('email','alice@test.com');")).unwrap();
+        Spi::run(&format!(
+            "INSERT INTO {t} VALUES ('email','alice@test.com');"
+        ))
+        .unwrap();
         Spi::run(&format!("INSERT INTO {t} VALUES ('role','admin');")).unwrap();
         Spi::run(&format!("INSERT INTO {t} VALUES ('dept','engineering');")).unwrap();
         Spi::run(&format!("INSERT INTO {t} VALUES ('loc','new_york');")).unwrap();
@@ -193,9 +197,7 @@ mod tests {
         assert_eq!(count_where(t, "element LIKE '%a%'"), 4);
 
         // SELECT with LIMIT (direct — verified by constraining results)
-        let first_elem = Spi::get_one::<String>(&format!(
-            "SELECT element FROM {t} LIMIT 1;"
-        ));
+        let first_elem = Spi::get_one::<String>(&format!("SELECT element FROM {t} LIMIT 1;"));
         assert!(first_elem.is_ok());
         assert!(first_elem.unwrap().is_some());
 
@@ -276,11 +278,10 @@ mod tests {
 
         // SELECT with WHERE member = pushdown (ZSCORE)
         assert_eq!(count_where(t, "member = 'bob'"), 1);
-        let bob_score = Spi::get_one::<f64>(&format!(
-            "SELECT score FROM {t} WHERE member = 'bob';"
-        ))
-        .unwrap()
-        .unwrap();
+        let bob_score =
+            Spi::get_one::<f64>(&format!("SELECT score FROM {t} WHERE member = 'bob';"))
+                .unwrap()
+                .unwrap();
         assert!((bob_score - 200.0).abs() < 0.01);
 
         // SELECT with WHERE member IN pushdown (ZMSCORE)
@@ -288,7 +289,7 @@ mod tests {
 
         // SELECT with WHERE member LIKE pushdown (ZSCAN)
         assert_eq!(count_where(t, "member LIKE 'a%'"), 1); // alice
-        // Members containing 'e': alice, charlie, eve = 3
+                                                           // Members containing 'e': alice, charlie, eve = 3
         assert_eq!(count_where(t, "member LIKE '%e%'"), 3);
 
         // SELECT with score filter (NOT pushed down to Redis - handled by PG post-filter)
@@ -296,9 +297,7 @@ mod tests {
         assert_eq!(count_where(t, "score = 300"), 1); // charlie
 
         // SELECT with LIMIT (direct query, not subquery)
-        let first_member = Spi::get_one::<String>(&format!(
-            "SELECT member FROM {t} LIMIT 1;"
-        ));
+        let first_member = Spi::get_one::<String>(&format!("SELECT member FROM {t} LIMIT 1;"));
         assert!(first_member.is_ok());
         assert!(first_member.unwrap().is_some());
 
@@ -340,9 +339,7 @@ mod tests {
         assert!(c >= 3, "Expected at least 3 stream entries, got {c}");
 
         // SELECT with LIMIT
-        let first_entry = Spi::get_one::<String>(&format!(
-            "SELECT id FROM {t} LIMIT 1;"
-        ));
+        let first_entry = Spi::get_one::<String>(&format!("SELECT id FROM {t} LIMIT 1;"));
         assert!(first_entry.is_ok());
         assert!(first_entry.unwrap().is_some());
 
@@ -447,7 +444,7 @@ mod tests {
 
         // Verify the table no longer exists by checking pg_class catalog
         let exists = Spi::get_one::<bool>(
-            "SELECT EXISTS(SELECT 1 FROM pg_class WHERE relname = 'lc_fdw_drop_tbl');"
+            "SELECT EXISTS(SELECT 1 FROM pg_class WHERE relname = 'lc_fdw_drop_tbl');",
         )
         .unwrap()
         .unwrap();
@@ -462,10 +459,7 @@ mod tests {
         ))
         .unwrap()
         .unwrap();
-        assert!(
-            !server_exists,
-            "Server should not exist after DROP CASCADE"
-        );
+        assert!(!server_exists, "Server should not exist after DROP CASCADE");
 
         // Verify the FDW is also gone
         let fdw_exists = Spi::get_one::<bool>(&format!(
@@ -482,9 +476,19 @@ mod tests {
     fn test_lifecycle_empty_tables() {
         setup();
 
-        create_table("lc_empty_hash", "field TEXT, value TEXT", "hash", "lifecycle:empty:hash");
+        create_table(
+            "lc_empty_hash",
+            "field TEXT, value TEXT",
+            "hash",
+            "lifecycle:empty:hash",
+        );
         create_table("lc_empty_set", "member TEXT", "set", "lifecycle:empty:set");
-        create_table("lc_empty_zset", "member TEXT, score FLOAT8", "zset", "lifecycle:empty:zset");
+        create_table(
+            "lc_empty_zset",
+            "member TEXT, score FLOAT8",
+            "zset",
+            "lifecycle:empty:zset",
+        );
 
         // SELECT on empty tables should return 0 rows
         assert_eq!(count("lc_empty_hash"), 0);
@@ -605,20 +609,17 @@ mod tests {
 
         // INSERT member with initial score
         Spi::run(&format!("INSERT INTO {t} VALUES ('player', 100);")).unwrap();
-        let score = Spi::get_one::<f64>(&format!(
-            "SELECT score FROM {t} WHERE member = 'player';"
-        ))
-        .unwrap()
-        .unwrap();
+        let score = Spi::get_one::<f64>(&format!("SELECT score FROM {t} WHERE member = 'player';"))
+            .unwrap()
+            .unwrap();
         assert!((score - 100.0).abs() < 0.01);
 
         // INSERT same member with new score - ZADD updates score
         Spi::run(&format!("INSERT INTO {t} VALUES ('player', 999);")).unwrap();
-        let new_score = Spi::get_one::<f64>(&format!(
-            "SELECT score FROM {t} WHERE member = 'player';"
-        ))
-        .unwrap()
-        .unwrap();
+        let new_score =
+            Spi::get_one::<f64>(&format!("SELECT score FROM {t} WHERE member = 'player';"))
+                .unwrap()
+                .unwrap();
         assert!((new_score - 999.0).abs() < 0.01);
 
         // Still only 1 member

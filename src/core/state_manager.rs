@@ -120,7 +120,7 @@ impl RedisFdwState {
     }
 
     /// Reload data for rescan operations (e.g., nested loop joins)
-    /// Resets the table type's dataset and re-fetches from Redis
+    /// Always re-fetches to ensure correctness for parameterized rescans
     pub fn reload_data(&mut self) -> Result<(), String> {
         self.load_data()
     }
@@ -198,7 +198,7 @@ impl RedisFdwState {
     }
 
     /// Estimate the cost for scanning this foreign relation
-    /// 
+    ///
     /// This method gathers statistics from Redis and calculates appropriate
     /// cost estimates for the PostgreSQL query planner.
     pub fn estimate_costs(&mut self) -> CostEstimate {
@@ -223,5 +223,4 @@ impl RedisFdwState {
             estimator.estimate_without_connection()
         }
     }
-
 }

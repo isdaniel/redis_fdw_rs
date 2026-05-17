@@ -54,10 +54,7 @@ impl<'a> RedisDataLoader<'a> {
                     }
                     Err(e) => {
                         // Graceful fallback: log warning and try full scan instead of aborting
-                        log!(
-                            "Pushdown failed, falling back to full scan: {:?}",
-                            e
-                        );
+                        log!("Pushdown failed, falling back to full scan: {:?}", e);
                     }
                 }
             } else if analysis.has_limit_pushdown() {

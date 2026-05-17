@@ -55,21 +55,5 @@ macro_rules! table_dispatch_mut_result {
     };
 }
 
-/// Macro for mut methods with side effects (no return value)
-macro_rules! table_dispatch_mut_void {
-    ($self:expr, $method:ident($($args:expr),*)) => {
-        match $self {
-            crate::tables::types::RedisTableType::String(table) => table.$method($($args),*),
-            crate::tables::types::RedisTableType::Hash(table) => table.$method($($args),*),
-            crate::tables::types::RedisTableType::List(table) => table.$method($($args),*),
-            crate::tables::types::RedisTableType::Set(table) => table.$method($($args),*),
-            crate::tables::types::RedisTableType::ZSet(table) => table.$method($($args),*),
-            crate::tables::types::RedisTableType::Stream(table) => table.$method($($args),*),
-            crate::tables::types::RedisTableType::None => {} // No-op for None type
-        }
-    };
-}
-
 pub(crate) use table_dispatch;
 pub(crate) use table_dispatch_mut_result;
-pub(crate) use table_dispatch_mut_void;

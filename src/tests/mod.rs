@@ -2,7 +2,6 @@
 ///
 /// This module organizes all tests by functionality area, making it easier
 /// to locate and maintain tests for specific components.
-
 #[cfg(any(test, feature = "pg_test"))]
 pub mod core_tests;
 

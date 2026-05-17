@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
 
 use crate::{
     query::{
@@ -107,9 +106,7 @@ impl RedisHashTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
     ) -> Result<LoadDataResult, redis::RedisError> {
-        let hash_data: HashMap<String, String> =
-            redis::cmd("HGETALL").arg(key_prefix).query(conn)?;
-        let data_vec: Vec<(String, String)> = hash_data.into_iter().collect();
+        let data_vec: Vec<(String, String)> = redis::cmd("HGETALL").arg(key_prefix).query(conn)?;
         self.dataset = DataSet::Complete(DataContainer::Hash(data_vec));
         Ok(LoadDataResult::FullyLoaded)
     }

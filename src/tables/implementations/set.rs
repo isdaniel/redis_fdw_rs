@@ -48,10 +48,8 @@ impl RedisSetTable {
         }
 
         // Try SMISMEMBER (Redis 6.2+) — single command, single round-trip
-        let smismember_result: Result<Vec<bool>, _> = redis::cmd("SMISMEMBER")
-            .arg(key)
-            .arg(members)
-            .query(conn);
+        let smismember_result: Result<Vec<bool>, _> =
+            redis::cmd("SMISMEMBER").arg(key).arg(members).query(conn);
 
         match smismember_result {
             Ok(results) => {
@@ -154,7 +152,7 @@ impl RedisSetTable {
                 None => Some(matches),
             };
 
-            if matched.as_ref().map_or(false, |v| v.is_empty()) {
+            if matched.as_ref().is_some_and(|v| v.is_empty()) {
                 break; // short-circuit if no match left
             }
         }

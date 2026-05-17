@@ -43,28 +43,9 @@ impl PushdownAnalysis {
         }
     }
 
-    /// Create analysis with both WHERE conditions and LIMIT/OFFSET
-    #[allow(dead_code)]
-    pub fn with_conditions_and_limit(
-        conditions: Vec<PushableCondition>,
-        limit_offset: Option<LimitOffsetInfo>,
-    ) -> Self {
-        let can_optimize = !conditions.is_empty()
-            || limit_offset
-                .as_ref()
-                .map_or(false, |lo| lo.has_constraints());
-        Self {
-            pushable_conditions: conditions,
-            can_optimize,
-            limit_offset,
-        }
-    }
-
     /// Set LIMIT/OFFSET information and update optimization flag
     pub fn set_limit_offset(&mut self, limit_offset: Option<LimitOffsetInfo>) {
-        let has_limit_constraints = limit_offset
-            .as_ref()
-            .map_or(false, |lo| lo.has_constraints());
+        let has_limit_constraints = limit_offset.as_ref().is_some_and(|lo| lo.has_constraints());
         self.limit_offset = limit_offset;
         self.can_optimize = !self.pushable_conditions.is_empty() || has_limit_constraints;
     }
@@ -78,6 +59,79 @@ impl PushdownAnalysis {
     pub fn has_limit_pushdown(&self) -> bool {
         self.limit_offset
             .as_ref()
-            .map_or(false, |lo| lo.has_constraints())
+            .is_some_and(|lo| lo.has_constraints())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pushdown_analysis_new() {
+        let analysis = PushdownAnalysis::new();
+        assert!(!analysis.can_optimize);
+        assert!(analysis.pushable_conditions.is_empty());
+        assert!(analysis.limit_offset.is_none());
+        assert!(!analysis.has_optimizations());
+        assert!(!analysis.has_limit_pushdown());
+    }
+
+    #[test]
+    fn test_pushdown_analysis_set_limit_offset_with_limit() {
+        let mut analysis = PushdownAnalysis::new();
+        let limit_info = LimitOffsetInfo {
+            limit: Some(10),
+            offset: None,
+        };
+        analysis.set_limit_offset(Some(limit_info));
+        assert!(analysis.has_optimizations());
+        assert!(analysis.has_limit_pushdown());
+        assert!(analysis.can_optimize);
+    }
+
+    #[test]
+    fn test_pushdown_analysis_set_limit_offset_none() {
+        let mut analysis = PushdownAnalysis::new();
+        analysis.set_limit_offset(None);
+        assert!(!analysis.has_optimizations());
+        assert!(!analysis.has_limit_pushdown());
+    }
+
+    #[test]
+    fn test_pushdown_analysis_conditions_enable_optimize() {
+        let mut analysis = PushdownAnalysis::new();
+        analysis.pushable_conditions.push(PushableCondition {
+            column_name: "key".to_string(),
+            operator: ComparisonOperator::Equal,
+            value: "test".to_string(),
+        });
+        analysis.can_optimize = true;
+        assert!(analysis.has_optimizations());
+        assert!(!analysis.has_limit_pushdown());
+    }
+
+    #[test]
+    fn test_pushdown_analysis_set_limit_offset_with_conditions() {
+        let mut analysis = PushdownAnalysis::new();
+        analysis.pushable_conditions.push(PushableCondition {
+            column_name: "member".to_string(),
+            operator: ComparisonOperator::Like,
+            value: "user:*".to_string(),
+        });
+        let limit_info = LimitOffsetInfo {
+            limit: Some(5),
+            offset: Some(2),
+        };
+        analysis.set_limit_offset(Some(limit_info));
+        assert!(analysis.has_optimizations());
+        assert!(analysis.has_limit_pushdown());
+    }
+
+    #[test]
+    fn test_comparison_operator_equality() {
+        assert_eq!(ComparisonOperator::Equal, ComparisonOperator::Equal);
+        assert_ne!(ComparisonOperator::Equal, ComparisonOperator::NotEqual);
+        assert_ne!(ComparisonOperator::Like, ComparisonOperator::In);
     }
 }

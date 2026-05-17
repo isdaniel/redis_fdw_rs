@@ -118,7 +118,7 @@ mod tests {
         let config = RedisConnectionConfig::from_options(&opts).unwrap();
         assert_eq!(config.host_port, "127.0.0.1:6379");
         assert_eq!(config.database, 1);
-        assert!(!config.is_cluster_mode());
+        assert!(!config.host_port.contains(','));
     }
 
     #[test]
@@ -131,11 +131,13 @@ mod tests {
         opts.insert("database".to_string(), "0".to_string());
 
         let config = RedisConnectionConfig::from_options(&opts).unwrap();
-        assert!(config.is_cluster_mode());
+        assert!(config.host_port.contains(','));
     }
 
     #[test]
     fn test_cluster_nodes_parsing() {
+        use crate::core::pool_manager::RedisConnectionType;
+
         let mut opts = HashMap::new();
         opts.insert(
             "host_port".to_string(),
@@ -144,11 +146,8 @@ mod tests {
         opts.insert("database".to_string(), "0".to_string());
 
         let config = RedisConnectionConfig::from_options(&opts).unwrap();
-        let nodes = config.parse_cluster_nodes().unwrap();
-
-        assert_eq!(nodes.len(), 2);
-        assert_eq!(nodes[0], "redis://127.0.0.1:7000/0");
-        assert_eq!(nodes[1], "redis://127.0.0.1:7001/0");
+        let conn_type = RedisConnectionType::from_host_port(&config.host_port);
+        assert_eq!(conn_type, RedisConnectionType::Cluster);
     }
 
     #[test]
@@ -158,9 +157,8 @@ mod tests {
         opts.insert("database".to_string(), "2".to_string());
 
         let config = RedisConnectionConfig::from_options(&opts).unwrap();
-        let url = config.get_single_node_url().unwrap();
-
-        assert_eq!(url, "redis://127.0.0.1:6379/2");
+        assert_eq!(config.host_port, "127.0.0.1:6379");
+        assert_eq!(config.database, 2);
     }
 
     #[test]
@@ -204,9 +202,8 @@ mod tests {
         opts.insert("database".to_string(), "0".to_string());
 
         let config = RedisConnectionConfig::from_options(&opts).unwrap();
-        let url = config.get_single_node_url().unwrap();
-
-        assert_eq!(url, "redis://127.0.0.1:6379/0");
+        assert_eq!(config.host_port, "redis://127.0.0.1:6379");
+        assert_eq!(config.database, 0);
     }
 
     #[test]
@@ -217,7 +214,9 @@ mod tests {
         opts.insert("password".to_string(), "secret123".to_string());
 
         let config = RedisConnectionConfig::from_options(&opts).unwrap();
-        let url = config.get_single_node_url().unwrap();
+        let url = config
+            .auth_config
+            .apply_to_url(&format!("redis://{}/{}", config.host_port, config.database));
 
         assert_eq!(url, "redis://:secret123@127.0.0.1:6379/0");
     }
@@ -231,7 +230,9 @@ mod tests {
         opts.insert("password".to_string(), "secret123".to_string());
 
         let config = RedisConnectionConfig::from_options(&opts).unwrap();
-        let url = config.get_single_node_url().unwrap();
+        let url = config
+            .auth_config
+            .apply_to_url(&format!("redis://{}/{}", config.host_port, config.database));
 
         assert_eq!(url, "redis://redis_user:secret123@127.0.0.1:6379/0");
     }
@@ -247,7 +248,17 @@ mod tests {
         opts.insert("password".to_string(), "secret123".to_string());
 
         let config = RedisConnectionConfig::from_options(&opts).unwrap();
-        let nodes = config.parse_cluster_nodes().unwrap();
+        let nodes: Vec<String> = config
+            .host_port
+            .split(',')
+            .map(|node| {
+                config.auth_config.apply_to_url(&format!(
+                    "redis://{}/{}",
+                    node.trim(),
+                    config.database
+                ))
+            })
+            .collect();
 
         assert_eq!(nodes.len(), 2);
         assert_eq!(nodes[0], "redis://:secret123@127.0.0.1:7000/0");
