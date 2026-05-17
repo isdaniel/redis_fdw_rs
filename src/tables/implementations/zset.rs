@@ -405,4 +405,24 @@ impl RedisTableOperations for RedisZSetTable {
             ComparisonOperator::Equal | ComparisonOperator::In | ComparisonOperator::Like
         )
     }
+
+    fn load_batch(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        cursor: u64,
+        batch_size: usize,
+        _conditions: Option<&[PushableCondition]>,
+    ) -> Result<(u64, usize), redis::RedisError> {
+        let mut cmd = redis::cmd("ZSCAN");
+        cmd.arg(key_prefix).arg(cursor).arg("COUNT").arg(batch_size);
+        let (new_cursor, flat_data): (u64, Vec<String>) = cmd.query(conn)?;
+        let row_count = flat_data.len() / 2;
+        self.dataset = if flat_data.is_empty() {
+            DataSet::Empty
+        } else {
+            DataSet::Filtered(flat_data)
+        };
+        Ok((new_cursor, row_count))
+    }
 }

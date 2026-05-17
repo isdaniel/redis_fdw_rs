@@ -31,8 +31,8 @@ pub struct PoolConfig {
 impl Default for PoolConfig {
     fn default() -> Self {
         Self {
-            max_size: 64,
-            min_idle: Some(8),
+            max_size: 16,
+            min_idle: Some(1),
             connection_timeout: Duration::from_secs(30),
             max_lifetime: Some(Duration::from_secs(1800)), // 30 minutes
             idle_timeout: Some(Duration::from_secs(600)),  // 10 minutes
@@ -468,8 +468,8 @@ mod tests {
     #[test]
     fn test_pool_config_default() {
         let config = PoolConfig::default();
-        assert_eq!(config.max_size, 64);
-        assert_eq!(config.min_idle, Some(8));
+        assert_eq!(config.max_size, 16);
+        assert_eq!(config.min_idle, Some(1));
         assert_eq!(config.connection_timeout, Duration::from_secs(30));
         assert_eq!(config.max_lifetime, Some(Duration::from_secs(1800)));
         assert_eq!(config.idle_timeout, Some(Duration::from_secs(600)));

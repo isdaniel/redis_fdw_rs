@@ -32,6 +32,16 @@ pub struct RedisFdwState {
     pub pushdown_analysis: Option<PushdownAnalysis>,
     /// Cached cost estimate for query planning
     pub cost_estimate: Option<CostEstimate>,
+    /// Streaming state: Redis SCAN cursor position (0 = start, returned 0 = done)
+    pub scan_cursor: u64,
+    /// Whether we've completed the full scan (cursor returned 0)
+    pub scan_complete: bool,
+    /// Whether initial batch has been loaded
+    pub batch_loaded: bool,
+    /// Current position within the loaded batch
+    pub current_batch_index: usize,
+    /// Batch size for streaming (configurable via table option)
+    pub batch_size: usize,
 }
 
 impl RedisFdwState {
@@ -48,6 +58,11 @@ impl RedisFdwState {
             key_attno: 0,
             pushdown_analysis: None,
             cost_estimate: None,
+            scan_cursor: 0,
+            scan_complete: false,
+            batch_loaded: false,
+            current_batch_index: 0,
+            batch_size: 1000,
         }
     }
 
@@ -90,6 +105,12 @@ impl RedisFdwState {
         if let Some(prefix) = self.opts.get("table_key_prefix") {
             self.table_key_prefix = prefix.clone();
         }
+
+        if let Some(bs) = self.opts.get("batch_size") {
+            if let Ok(size) = bs.parse::<usize>() {
+                self.batch_size = size.clamp(100, 100_000);
+            }
+        }
     }
 
     /// Set table type and load data using the data loader
@@ -101,8 +122,52 @@ impl RedisFdwState {
 
         self.table_type = RedisTableType::from_str(table_type);
 
-        // Load data using the data loader
+        // Load all data upfront using the data loader
         let _ = self.load_data();
+        self.batch_loaded = true;
+        self.scan_complete = true;
+    }
+
+    /// Fetch the next batch of data using cursor-based iteration.
+    /// Returns true if more data was loaded, false if scan is complete.
+    pub fn fetch_next_batch(&mut self) -> bool {
+        if self.scan_complete {
+            return false;
+        }
+
+        if let Some(ref mut conn) = self.redis_connection {
+            let conn_like = conn.as_connection_like_mut();
+            let conditions = self.pushdown_analysis.as_ref().and_then(|a| {
+                if a.has_optimizations() {
+                    Some(a.pushable_conditions.as_slice())
+                } else {
+                    None
+                }
+            });
+            match self.table_type.load_batch(
+                conn_like,
+                &self.table_key_prefix,
+                self.scan_cursor,
+                self.batch_size,
+                conditions,
+            ) {
+                Ok((new_cursor, rows_loaded)) => {
+                    self.scan_cursor = new_cursor;
+                    if new_cursor == 0 {
+                        self.scan_complete = true;
+                    }
+                    self.current_batch_index = 0;
+                    rows_loaded > 0
+                }
+                Err(_) => {
+                    self.scan_complete = true;
+                    false
+                }
+            }
+        } else {
+            self.scan_complete = true;
+            false
+        }
     }
 
     /// Load data using the dedicated data loader

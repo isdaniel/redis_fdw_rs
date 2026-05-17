@@ -184,4 +184,19 @@ impl RedisTableOperations for RedisStringTable {
             ComparisonOperator::Equal | ComparisonOperator::Like
         )
     }
+
+    fn load_batch(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        _cursor: u64,
+        _batch_size: usize,
+        _conditions: Option<&[PushableCondition]>,
+    ) -> Result<(u64, usize), redis::RedisError> {
+        // String type is always a single value — no cursor needed
+        let value: Option<String> = redis::cmd("GET").arg(key_prefix).query(conn)?;
+        let row_count = if value.is_some() { 1 } else { 0 };
+        self.dataset = DataSet::Complete(DataContainer::String(value));
+        Ok((0, row_count)) // cursor=0 means done
+    }
 }

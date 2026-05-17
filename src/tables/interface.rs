@@ -20,6 +20,17 @@ pub trait RedisTableOperations {
         limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError>;
 
+    /// Load a batch of data using cursor-based iteration for streaming.
+    /// Returns (new_cursor, rows_loaded). When new_cursor == 0, iteration is complete.
+    fn load_batch(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        cursor: u64,
+        batch_size: usize,
+        conditions: Option<&[PushableCondition]>,
+    ) -> Result<(u64, usize), redis::RedisError>;
+
     /// Get the current dataset for this table
     fn get_dataset(&self) -> &DataSet;
 

@@ -200,7 +200,7 @@ impl RedisScanBuilder {
             limit = base_limit * config.limit_multiply_size;
         }
 
-        let mut collected_results = Vec::with_capacity(limit);
+        let mut collected_results = Vec::with_capacity(limit.min(65536));
         let mut cursor = 0;
 
         loop {

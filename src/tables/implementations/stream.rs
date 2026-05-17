@@ -305,4 +305,66 @@ impl RedisTableOperations for RedisStreamTable {
             ComparisonOperator::Equal | ComparisonOperator::NotEqual | ComparisonOperator::Like
         )
     }
+
+    fn load_batch(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        _cursor: u64,
+        batch_size: usize,
+        _conditions: Option<&[PushableCondition]>,
+    ) -> Result<(u64, usize), redis::RedisError> {
+        // Streams use last_id as cursor for XRANGE pagination
+        let start_id = match &self.last_id {
+            Some(id) => {
+                // Increment the sequence to avoid re-reading the last entry
+                let parts: Vec<&str> = id.splitn(2, '-').collect();
+                if parts.len() == 2 {
+                    if let Ok(seq) = parts[1].parse::<u64>() {
+                        format!("{}-{}", parts[0], seq + 1)
+                    } else {
+                        id.clone()
+                    }
+                } else {
+                    id.clone()
+                }
+            }
+            None => "-".to_string(),
+        };
+
+        let entries: Vec<(String, Vec<(String, String)>)> = redis::cmd("XRANGE")
+            .arg(key_prefix)
+            .arg(&start_id)
+            .arg("+")
+            .arg("COUNT")
+            .arg(batch_size)
+            .query(conn)?;
+
+        let row_count = entries.len();
+        let new_cursor = if row_count < batch_size { 0 } else { 1 };
+
+        if entries.is_empty() {
+            self.dataset = DataSet::Empty;
+            self.entries = Vec::new();
+            return Ok((0, 0));
+        }
+
+        self.last_id = entries.last().map(|(id, _)| id.clone());
+
+        let mut structured_entries = Vec::with_capacity(entries.len());
+        let mut flat_data = Vec::with_capacity(entries.len());
+        for (stream_id, fields) in entries {
+            let mut row = vec![stream_id.clone()];
+            for (field, value) in fields {
+                row.push(field);
+                row.push(value);
+            }
+            flat_data.push(stream_id);
+            structured_entries.push(row);
+        }
+
+        self.entries = structured_entries;
+        self.dataset = DataSet::Filtered(flat_data);
+        Ok((new_cursor, row_count))
+    }
 }

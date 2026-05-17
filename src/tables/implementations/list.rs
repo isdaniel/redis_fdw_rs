@@ -276,4 +276,34 @@ impl RedisTableOperations for RedisListTable {
             ComparisonOperator::Equal | ComparisonOperator::Like
         )
     }
+
+    fn load_batch(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        cursor: u64,
+        batch_size: usize,
+        _conditions: Option<&[PushableCondition]>,
+    ) -> Result<(u64, usize), redis::RedisError> {
+        // Lists use offset-based pagination (cursor = offset index)
+        let start = cursor as isize;
+        let end = start + (batch_size as isize) - 1;
+        let data: Vec<String> = redis::cmd("LRANGE")
+            .arg(key_prefix)
+            .arg(start)
+            .arg(end)
+            .query(conn)?;
+        let row_count = data.len();
+        let new_cursor = if row_count < batch_size {
+            0 // no more data
+        } else {
+            cursor + row_count as u64
+        };
+        self.dataset = if data.is_empty() {
+            DataSet::Empty
+        } else {
+            DataSet::Complete(DataContainer::List(data))
+        };
+        Ok((new_cursor, row_count))
+    }
 }

@@ -259,4 +259,24 @@ impl RedisTableOperations for RedisSetTable {
             ComparisonOperator::Equal | ComparisonOperator::In | ComparisonOperator::Like
         )
     }
+
+    fn load_batch(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key: &str,
+        cursor: u64,
+        batch_size: usize,
+        _conditions: Option<&[PushableCondition]>,
+    ) -> Result<(u64, usize), redis::RedisError> {
+        let mut cmd = redis::cmd("SSCAN");
+        cmd.arg(key).arg(cursor).arg("COUNT").arg(batch_size);
+        let (new_cursor, members): (u64, Vec<String>) = cmd.query(conn)?;
+        let row_count = members.len();
+        self.dataset = if members.is_empty() {
+            DataSet::Empty
+        } else {
+            DataSet::Filtered(members)
+        };
+        Ok((new_cursor, row_count))
+    }
 }

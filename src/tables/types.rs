@@ -51,6 +51,17 @@ impl RedisTableType {
         table_dispatch_mut_result!(self, load_data(conn, key_prefix, conditions, limit_offset))
     }
 
+    pub fn load_batch(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        cursor: u64,
+        batch_size: usize,
+        conditions: Option<&[PushableCondition]>,
+    ) -> Result<(u64, usize), redis::RedisError> {
+        table_dispatch_mut_result!(self, load_batch(conn, key_prefix, cursor, batch_size, conditions) -> Result<(u64, usize), redis::RedisError>, Ok((0, 0)))
+    }
+
     pub fn data_len(&self) -> usize {
         table_dispatch!(self, data_len() -> 0)
     }

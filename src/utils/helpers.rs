@@ -111,13 +111,11 @@ pub unsafe fn pg_list_to_rust_list<'a, T: list::Enlist>(
     list::List::<T>::downcast_ptr_in_memcx(list, mcx).expect("Failed to downcast list pointer")
 }
 
-pub unsafe fn serialize_to_list<T>(state: PgBox<T>) -> *mut pg_sys::List
-where
-    T: Sized,
-{
-    let ret = memcx::current_context(|mcx| {
+/// Serialize a raw pointer to a PG List (for passing state through fdw_private)
+pub unsafe fn serialize_ptr_to_list(ptr: *mut c_void) -> *mut pg_sys::List {
+    memcx::current_context(|mcx| {
         let mut ret = List::<*mut c_void>::Nil;
-        let val = state.into_pg() as i64;
+        let val = ptr as i64;
         let cst: *mut pg_sys::Const = pg_sys::makeConst(
             pg_sys::INT8OID,
             -1,
@@ -129,24 +127,20 @@ where
         );
         ret.unstable_push_in_context(cst as _, mcx);
         ret.into_ptr()
-    });
-
-    ret
+    })
 }
 
-pub unsafe fn deserialize_from_list<T>(list: *mut pg_sys::List) -> PgBox<T>
-where
-    T: Sized,
-{
+/// Deserialize a raw pointer from a PG List (for retrieving state from fdw_private)
+pub unsafe fn deserialize_ptr_from_list(list: *mut pg_sys::List) -> *mut c_void {
     memcx::current_context(|mcx| {
         if let Some(list) = List::<*mut c_void>::downcast_ptr_in_memcx(list, mcx) {
             if let Some(cst) = list.get(0) {
                 let cst = *(*cst as *mut pg_sys::Const);
                 let ptr = i64::from_datum(cst.constvalue, cst.constisnull).unwrap();
-                return PgBox::<T>::from_pg(ptr as _);
+                return ptr as *mut c_void;
             }
         }
-        PgBox::<T>::null()
+        std::ptr::null_mut()
     })
 }
 
