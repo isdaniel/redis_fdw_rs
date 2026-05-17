@@ -321,7 +321,7 @@ impl RedisTableOperations for RedisStreamTable {
                 let parts: Vec<&str> = id.splitn(2, '-').collect();
                 if parts.len() == 2 {
                     if let Ok(seq) = parts[1].parse::<u64>() {
-                        format!("{}-{}", parts[0], seq + 1)
+                        format!("{}-{}", parts[0], seq.saturating_add(1))
                     } else {
                         id.clone()
                     }

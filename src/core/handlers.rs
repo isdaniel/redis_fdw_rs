@@ -273,6 +273,11 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
             write_datum_to_slot(slot, tupdesc, col_idx, value.as_ref());
         }
     } else {
+        log!(
+            "Warning: get_row returned None at index {} (data_len={})",
+            state.row_count,
+            state.data_len()
+        );
         return slot;
     }
 

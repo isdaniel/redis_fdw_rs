@@ -123,13 +123,16 @@ impl RedisFdwState {
         self.table_type = RedisTableType::from_str(table_type);
 
         // Load all data upfront using the data loader
-        let _ = self.load_data();
+        if let Err(e) = self.load_data() {
+            log!("Warning: failed to load data for table: {}", e);
+        }
         self.batch_loaded = true;
         self.scan_complete = true;
     }
 
     /// Fetch the next batch of data using cursor-based iteration.
     /// Returns true if more data was loaded, false if scan is complete.
+    /// Note: Redis SCAN can return 0 elements with a non-zero cursor, so we must loop until we get data or the cursor returns to 0.
     pub fn fetch_next_batch(&mut self) -> bool {
         if self.scan_complete {
             return false;
@@ -144,24 +147,32 @@ impl RedisFdwState {
                     None
                 }
             });
-            match self.table_type.load_batch(
-                conn_like,
-                &self.table_key_prefix,
-                self.scan_cursor,
-                self.batch_size,
-                conditions,
-            ) {
-                Ok((new_cursor, rows_loaded)) => {
-                    self.scan_cursor = new_cursor;
-                    if new_cursor == 0 {
-                        self.scan_complete = true;
+
+            loop {
+                match self.table_type.load_batch(
+                    conn_like,
+                    &self.table_key_prefix,
+                    self.scan_cursor,
+                    self.batch_size,
+                    conditions,
+                ) {
+                    Ok((new_cursor, rows_loaded)) => {
+                        self.scan_cursor = new_cursor;
+                        if new_cursor == 0 {
+                            self.scan_complete = true;
+                        }
+                        if rows_loaded > 0 {
+                            self.current_batch_index = 0;
+                            return true;
+                        }
+                        if self.scan_complete {
+                            return false;
+                        }
                     }
-                    self.current_batch_index = 0;
-                    rows_loaded > 0
-                }
-                Err(_) => {
-                    self.scan_complete = true;
-                    false
+                    Err(_) => {
+                        self.scan_complete = true;
+                        return false;
+                    }
                 }
             }
         } else {

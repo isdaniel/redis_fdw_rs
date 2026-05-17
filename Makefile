@@ -73,11 +73,12 @@ test-all: setup-redis stop-pg
 
 COMPOSE_FILE := docker-compose.cluster-test.yml
 PG_DATA_DIR := $(shell pwd)/target/test-pgdata/$(subst pg,,$(PG))
+PG_CTL := $(shell pg_config --bindir)/pg_ctl
 
 # Stop any stale pgrx test PostgreSQL instance
 stop-pg:
 	@if [ -f "$(PG_DATA_DIR)/postmaster.pid" ]; then \
-		/usr/lib/postgresql/$(subst pg,,$(PG))/bin/pg_ctl stop -D "$(PG_DATA_DIR)" 2>/dev/null || \
+		$(PG_CTL) stop -D "$(PG_DATA_DIR)" 2>/dev/null || \
 		rm -f "$(PG_DATA_DIR)/postmaster.pid"; \
 	fi
 
