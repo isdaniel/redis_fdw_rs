@@ -78,7 +78,7 @@ jobs:
           sudo chmod 777 /usr/lib/postgresql/${{ env.PG_VER }} -R
 
       - name: Run clippy
-        run: cargo clippy --all-targets --features pg${{ env.PG_VER }} -- -D warnings -A clippy::enum-variant-names
+        run: cargo clippy --no-default-features --all-targets --features pg${{ env.PG_VER }} -- -D warnings -A clippy::enum-variant-names
 
       - name: Run Tests for PostgreSQL ${{ env.PG_VER }}
         env:
@@ -113,12 +113,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential clang llvm libreadline-dev zlib1g-dev \
-            postgresql-14 postgresql-server-dev-14
+            postgresql-14 postgresql-server-dev-14 \
+            redis-tools docker-compose
 
-      - name: Install cargo-pgrx and cargo-tarpaulin
+      - name: Start Redis container
+        run: docker run -d --name redis-server -p 8899:6379 redis
+
+      - name: Install Rust toolchain with llvm-tools
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-pgrx and coverage tools
         run: |
           cargo install cargo-pgrx --version 0.16.1
-          cargo install cargo-tarpaulin
+          cargo install grcov
 
       - name: Initialize pgrx for PostgreSQL 14
         run: cargo pgrx init --pg14 ${{ env.PG_BIN }}/pg_config
@@ -128,8 +137,17 @@ jobs:
           sudo chmod 777 /usr/share/postgresql/14 -R
           sudo chmod 777 /usr/lib/postgresql/14 -R
 
-      - name: Run coverage
-        run: cargo tarpaulin --features pg14 --out xml --skip-clean --lib
+      - name: Run tests with coverage instrumentation
+        env:
+          LLVM_PROFILE_FILE: "redis-fdw-%p-%m.profraw"
+          RUSTFLAGS: "-C instrument-coverage"
+        run: cargo pgrx test pg14
+        continue-on-error: true
+
+      - name: Generate coverage report
+        run: |
+          grcov . -s . --binary-path ./target/debug/ -t cobertura --branch --ignore-not-existing --ignore "/*" --ignore "target/*" -o cobertura.xml
+        continue-on-error: true
 
       - name: Upload to Codecov
         uses: codecov/codecov-action@v4

@@ -188,16 +188,39 @@ impl<'a> CostEstimator<'a> {
     }
 
     /// Estimate number of keys matching the prefix pattern
-    /// Uses DBSIZE with a heuristic fraction instead of expensive SCAN iterations
+    /// Uses a single SCAN iteration to sample, then extrapolates from DBSIZE
     fn estimate_matching_keys(&self, conn: &mut dyn ConnectionLike) -> Option<u64> {
-        if let Ok(db_size) = cmd("DBSIZE").query::<u64>(conn) {
-            if db_size == 0 {
-                return Some(0);
-            }
-            // Use a conservative fraction: assume 10% of keys match the prefix
-            Some((db_size as f64 * 0.1).max(1.0) as u64)
+        let pattern = if self.key_prefix.contains('*') {
+            self.key_prefix.to_string()
         } else {
-            None
+            format!("{}*", self.key_prefix)
+        };
+
+        // Single SCAN iteration with COUNT 100 to sample key distribution
+        let result: Result<(i64, Vec<String>), _> = cmd("SCAN")
+            .arg(0)
+            .arg("MATCH")
+            .arg(&pattern)
+            .arg("COUNT")
+            .arg(100)
+            .query(conn);
+
+        match result {
+            Ok((cursor, keys)) => {
+                let count = keys.len() as u64;
+                if cursor == 0 {
+                    // Full scan completed in one iteration
+                    return Some(count);
+                }
+                // Extrapolate based on sample ratio
+                if let Ok(db_size) = cmd("DBSIZE").query::<u64>(conn) {
+                    let sample_ratio = count as f64 / 100.0;
+                    Some((db_size as f64 * sample_ratio).max(count as f64) as u64)
+                } else {
+                    Some(count)
+                }
+            }
+            Err(_) => None,
         }
     }
 

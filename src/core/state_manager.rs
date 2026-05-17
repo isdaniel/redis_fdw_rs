@@ -120,13 +120,9 @@ impl RedisFdwState {
     }
 
     /// Reload data for rescan operations (e.g., nested loop joins)
-    /// Skips re-fetch if data is already loaded (non-parameterized rescan)
+    /// Always re-fetches to ensure correctness for parameterized rescans
     pub fn reload_data(&mut self) -> Result<(), String> {
-        if self.data_len() == 0 {
-            self.load_data()
-        } else {
-            Ok(())
-        }
+        self.load_data()
     }
 
     /// Set pushdown analysis from planner
