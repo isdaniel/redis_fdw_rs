@@ -5,7 +5,6 @@
 use crate::{
     core::{
         connection_factory::{RedisConnectionConfig, RedisConnectionFactory},
-        data_loader::RedisDataLoader,
         pool_manager::PooledConnection,
     },
     query::{
@@ -36,10 +35,6 @@ pub struct RedisFdwState {
     pub scan_cursor: u64,
     /// Whether we've completed the full scan (cursor returned 0)
     pub scan_complete: bool,
-    /// Whether initial batch has been loaded
-    pub batch_loaded: bool,
-    /// Current position within the loaded batch
-    pub current_batch_index: usize,
     /// Batch size for streaming (configurable via table option)
     pub batch_size: usize,
 }
@@ -60,8 +55,6 @@ impl RedisFdwState {
             cost_estimate: None,
             scan_cursor: 0,
             scan_complete: false,
-            batch_loaded: false,
-            current_batch_index: 0,
             batch_size: 1000,
         }
     }
@@ -113,7 +106,7 @@ impl RedisFdwState {
         }
     }
 
-    /// Set table type and load data using the data loader
+    /// Set table type and prepare for streaming iteration
     pub fn set_table_type(&mut self) {
         let table_type = self
             .opts
@@ -121,13 +114,6 @@ impl RedisFdwState {
             .expect("`table_type` option is required for redis_fdw");
 
         self.table_type = RedisTableType::from_str(table_type);
-
-        // Load all data upfront using the data loader
-        if let Err(e) = self.load_data() {
-            log!("Warning: failed to load data for table: {}", e);
-        }
-        self.batch_loaded = true;
-        self.scan_complete = true;
     }
 
     /// Fetch the next batch of data using cursor-based iteration.
@@ -162,7 +148,6 @@ impl RedisFdwState {
                             self.scan_complete = true;
                         }
                         if rows_loaded > 0 {
-                            self.current_batch_index = 0;
                             return true;
                         }
                         if self.scan_complete {
@@ -179,26 +164,6 @@ impl RedisFdwState {
             self.scan_complete = true;
             false
         }
-    }
-
-    /// Load data using the dedicated data loader
-    fn load_data(&mut self) -> Result<(), String> {
-        if let Some(ref mut conn) = self.redis_connection {
-            let mut data_loader = RedisDataLoader::new(
-                &mut self.table_type,
-                &self.table_key_prefix,
-                self.pushdown_analysis.as_ref(),
-            );
-            data_loader.load_data(conn)
-        } else {
-            Err("Redis connection not initialized".to_string())
-        }
-    }
-
-    /// Reload data for rescan operations (e.g., nested loop joins)
-    /// Always re-fetches to ensure correctness for parameterized rescans
-    pub fn reload_data(&mut self) -> Result<(), String> {
-        self.load_data()
     }
 
     /// Set pushdown analysis from planner

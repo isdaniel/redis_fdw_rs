@@ -11,11 +11,11 @@ use pgrx::{
 };
 use std::ptr;
 
-/// Cast fdw_private/fdw_state raw pointer to mutable reference.
-/// # Safety
-/// Caller must ensure pointer is valid and not aliased.
 #[inline]
 unsafe fn state_from_ptr<'a>(ptr: *mut std::os::raw::c_void) -> &'a mut RedisFdwState {
+    if ptr.is_null() {
+        pgrx::error!("Redis FDW state pointer is null");
+    }
     &mut *(ptr as *mut RedisFdwState)
 }
 
@@ -159,7 +159,7 @@ unsafe extern "C-unwind" fn get_foreign_plan(
     log!("---> get_foreign_plan");
 
     // Get the FDW state from baserel to analyze table type
-    let state = &mut *((*baserel).fdw_private as *mut RedisFdwState);
+    let state = state_from_ptr((*baserel).fdw_private);
 
     PgMemoryContexts::For(state.tmp_ctx).switch_to(|_| {
         let relation = pg_sys::relation_open(foreigntableid, pg_sys::AccessShareLock as _);
@@ -318,11 +318,6 @@ extern "C-unwind" fn re_scan_foreign_scan(node: *mut pgrx::pg_sys::ForeignScanSt
         state.row_count = 0;
         state.scan_cursor = 0;
         state.scan_complete = false;
-        state.batch_loaded = false;
-        state.current_batch_index = 0;
-
-        // Reload data to handle parameterized rescans (e.g., nested loop joins)
-        let _ = state.reload_data();
     }
 }
 
@@ -390,7 +385,7 @@ unsafe extern "C-unwind" fn begin_foreign_modify(
 ) {
     log!("---> begin_foreign_modify");
     let state_ptr = deserialize_ptr_from_list(fdw_private as _);
-    let state = &mut *(state_ptr as *mut RedisFdwState);
+    let state = state_from_ptr(state_ptr);
     let subplan = (*outer_plan_state(&mut (*mtstate).ps)).plan;
     state.key_attno =
         pg_sys::ExecFindJunkAttributeInTlist((*subplan).targetlist, REDISMODY.as_ptr() as _);
