@@ -25,7 +25,7 @@ impl RedisHashTable {
         }
     }
 
-    /// Load data with HSCAN optimization for pattern matching
+    #[allow(dead_code)]
     fn load_with_scan_optimization(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -50,15 +50,13 @@ impl RedisHashTable {
                 self.dataset = DataSet::Filtered(matching_fields);
                 return Ok(LoadDataResult::FullyLoaded);
             }
-            //info!("scan_conditions:{:?}",scan_conditions);
-            // exact match case
             return self.hget_exact(conn, key_prefix, &pattern);
         }
 
-        // no pattern — fallback
         self.hgetall_all(conn, key_prefix)
     }
 
+    #[allow(dead_code)]
     fn hget_exact(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -77,7 +75,7 @@ impl RedisHashTable {
         }
     }
 
-    /// Helper: Fetch multiple fields
+    #[allow(dead_code)]
     fn hmget_fields(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -100,7 +98,7 @@ impl RedisHashTable {
         Ok(LoadDataResult::FullyLoaded)
     }
 
-    /// Helper: Load full hash
+    #[allow(dead_code)]
     fn hgetall_all(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -155,14 +153,9 @@ impl RedisTableOperations for RedisHashTable {
         &self.dataset
     }
 
-    fn get_dataset_mut(&mut self) -> &mut DataSet {
-        &mut self.dataset
-    }
-
     /// Override the default get_row implementation to handle hash-specific filtered data format
     #[inline]
     fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
-        //info!("Getting row for hash table self: {:?}", self);
         match &self.dataset {
             DataSet::Filtered(data) => {
                 // Hash filtered data is stored as [key1, value1, key2, value2, ...]
@@ -269,5 +262,99 @@ impl RedisTableOperations for RedisHashTable {
             operator,
             ComparisonOperator::Equal | ComparisonOperator::In | ComparisonOperator::Like
         )
+    }
+
+    fn load_batch(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        cursor: u64,
+        batch_size: usize,
+        conditions: Option<&[PushableCondition]>,
+    ) -> Result<(u64, usize), redis::RedisError> {
+        // Only apply conditions on the field/key column (first column) to Redis
+        // Value column conditions must be handled by PG post-filter
+        let field_conditions: Option<Vec<&PushableCondition>> =
+            conditions.map(|conds| conds.iter().filter(|c| c.column_name != "value").collect());
+        let field_conds: Option<&[&PushableCondition]> = field_conditions.as_deref();
+
+        let mut cmd = redis::cmd("HSCAN");
+        cmd.arg(key_prefix).arg(cursor);
+
+        // Apply LIKE condition as MATCH pattern for server-side filtering
+        let like_pattern = field_conds.and_then(|conds| {
+            conds.iter().find_map(|c| {
+                if c.operator == ComparisonOperator::Like {
+                    Some(PatternMatcher::from_like_pattern(&c.value))
+                } else {
+                    None
+                }
+            })
+        });
+        if let Some(ref matcher) = like_pattern {
+            cmd.arg("MATCH").arg(matcher.get_pattern());
+        }
+        cmd.arg("COUNT").arg(batch_size);
+
+        let (new_cursor, pairs): (u64, Vec<(String, String)>) = cmd.query(conn)?;
+
+        // Apply field conditions as client-side post-filter
+        // Note: Only the first LIKE condition was used for server-side MATCH;
+        // all other conditions (including additional LIKEs) must be verified here
+        let filtered: Vec<(String, String)> = if let Some(conds) = field_conds {
+            if conds.is_empty() {
+                pairs
+            } else {
+                let first_like_value = conds.iter().find_map(|c| {
+                    if c.operator == ComparisonOperator::Like {
+                        Some(&c.value)
+                    } else {
+                        None
+                    }
+                });
+                let extra_like_matchers: Vec<(&str, PatternMatcher)> = conds
+                    .iter()
+                    .filter(|c| {
+                        c.operator == ComparisonOperator::Like && Some(&c.value) != first_like_value
+                    })
+                    .map(|c| {
+                        (
+                            c.value.as_str(),
+                            PatternMatcher::from_like_pattern(&c.value),
+                        )
+                    })
+                    .collect();
+                pairs
+                    .into_iter()
+                    .filter(|(field, _)| {
+                        conds.iter().all(|c| match c.operator {
+                            ComparisonOperator::Equal => field == &c.value,
+                            ComparisonOperator::NotEqual => field != &c.value,
+                            ComparisonOperator::Like => {
+                                if Some(&c.value) == first_like_value {
+                                    true // handled by MATCH
+                                } else {
+                                    extra_like_matchers
+                                        .iter()
+                                        .find(|(v, _)| *v == c.value.as_str())
+                                        .is_some_and(|(_, m)| m.matches(field))
+                                }
+                            }
+                            _ => true,
+                        })
+                    })
+                    .collect()
+            }
+        } else {
+            pairs
+        };
+
+        let row_count = filtered.len();
+        self.dataset = if filtered.is_empty() {
+            DataSet::Empty
+        } else {
+            DataSet::Complete(DataContainer::Hash(filtered))
+        };
+        Ok((new_cursor, row_count))
     }
 }

@@ -34,7 +34,6 @@ mod tests {
     }
 
     // Integration tests with real Redis server
-    #[allow(dead_code)]
     fn setup_redis_connection() -> redis::Connection {
         let client =
             redis::Client::open("redis://127.0.0.1:8899/").expect("Failed to create Redis client");
@@ -43,7 +42,6 @@ mod tests {
             .expect("Failed to connect to Redis server")
     }
 
-    #[allow(dead_code)]
     fn cleanup_test_stream(conn: &mut redis::Connection, key: &str) {
         let _: Result<(), redis::RedisError> = redis::cmd("DEL").arg(key).query(conn);
     }

@@ -5,7 +5,6 @@
 use crate::{
     core::{
         connection_factory::{RedisConnectionConfig, RedisConnectionFactory},
-        data_loader::RedisDataLoader,
         pool_manager::PooledConnection,
     },
     query::{
@@ -32,6 +31,12 @@ pub struct RedisFdwState {
     pub pushdown_analysis: Option<PushdownAnalysis>,
     /// Cached cost estimate for query planning
     pub cost_estimate: Option<CostEstimate>,
+    /// Streaming state: Redis SCAN cursor position (0 = start, returned 0 = done)
+    pub scan_cursor: u64,
+    /// Whether we've completed the full scan (cursor returned 0)
+    pub scan_complete: bool,
+    /// Batch size for streaming (configurable via table option)
+    pub batch_size: usize,
 }
 
 impl RedisFdwState {
@@ -48,6 +53,9 @@ impl RedisFdwState {
             key_attno: 0,
             pushdown_analysis: None,
             cost_estimate: None,
+            scan_cursor: 0,
+            scan_complete: false,
+            batch_size: 1000,
         }
     }
 
@@ -90,9 +98,15 @@ impl RedisFdwState {
         if let Some(prefix) = self.opts.get("table_key_prefix") {
             self.table_key_prefix = prefix.clone();
         }
+
+        if let Some(bs) = self.opts.get("batch_size") {
+            if let Ok(size) = bs.parse::<usize>() {
+                self.batch_size = size.clamp(100, 100_000);
+            }
+        }
     }
 
-    /// Set table type and load data using the data loader
+    /// Set table type and prepare for streaming iteration
     pub fn set_table_type(&mut self) {
         let table_type = self
             .opts
@@ -100,29 +114,55 @@ impl RedisFdwState {
             .expect("`table_type` option is required for redis_fdw");
 
         self.table_type = RedisTableType::from_str(table_type);
-
-        // Load data using the data loader
-        let _ = self.load_data();
     }
 
-    /// Load data using the dedicated data loader
-    fn load_data(&mut self) -> Result<(), String> {
-        if let Some(ref mut conn) = self.redis_connection {
-            let mut data_loader = RedisDataLoader::new(
-                &mut self.table_type,
-                &self.table_key_prefix,
-                self.pushdown_analysis.as_ref(),
-            );
-            data_loader.load_data(conn)
-        } else {
-            Err("Redis connection not initialized".to_string())
+    /// Fetch the next batch of data using cursor-based iteration.
+    /// Returns true if more data was loaded, false if scan is complete.
+    /// Note: Redis SCAN can return 0 elements with a non-zero cursor, so we must loop until we get data or the cursor returns to 0.
+    pub fn fetch_next_batch(&mut self) -> bool {
+        if self.scan_complete {
+            return false;
         }
-    }
 
-    /// Reload data for rescan operations (e.g., nested loop joins)
-    /// Always re-fetches to ensure correctness for parameterized rescans
-    pub fn reload_data(&mut self) -> Result<(), String> {
-        self.load_data()
+        if let Some(ref mut conn) = self.redis_connection {
+            let conn_like = conn.as_connection_like_mut();
+            let conditions = self.pushdown_analysis.as_ref().and_then(|a| {
+                if a.has_optimizations() {
+                    Some(a.pushable_conditions.as_slice())
+                } else {
+                    None
+                }
+            });
+
+            loop {
+                match self.table_type.load_batch(
+                    conn_like,
+                    &self.table_key_prefix,
+                    self.scan_cursor,
+                    self.batch_size,
+                    conditions,
+                ) {
+                    Ok((new_cursor, rows_loaded)) => {
+                        self.scan_cursor = new_cursor;
+                        if new_cursor == 0 {
+                            self.scan_complete = true;
+                        }
+                        if rows_loaded > 0 {
+                            return true;
+                        }
+                        if self.scan_complete {
+                            return false;
+                        }
+                    }
+                    Err(e) => {
+                        pgrx::error!("Redis error during batch fetch: {}", e);
+                    }
+                }
+            }
+        } else {
+            self.scan_complete = true;
+            false
+        }
     }
 
     /// Set pushdown analysis from planner
@@ -153,7 +193,7 @@ impl RedisFdwState {
                 .insert(conn_like, &self.table_key_prefix, data)
         } else {
             Err(redis::RedisError::from((
-                redis::ErrorKind::IoError,
+                redis::ErrorKind::Io,
                 "Redis connection not initialized",
             )))
         }
@@ -167,7 +207,7 @@ impl RedisFdwState {
                 .delete(conn_like, &self.table_key_prefix, data)
         } else {
             Err(redis::RedisError::from((
-                redis::ErrorKind::IoError,
+                redis::ErrorKind::Io,
                 "Redis connection not initialized",
             )))
         }
@@ -185,7 +225,7 @@ impl RedisFdwState {
                 .update(conn_like, &self.table_key_prefix, old_data, new_data)
         } else {
             Err(redis::RedisError::from((
-                redis::ErrorKind::IoError,
+                redis::ErrorKind::Io,
                 "Redis connection not initialized",
             )))
         }

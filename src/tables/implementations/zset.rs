@@ -4,7 +4,7 @@ use crate::{
     query::{
         limit::LimitOffsetInfo,
         pushdown_types::{ComparisonOperator, PushableCondition},
-        scan_ops::{extract_scan_conditions, RedisScanBuilder, ScanConditions},
+        scan_ops::{extract_scan_conditions, PatternMatcher, RedisScanBuilder, ScanConditions},
     },
     tables::{
         interface::RedisTableOperations,
@@ -25,6 +25,7 @@ impl RedisZSetTable {
         }
     }
 
+    #[allow(dead_code)]
     fn load_with_scan_optimization(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -272,10 +273,6 @@ impl RedisTableOperations for RedisZSetTable {
         &self.dataset
     }
 
-    fn get_dataset_mut(&mut self) -> &mut DataSet {
-        &mut self.dataset
-    }
-
     /// Override the default get_row implementation to handle zset-specific filtered data format
     #[inline]
     fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
@@ -366,7 +363,7 @@ impl RedisTableOperations for RedisZSetTable {
                 .parse()
                 .map_err(|e: std::num::ParseFloatError| {
                     redis::RedisError::from((
-                        redis::ErrorKind::TypeError,
+                        redis::ErrorKind::InvalidClientConfig,
                         "Invalid score format",
                         e.to_string(),
                     ))
@@ -404,5 +401,104 @@ impl RedisTableOperations for RedisZSetTable {
             operator,
             ComparisonOperator::Equal | ComparisonOperator::In | ComparisonOperator::Like
         )
+    }
+
+    fn load_batch(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        cursor: u64,
+        batch_size: usize,
+        conditions: Option<&[PushableCondition]>,
+    ) -> Result<(u64, usize), redis::RedisError> {
+        // Filter out score conditions — Redis ZSCAN can only match on member names
+        let member_conditions: Option<Vec<&PushableCondition>> =
+            conditions.map(|conds| conds.iter().filter(|c| c.column_name != "score").collect());
+        let member_conds: Option<&[&PushableCondition]> = member_conditions.as_deref();
+
+        let mut cmd = redis::cmd("ZSCAN");
+        cmd.arg(key_prefix).arg(cursor);
+
+        // Apply LIKE condition as MATCH pattern for server-side filtering
+        let like_pattern = member_conds.and_then(|conds| {
+            conds.iter().find_map(|c| {
+                if c.operator == ComparisonOperator::Like {
+                    Some(PatternMatcher::from_like_pattern(&c.value))
+                } else {
+                    None
+                }
+            })
+        });
+        if let Some(ref matcher) = like_pattern {
+            cmd.arg("MATCH").arg(matcher.get_pattern());
+        }
+        cmd.arg("COUNT").arg(batch_size);
+
+        let (new_cursor, flat_data): (u64, Vec<String>) = cmd.query(conn)?;
+
+        // Apply member conditions as client-side post-filter
+        // Note: Only the first LIKE condition was used for server-side MATCH;
+        // all other conditions (including additional LIKEs) must be verified here
+        let filtered: Vec<String> = if let Some(conds) = member_conds {
+            if conds.is_empty() {
+                flat_data
+            } else {
+                let first_like_value = conds.iter().find_map(|c| {
+                    if c.operator == ComparisonOperator::Like {
+                        Some(&c.value)
+                    } else {
+                        None
+                    }
+                });
+                let extra_like_matchers: Vec<(&str, PatternMatcher)> = conds
+                    .iter()
+                    .filter(|c| {
+                        c.operator == ComparisonOperator::Like && Some(&c.value) != first_like_value
+                    })
+                    .map(|c| {
+                        (
+                            c.value.as_str(),
+                            PatternMatcher::from_like_pattern(&c.value),
+                        )
+                    })
+                    .collect();
+                flat_data
+                    .chunks(2)
+                    .filter(|chunk| {
+                        if chunk.len() == 2 {
+                            let member = &chunk[0];
+                            conds.iter().all(|c| match c.operator {
+                                ComparisonOperator::Equal => member == &c.value,
+                                ComparisonOperator::NotEqual => member != &c.value,
+                                ComparisonOperator::Like => {
+                                    if Some(&c.value) == first_like_value {
+                                        true // handled by MATCH
+                                    } else {
+                                        extra_like_matchers
+                                            .iter()
+                                            .find(|(v, _)| *v == c.value.as_str())
+                                            .is_some_and(|(_, m)| m.matches(member))
+                                    }
+                                }
+                                _ => true,
+                            })
+                        } else {
+                            false
+                        }
+                    })
+                    .flat_map(|chunk| chunk.iter().cloned())
+                    .collect()
+            }
+        } else {
+            flat_data
+        };
+
+        let row_count = filtered.len() / 2;
+        self.dataset = if filtered.is_empty() {
+            DataSet::Empty
+        } else {
+            DataSet::Filtered(filtered)
+        };
+        Ok((new_cursor, row_count))
     }
 }

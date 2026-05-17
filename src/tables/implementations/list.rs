@@ -2,7 +2,7 @@ use crate::{
     query::{
         limit::LimitOffsetInfo,
         pushdown_types::{ComparisonOperator, PushableCondition},
-        scan_ops::{extract_scan_conditions, ScanConditions},
+        scan_ops::{extract_scan_conditions, PatternMatcher, ScanConditions},
     },
     tables::{
         interface::RedisTableOperations,
@@ -23,6 +23,7 @@ impl RedisListTable {
         }
     }
 
+    #[allow(dead_code)]
     fn load_with_pattern_optimization(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -192,10 +193,6 @@ impl RedisTableOperations for RedisListTable {
         &self.dataset
     }
 
-    fn get_dataset_mut(&mut self) -> &mut DataSet {
-        &mut self.dataset
-    }
-
     fn insert(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -275,5 +272,62 @@ impl RedisTableOperations for RedisListTable {
             operator,
             ComparisonOperator::Equal | ComparisonOperator::Like
         )
+    }
+
+    fn load_batch(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        cursor: u64,
+        batch_size: usize,
+        conditions: Option<&[PushableCondition]>,
+    ) -> Result<(u64, usize), redis::RedisError> {
+        // Lists use offset-based pagination (cursor = offset index)
+        let start = cursor as isize;
+        let end = start + (batch_size as isize) - 1;
+        let data: Vec<String> = redis::cmd("LRANGE")
+            .arg(key_prefix)
+            .arg(start)
+            .arg(end)
+            .query(conn)?;
+        let row_count = data.len();
+        let new_cursor = if row_count < batch_size {
+            0 // no more data
+        } else {
+            cursor + row_count as u64
+        };
+
+        // Apply conditions as client-side post-filter (no LSCAN in Redis)
+        let filtered: Vec<String> = if let Some(conds) = conditions {
+            let like_matchers: Vec<(usize, PatternMatcher)> = conds
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.operator == ComparisonOperator::Like)
+                .map(|(i, c)| (i, PatternMatcher::from_like_pattern(&c.value)))
+                .collect();
+            data.into_iter()
+                .filter(|item| {
+                    conds.iter().enumerate().all(|(i, c)| match c.operator {
+                        ComparisonOperator::Equal => item == &c.value,
+                        ComparisonOperator::NotEqual => item != &c.value,
+                        ComparisonOperator::Like => like_matchers
+                            .iter()
+                            .find(|(idx, _)| *idx == i)
+                            .is_some_and(|(_, m)| m.matches(item)),
+                        _ => true,
+                    })
+                })
+                .collect()
+        } else {
+            data
+        };
+
+        let filtered_count = filtered.len();
+        self.dataset = if filtered.is_empty() {
+            DataSet::Empty
+        } else {
+            DataSet::Complete(DataContainer::List(filtered))
+        };
+        Ok((new_cursor, filtered_count))
     }
 }

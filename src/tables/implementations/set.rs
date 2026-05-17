@@ -23,6 +23,7 @@ impl RedisSetTable {
         }
     }
 
+    #[allow(dead_code)]
     fn match_equal(
         &self,
         conn: &mut dyn redis::ConnectionLike,
@@ -37,6 +38,7 @@ impl RedisSetTable {
         })
     }
 
+    #[allow(dead_code)]
     fn match_in(
         &self,
         conn: &mut dyn redis::ConnectionLike,
@@ -98,6 +100,7 @@ impl RedisSetTable {
         }
     }
 
+    #[allow(dead_code)]
     fn match_like(
         &self,
         conn: &mut dyn redis::ConnectionLike,
@@ -116,6 +119,7 @@ impl RedisSetTable {
         }
     }
 
+    #[allow(dead_code)]
     fn all_members(
         &self,
         conn: &mut dyn redis::ConnectionLike,
@@ -124,7 +128,7 @@ impl RedisSetTable {
         redis::cmd("SMEMBERS").arg(key).query(conn)
     }
 
-    /// Load data with SSCAN optimization for pattern matching
+    #[allow(dead_code)]
     fn apply_conditions(
         &self,
         conn: &mut dyn redis::ConnectionLike,
@@ -200,10 +204,6 @@ impl RedisTableOperations for RedisSetTable {
         &self.dataset
     }
 
-    fn get_dataset_mut(&mut self) -> &mut DataSet {
-        &mut self.dataset
-    }
-
     fn insert(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -258,5 +258,93 @@ impl RedisTableOperations for RedisSetTable {
             operator,
             ComparisonOperator::Equal | ComparisonOperator::In | ComparisonOperator::Like
         )
+    }
+
+    fn load_batch(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key: &str,
+        cursor: u64,
+        batch_size: usize,
+        conditions: Option<&[PushableCondition]>,
+    ) -> Result<(u64, usize), redis::RedisError> {
+        let mut cmd = redis::cmd("SSCAN");
+        cmd.arg(key).arg(cursor);
+
+        // Apply LIKE condition as MATCH pattern for server-side filtering
+        let like_pattern = conditions.and_then(|conds| {
+            conds.iter().find_map(|c| {
+                if c.operator == ComparisonOperator::Like {
+                    Some(PatternMatcher::from_like_pattern(&c.value))
+                } else {
+                    None
+                }
+            })
+        });
+        if let Some(ref matcher) = like_pattern {
+            cmd.arg("MATCH").arg(matcher.get_pattern());
+        }
+        cmd.arg("COUNT").arg(batch_size);
+
+        let (new_cursor, members): (u64, Vec<String>) = cmd.query(conn)?;
+
+        // Apply conditions as client-side post-filter
+        // Note: Only the first LIKE condition was used for server-side MATCH;
+        // all other conditions (including additional LIKEs) must be verified here
+        let filtered: Vec<String> = if let Some(conds) = conditions {
+            if conds.is_empty() {
+                members
+            } else {
+                let first_like_value = conds.iter().find_map(|c| {
+                    if c.operator == ComparisonOperator::Like {
+                        Some(&c.value)
+                    } else {
+                        None
+                    }
+                });
+                let extra_like_matchers: Vec<(&str, PatternMatcher)> = conds
+                    .iter()
+                    .filter(|c| {
+                        c.operator == ComparisonOperator::Like && Some(&c.value) != first_like_value
+                    })
+                    .map(|c| {
+                        (
+                            c.value.as_str(),
+                            PatternMatcher::from_like_pattern(&c.value),
+                        )
+                    })
+                    .collect();
+                members
+                    .into_iter()
+                    .filter(|member| {
+                        conds.iter().all(|c| match c.operator {
+                            ComparisonOperator::Equal => member == &c.value,
+                            ComparisonOperator::NotEqual => member != &c.value,
+                            ComparisonOperator::Like => {
+                                if Some(&c.value) == first_like_value {
+                                    true // handled by MATCH
+                                } else {
+                                    extra_like_matchers
+                                        .iter()
+                                        .find(|(v, _)| *v == c.value.as_str())
+                                        .is_some_and(|(_, m)| m.matches(member))
+                                }
+                            }
+                            _ => true,
+                        })
+                    })
+                    .collect()
+            }
+        } else {
+            members
+        };
+
+        let row_count = filtered.len();
+        self.dataset = if filtered.is_empty() {
+            DataSet::Empty
+        } else {
+            DataSet::Filtered(filtered)
+        };
+        Ok((new_cursor, row_count))
     }
 }

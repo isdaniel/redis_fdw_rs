@@ -220,9 +220,7 @@ impl<'a> CostEstimator<'a> {
                 if let Ok(db_size) = cmd("DBSIZE").query::<u64>(conn) {
                     if count == 0 {
                         // No matches in sample but DB is non-empty — use minimum selectivity
-                        return Some(
-                            (db_size as f64 * costs::MIN_SCAN_SELECTIVITY).max(1.0) as u64
-                        );
+                        return Some((db_size as f64 * costs::MIN_SCAN_SELECTIVITY).max(1.0) as u64);
                     }
                     let sample_ratio = count as f64 / sample_size as f64;
                     Some((db_size as f64 * sample_ratio).max(count as f64) as u64)
