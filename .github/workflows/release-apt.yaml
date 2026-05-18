@@ -2,30 +2,39 @@ name: Release APT Packages
 
 on:
   push:
-    tags:
-      - 'v*' 
+    branches:
+      - main
 
 permissions:
   contents: write
   pages: write
 
 jobs:
-  verify-main:
+  check-tag:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_tag.outputs.version }}
+      has_tag: ${{ steps.get_tag.outputs.has_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Verify tag is on main branch
+      - name: Check for version tag
+        id: get_tag
         run: |
-          if ! git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
-            echo "ERROR: APT release only allowed from main branch"
-            exit 1
+          TAG=$(git describe --exact-match --tags HEAD 2>/dev/null || echo "")
+          if [[ "$TAG" =~ ^v ]]; then
+            echo "has_tag=true" >> $GITHUB_OUTPUT
+            echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+          else
+            echo "has_tag=false" >> $GITHUB_OUTPUT
+            echo "version=" >> $GITHUB_OUTPUT
           fi
 
   build-deb:
-    needs: verify-main
+    needs: check-tag
+    if: needs.check-tag.outputs.has_tag == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -39,8 +48,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set extension version from tag
-        run: echo "EXT_VER=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+      - name: Set extension version
+        run: echo "EXT_VER=${{ needs.check-tag.outputs.version }}" >> $GITHUB_ENV
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
