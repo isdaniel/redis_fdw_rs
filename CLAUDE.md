@@ -8,7 +8,7 @@ PostgreSQL Foreign Data Wrapper (FDW) extension written in Rust that exposes Red
 
 ```bash
 # Build (debug)
-cargo build
+cargo build 
 
 # Build (release)
 cargo build --release
