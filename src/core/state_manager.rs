@@ -397,6 +397,11 @@ impl RedisFdwState {
                 .arg("COUNT")
                 .arg(self.batch_size);
 
+            let scan_type = self.table_type.redis_type_name();
+            if !scan_type.is_empty() {
+                cmd.arg("TYPE").arg(scan_type);
+            }
+
             let (new_cursor, keys): (u64, Vec<String>) = match cmd.query(conn) {
                 Ok(result) => result,
                 Err(e) => {
@@ -552,7 +557,11 @@ impl RedisFdwState {
                     }
                 }
             }
-            RedisTableType::Stream(_) | RedisTableType::None => {}
+            RedisTableType::Stream(_) => {
+                log!("WARNING: multi-key mode is not supported for stream tables");
+                return 0;
+            }
+            RedisTableType::None => {}
         }
 
         let cols_per_row = self.multi_key_columns_per_row();

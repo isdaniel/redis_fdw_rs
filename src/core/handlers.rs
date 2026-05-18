@@ -24,7 +24,7 @@ unsafe fn detect_ttl_column(tupdesc: pg_sys::TupleDesc) -> Option<usize> {
     for i in 0..natts {
         let attr = tuple_desc_attr(tupdesc, i);
         let name = pgrx::name_data_to_str(&(*attr).attname);
-        if name == "ttl" {
+        if name.eq_ignore_ascii_case("ttl") {
             return Some(i);
         }
     }

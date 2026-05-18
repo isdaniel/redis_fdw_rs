@@ -134,6 +134,19 @@ impl RedisTableType {
         }
     }
 
+    /// Redis TYPE name for SCAN TYPE filter (Redis 6.0+)
+    pub fn redis_type_name(&self) -> &'static str {
+        match self {
+            RedisTableType::String(_) => "string",
+            RedisTableType::Hash(_) => "hash",
+            RedisTableType::List(_) => "list",
+            RedisTableType::Set(_) => "set",
+            RedisTableType::ZSet(_) => "zset",
+            RedisTableType::Stream(_) => "stream",
+            RedisTableType::None => "",
+        }
+    }
+
     /// Get a reference to the dataset (for multi-key mode)
     pub fn get_dataset_ref(&self) -> &DataSet {
         match self {

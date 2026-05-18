@@ -92,9 +92,12 @@ fn validate_server_options(opts: &HashMap<String, String>) {
     }
 
     for key in opts.keys() {
-        if !KNOWN_SERVER_OPTIONS.contains(&key.as_str())
-            && !KNOWN_TABLE_OPTIONS.contains(&key.as_str())
-        {
+        if KNOWN_TABLE_OPTIONS.contains(&key.as_str()) {
+            warning!(
+                "redis_fdw: option \"{}\" is a table option, not a server option",
+                key
+            );
+        } else if !KNOWN_SERVER_OPTIONS.contains(&key.as_str()) {
             warning!("redis_fdw: unrecognized server option \"{}\"", key);
         }
     }
@@ -142,9 +145,12 @@ fn validate_table_options(opts: &HashMap<String, String>) {
     }
 
     for key in opts.keys() {
-        if !KNOWN_TABLE_OPTIONS.contains(&key.as_str())
-            && !KNOWN_SERVER_OPTIONS.contains(&key.as_str())
-        {
+        if KNOWN_SERVER_OPTIONS.contains(&key.as_str()) {
+            warning!(
+                "redis_fdw: option \"{}\" is a server option, not a table option",
+                key
+            );
+        } else if !KNOWN_TABLE_OPTIONS.contains(&key.as_str()) {
             warning!("redis_fdw: unrecognized table option \"{}\"", key);
         }
     }
