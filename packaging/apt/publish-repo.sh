@@ -19,7 +19,7 @@ sed "s/__GPG_KEY_ID__/${GPG_KEY_ID}/g" \
     "${SCRIPT_DIR}/distributions.template" > "${REPO_DIR}/conf/distributions"
 
 # Include all debs in all supported codenames
-CODENAMES="jammy noble bullseye bookworm"
+CODENAMES="${CODENAMES:-jammy noble bullseye bookworm}"
 for codename in ${CODENAMES}; do
     for deb in "${DEB_DIR}"/*.deb; do
         reprepro -b "${REPO_DIR}" includedeb "${codename}" "${deb}"

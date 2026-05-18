@@ -17,7 +17,7 @@ echo "==> Testing installation of ${DEB_FILE} with PostgreSQL ${PG_VER}"
 
 docker run --rm \
     -v "$(pwd)/${DEB_FILE}:/tmp/test.deb:ro" \
-    ubuntu:22.04 bash -c "
+    "${TEST_IMAGE:-ubuntu:22.04}" bash -c "
         set -euo pipefail
         apt-get update
         apt-get install -y wget gnupg2 lsb-release

@@ -8,6 +8,14 @@ REPO_URL="__REPO_URL__"
 
 echo "==> Installing redis_fdw_rs PostgreSQL extension"
 
+# Check dependencies
+for cmd in curl gpg; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo "ERROR: '$cmd' is not installed. Please install it and try again." >&2
+        exit 1
+    fi
+done
+
 # Detect distro codename
 if [ -f /etc/os-release ]; then
     . /etc/os-release

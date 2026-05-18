@@ -43,7 +43,7 @@ curl -fsSL https://isdaniel.github.io/redis_fdw_rs/gpg.key | \
 
 # Add repository (auto-detects your distro)
 echo "deb [signed-by=/etc/apt/keyrings/redis-fdw-rs.gpg] \
-  https://isdaniel.github.io/redis_fdw_rs $(lsb_release -cs) main" | \
+  https://isdaniel.github.io/redis_fdw_rs $(. /etc/os-release && echo $VERSION_CODENAME) main" | \
   sudo tee /etc/apt/sources.list.d/redis-fdw-rs.list
 
 # Install (replace 16 with your PostgreSQL version)
