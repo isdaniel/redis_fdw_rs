@@ -328,8 +328,7 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
         }
     } else {
         let ttl_value = if state.ttl_column_index.is_some() {
-            let key = state.table_key_prefix.clone();
-            Some(state.read_ttl(&key))
+            Some(state.read_ttl(&state.table_key_prefix.clone()))
         } else {
             None
         };
@@ -390,6 +389,8 @@ extern "C-unwind" fn re_scan_foreign_scan(node: *mut pgrx::pg_sys::ForeignScanSt
         state.row_count = 0;
         state.scan_cursor = 0;
         state.scan_complete = false;
+        state.cached_ttl = None;
+        state.multi_key_ttl_cache.clear();
         state.table_type.clear_data();
     }
 }

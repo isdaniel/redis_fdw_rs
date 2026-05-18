@@ -45,6 +45,8 @@ pub struct RedisFdwState {
     pub is_multi_key: bool,
     /// Cached TTL value for single-key mode (avoids repeated TTL calls per row)
     pub cached_ttl: Option<i64>,
+    /// Cached TTL values for multi-key mode (batch-fetched via pipeline)
+    pub multi_key_ttl_cache: HashMap<String, i64>,
 }
 
 impl RedisFdwState {
@@ -68,6 +70,7 @@ impl RedisFdwState {
             default_ttl: None,
             is_multi_key: false,
             cached_ttl: None,
+            multi_key_ttl_cache: HashMap::new(),
         }
     }
 
@@ -412,6 +415,24 @@ impl RedisFdwState {
                 continue;
             }
 
+            // Batch-fetch TTLs for the scanned keys if TTL column is present
+            if self.ttl_column_index.is_some() {
+                let mut pipe = redis::pipe();
+                for key in &keys {
+                    pipe.cmd("TTL").arg(key);
+                }
+                let ttls: Vec<i64> = match pipe.query(conn) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log!("WARNING: Redis pipeline TTL error: {}", e);
+                        vec![-2; keys.len()]
+                    }
+                };
+                for (key, ttl) in keys.iter().zip(ttls) {
+                    self.multi_key_ttl_cache.insert(key.clone(), ttl);
+                }
+            }
+
             let rows = self.load_multi_key_data(conn, &keys);
             if rows > 0 {
                 return true;
@@ -424,6 +445,7 @@ impl RedisFdwState {
     }
 
     /// Load data for multiple keys and store as flat filtered data.
+    /// Uses Redis pipelining for batch operations to minimize network round-trips.
     fn load_multi_key_data(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -448,15 +470,18 @@ impl RedisFdwState {
                 }
             }
             RedisTableType::Hash(_) => {
+                let mut pipe = redis::pipe();
                 for key in keys {
-                    let pairs: Vec<(String, String)> =
-                        match redis::cmd("HGETALL").arg(key).query(conn) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                log!("WARNING: Redis HGETALL error for key '{}': {}", key, e);
-                                continue;
-                            }
-                        };
+                    pipe.cmd("HGETALL").arg(key);
+                }
+                let results: Vec<Vec<(String, String)>> = match pipe.query(conn) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log!("WARNING: Redis pipeline HGETALL error: {}", e);
+                        return 0;
+                    }
+                };
+                for (key, pairs) in keys.iter().zip(results) {
                     for (field, value) in pairs {
                         all_rows.push(key.clone());
                         all_rows.push(field);
@@ -465,19 +490,18 @@ impl RedisFdwState {
                 }
             }
             RedisTableType::List(_) => {
+                let mut pipe = redis::pipe();
                 for key in keys {
-                    let items: Vec<String> = match redis::cmd("LRANGE")
-                        .arg(key)
-                        .arg(0i64)
-                        .arg(-1i64)
-                        .query(conn)
-                    {
-                        Ok(v) => v,
-                        Err(e) => {
-                            log!("WARNING: Redis LRANGE error for key '{}': {}", key, e);
-                            continue;
-                        }
-                    };
+                    pipe.cmd("LRANGE").arg(key).arg(0i64).arg(-1i64);
+                }
+                let results: Vec<Vec<String>> = match pipe.query(conn) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log!("WARNING: Redis pipeline LRANGE error: {}", e);
+                        return 0;
+                    }
+                };
+                for (key, items) in keys.iter().zip(results) {
                     for item in items {
                         all_rows.push(key.clone());
                         all_rows.push(item);
@@ -485,14 +509,18 @@ impl RedisFdwState {
                 }
             }
             RedisTableType::Set(_) => {
+                let mut pipe = redis::pipe();
                 for key in keys {
-                    let members: Vec<String> = match redis::cmd("SMEMBERS").arg(key).query(conn) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            log!("WARNING: Redis SMEMBERS error for key '{}': {}", key, e);
-                            continue;
-                        }
-                    };
+                    pipe.cmd("SMEMBERS").arg(key);
+                }
+                let results: Vec<Vec<String>> = match pipe.query(conn) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log!("WARNING: Redis pipeline SMEMBERS error: {}", e);
+                        return 0;
+                    }
+                };
+                for (key, members) in keys.iter().zip(results) {
                     for member in members {
                         all_rows.push(key.clone());
                         all_rows.push(member);
@@ -500,20 +528,22 @@ impl RedisFdwState {
                 }
             }
             RedisTableType::ZSet(_) => {
+                let mut pipe = redis::pipe();
                 for key in keys {
-                    let items: Vec<(String, f64)> = match redis::cmd("ZRANGE")
+                    pipe.cmd("ZRANGE")
                         .arg(key)
                         .arg(0i64)
                         .arg(-1i64)
-                        .arg("WITHSCORES")
-                        .query(conn)
-                    {
-                        Ok(v) => v,
-                        Err(e) => {
-                            log!("WARNING: Redis ZRANGE error for key '{}': {}", key, e);
-                            continue;
-                        }
-                    };
+                        .arg("WITHSCORES");
+                }
+                let results: Vec<Vec<(String, f64)>> = match pipe.query(conn) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log!("WARNING: Redis pipeline ZRANGE error: {}", e);
+                        return 0;
+                    }
+                };
+                for (key, items) in keys.iter().zip(results) {
                     for (member, score) in items {
                         all_rows.push(key.clone());
                         all_rows.push(score.to_string());
@@ -576,11 +606,14 @@ impl RedisFdwState {
     }
 
     /// Read the current TTL for a key. Caches in single-key mode.
+    /// In multi-key mode, uses pre-fetched cache from `batch_read_ttls`.
     pub fn read_ttl(&mut self, key: &str) -> i64 {
         if !self.is_multi_key {
             if let Some(cached) = self.cached_ttl {
                 return cached;
             }
+        } else if let Some(&cached) = self.multi_key_ttl_cache.get(key) {
+            return cached;
         }
 
         let ttl = if let Some(ref mut conn) = self.redis_connection {
