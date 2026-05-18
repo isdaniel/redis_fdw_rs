@@ -43,3 +43,12 @@ pub mod streaming_modify_tests;
 
 #[cfg(any(test, feature = "pg_test"))]
 pub mod pushdown_verification_tests;
+
+#[cfg(any(test, feature = "pg_test"))]
+pub mod validation_tests;
+
+#[cfg(any(test, feature = "pg_test"))]
+pub mod ttl_tests;
+
+#[cfg(any(test, feature = "pg_test"))]
+pub mod multi_key_tests;

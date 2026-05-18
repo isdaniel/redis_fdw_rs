@@ -19,6 +19,7 @@ mod tests;
 
 // Re-export the main FDW handler function for PostgreSQL
 pub use core::handlers::redis_fdw_handler;
+pub use core::validator::redis_fdw_validator_wrapper;
 
 ::pgrx::pg_module_magic!(name, version);
 

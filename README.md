@@ -11,6 +11,9 @@ A high-performance Redis Foreign Data Wrapper (FDW) for PostgreSQL written in Ru
 - **Redis data types support**: Hash, List, Set, ZSet, String, and Stream (with varying levels of implementation)
 - **Redis Streams support**: Full implementation with large data set handling, pagination, and time-based queries
 - **Large data set optimization**: Configurable batch processing and streaming access for Redis Streams
+- **TTL support**: Table-level default TTL via OPTIONS + per-row override via virtual `ttl` column
+- **Multi-key pattern queries**: Auto-detect glob patterns (`*`, `?`, `[`) in `table_key_prefix` to query multiple Redis keys
+- **DDL-time option validation**: FDW validator function checks all options at CREATE time
 - **Supported operations**: SELECT, INSERT, UPDATE, DELETE (UPDATE supported for all types except Stream)
 - **Connection management** and memory optimization
 - **Built with Rust** for memory safety and performance
@@ -269,7 +272,8 @@ OPTIONS (
 ### 1. Create Foreign Data Wrapper
 ```sql
 CREATE FOREIGN DATA WRAPPER redis_wrapper 
-HANDLER redis_fdw_handler;
+HANDLER redis_fdw_handler
+VALIDATOR redis_fdw_validator;
 ```
 
 ### 2. Create Server
@@ -331,6 +335,83 @@ SELECT * FROM user_sessions WHERE field = 'user123';
 ```
 
 ## Supported Redis Data Types (Usage Examples)
+
+### TTL Support
+
+Redis FDW supports key expiration (TTL) at both table level and per-row level:
+
+```sql
+-- Table-level default TTL (all keys expire after 3600 seconds)
+CREATE FOREIGN TABLE cached_data (value text) 
+SERVER redis_server
+OPTIONS (
+    database '0',
+    table_type 'string',
+    table_key_prefix 'cache:item1',
+    ttl '3600'
+);
+
+-- Per-row TTL override via a virtual `ttl` column (bigint)
+CREATE FOREIGN TABLE cached_items (value text, ttl bigint) 
+SERVER redis_server
+OPTIONS (
+    database '0',
+    table_type 'string',
+    table_key_prefix 'cache:item2',
+    ttl '3600'
+);
+
+-- Insert with custom TTL (overrides table default)
+INSERT INTO cached_items VALUES ('short-lived', 60);
+
+-- Remove TTL (persist key forever) by setting ttl = -1
+UPDATE cached_items SET value = 'permanent', ttl = -1;
+
+-- SELECT shows remaining TTL in the ttl column
+SELECT value, ttl FROM cached_items;
+```
+
+**TTL Behavior:**
+- `ttl` table option sets the default expiration (seconds) applied on INSERT/UPDATE
+- A `ttl bigint` column allows per-row override: positive = seconds, -1 = persist, NULL = use default
+- On SELECT, the `ttl` column shows the remaining time-to-live (-1 = no expiry, -2 = key missing)
+
+### Multi-Key Pattern Queries
+
+When `table_key_prefix` contains glob characters (`*`, `?`, `[`), the FDW automatically enters multi-key mode and scans matching keys:
+
+```sql
+-- Query all keys matching the pattern user:*
+CREATE FOREIGN TABLE all_users (key text, value text) 
+SERVER redis_server
+OPTIONS (
+    database '0',
+    table_type 'string',
+    table_key_prefix 'user:*'
+);
+
+-- SELECT returns rows from all matching keys
+SELECT * FROM all_users;
+--  key       | value
+-- -----------+-------
+--  user:1    | alice
+--  user:2    | bob
+
+-- INSERT creates a new key
+INSERT INTO all_users VALUES ('user:3', 'charlie');
+
+-- DELETE removes the entire Redis key
+DELETE FROM all_users WHERE key = 'user:2';
+```
+
+**Multi-key columns per type:**
+| Table Type | Columns |
+|-----------|---------|
+| String | key, value |
+| Hash | key, field, value |
+| List | key, element |
+| Set | key, member |
+| ZSet | key, score, member |
 
 ### Table Type Characteristics
 

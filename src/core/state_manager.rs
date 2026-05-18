@@ -37,6 +37,16 @@ pub struct RedisFdwState {
     pub scan_complete: bool,
     /// Batch size for streaming (configurable via table option)
     pub batch_size: usize,
+    /// Column index of the `ttl` column in the tuple descriptor (None = no ttl column)
+    pub ttl_column_index: Option<usize>,
+    /// Default TTL from table OPTIONS (None = no default)
+    pub default_ttl: Option<i64>,
+    /// Whether this table operates in multi-key mode (glob pattern in table_key_prefix)
+    pub is_multi_key: bool,
+    /// Cached TTL value for single-key mode (avoids repeated TTL calls per row)
+    pub cached_ttl: Option<i64>,
+    /// Cached TTL values for multi-key mode (batch-fetched via pipeline)
+    pub multi_key_ttl_cache: HashMap<String, i64>,
 }
 
 impl RedisFdwState {
@@ -56,6 +66,11 @@ impl RedisFdwState {
             scan_cursor: 0,
             scan_complete: false,
             batch_size: 1000,
+            ttl_column_index: None,
+            default_ttl: None,
+            is_multi_key: false,
+            cached_ttl: None,
+            multi_key_ttl_cache: HashMap::new(),
         }
     }
 
@@ -104,6 +119,16 @@ impl RedisFdwState {
                 self.batch_size = size.clamp(100, 100_000);
             }
         }
+
+        if let Some(ttl_str) = self.opts.get("ttl") {
+            if let Ok(ttl) = ttl_str.parse::<i64>() {
+                if ttl > 0 || ttl == -1 {
+                    self.default_ttl = Some(ttl);
+                }
+            }
+        }
+
+        self.is_multi_key = is_multi_key_pattern(&self.table_key_prefix);
     }
 
     /// Set table type and prepare for streaming iteration
@@ -122,6 +147,10 @@ impl RedisFdwState {
     pub fn fetch_next_batch(&mut self) -> bool {
         if self.scan_complete {
             return false;
+        }
+
+        if self.is_multi_key {
+            return self.fetch_next_batch_multi_key();
         }
 
         // Determine strategy before borrowing connection
@@ -245,7 +274,18 @@ impl RedisFdwState {
 
     /// Get the total number of data items
     pub fn data_len(&self) -> usize {
-        self.table_type.data_len()
+        if self.is_multi_key {
+            let cols = self.multi_key_columns_per_row();
+            if cols == 0 {
+                return 0;
+            }
+            if let Some(filtered) = self.table_type.get_dataset_ref().as_filtered() {
+                return filtered.len() / cols;
+            }
+            0
+        } else {
+            self.table_type.data_len()
+        }
     }
 
     /// Insert data using the appropriate table type
@@ -326,4 +366,307 @@ impl RedisFdwState {
             estimator.estimate_without_connection()
         }
     }
+
+    /// Fetch next batch in multi-key mode using top-level SCAN.
+    fn fetch_next_batch_multi_key(&mut self) -> bool {
+        // Take connection out temporarily to avoid borrow conflicts
+        let mut conn = match self.redis_connection.take() {
+            Some(c) => c,
+            None => {
+                self.scan_complete = true;
+                return false;
+            }
+        };
+
+        let result = self.fetch_multi_key_with_conn(conn.as_connection_like_mut());
+
+        // Put connection back
+        self.redis_connection = Some(conn);
+        result
+    }
+
+    fn fetch_multi_key_with_conn(&mut self, conn: &mut dyn redis::ConnectionLike) -> bool {
+        loop {
+            pgrx::check_for_interrupts!();
+
+            let mut cmd = redis::cmd("SCAN");
+            cmd.arg(self.scan_cursor)
+                .arg("MATCH")
+                .arg(&self.table_key_prefix)
+                .arg("COUNT")
+                .arg(self.batch_size);
+
+            let (new_cursor, keys): (u64, Vec<String>) = match cmd.query(conn) {
+                Ok(result) => result,
+                Err(e) => {
+                    pgrx::error!("Redis error during multi-key SCAN: {}", e);
+                }
+            };
+
+            self.scan_cursor = new_cursor;
+            if new_cursor == 0 {
+                self.scan_complete = true;
+            }
+
+            if keys.is_empty() {
+                if self.scan_complete {
+                    return false;
+                }
+                continue;
+            }
+
+            // Batch-fetch TTLs for the scanned keys if TTL column is present
+            if self.ttl_column_index.is_some() {
+                let mut pipe = redis::pipe();
+                for key in &keys {
+                    pipe.cmd("TTL").arg(key);
+                }
+                let ttls: Vec<i64> = match pipe.query(conn) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log!("WARNING: Redis pipeline TTL error: {}", e);
+                        vec![-2; keys.len()]
+                    }
+                };
+                for (key, ttl) in keys.iter().zip(ttls) {
+                    self.multi_key_ttl_cache.insert(key.clone(), ttl);
+                }
+            }
+
+            let rows = self.load_multi_key_data(conn, &keys);
+            if rows > 0 {
+                return true;
+            }
+
+            if self.scan_complete {
+                return false;
+            }
+        }
+    }
+
+    /// Load data for multiple keys and store as flat filtered data.
+    /// Uses Redis pipelining for batch operations to minimize network round-trips.
+    fn load_multi_key_data(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        keys: &[String],
+    ) -> usize {
+        let mut all_rows: Vec<String> = Vec::new();
+
+        match &self.table_type {
+            RedisTableType::String(_) => {
+                let values: Vec<Option<String>> = match redis::cmd("MGET").arg(keys).query(conn) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log!("WARNING: Redis MGET error: {}", e);
+                        return 0;
+                    }
+                };
+                for (key, value) in keys.iter().zip(values) {
+                    if let Some(v) = value {
+                        all_rows.push(key.clone());
+                        all_rows.push(v);
+                    }
+                }
+            }
+            RedisTableType::Hash(_) => {
+                let mut pipe = redis::pipe();
+                for key in keys {
+                    pipe.cmd("HGETALL").arg(key);
+                }
+                let results: Vec<Vec<(String, String)>> = match pipe.query(conn) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log!("WARNING: Redis pipeline HGETALL error: {}", e);
+                        return 0;
+                    }
+                };
+                for (key, pairs) in keys.iter().zip(results) {
+                    for (field, value) in pairs {
+                        all_rows.push(key.clone());
+                        all_rows.push(field);
+                        all_rows.push(value);
+                    }
+                }
+            }
+            RedisTableType::List(_) => {
+                let mut pipe = redis::pipe();
+                for key in keys {
+                    pipe.cmd("LRANGE").arg(key).arg(0i64).arg(-1i64);
+                }
+                let results: Vec<Vec<String>> = match pipe.query(conn) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log!("WARNING: Redis pipeline LRANGE error: {}", e);
+                        return 0;
+                    }
+                };
+                for (key, items) in keys.iter().zip(results) {
+                    for item in items {
+                        all_rows.push(key.clone());
+                        all_rows.push(item);
+                    }
+                }
+            }
+            RedisTableType::Set(_) => {
+                let mut pipe = redis::pipe();
+                for key in keys {
+                    pipe.cmd("SMEMBERS").arg(key);
+                }
+                let results: Vec<Vec<String>> = match pipe.query(conn) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log!("WARNING: Redis pipeline SMEMBERS error: {}", e);
+                        return 0;
+                    }
+                };
+                for (key, members) in keys.iter().zip(results) {
+                    for member in members {
+                        all_rows.push(key.clone());
+                        all_rows.push(member);
+                    }
+                }
+            }
+            RedisTableType::ZSet(_) => {
+                let mut pipe = redis::pipe();
+                for key in keys {
+                    pipe.cmd("ZRANGE")
+                        .arg(key)
+                        .arg(0i64)
+                        .arg(-1i64)
+                        .arg("WITHSCORES");
+                }
+                let results: Vec<Vec<(String, f64)>> = match pipe.query(conn) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log!("WARNING: Redis pipeline ZRANGE error: {}", e);
+                        return 0;
+                    }
+                };
+                for (key, items) in keys.iter().zip(results) {
+                    for (member, score) in items {
+                        all_rows.push(key.clone());
+                        all_rows.push(score.to_string());
+                        all_rows.push(member);
+                    }
+                }
+            }
+            RedisTableType::Stream(_) | RedisTableType::None => {}
+        }
+
+        let cols_per_row = self.multi_key_columns_per_row();
+        let row_count = all_rows.len().checked_div(cols_per_row).unwrap_or(0);
+
+        if !all_rows.is_empty() {
+            self.table_type.set_multi_key_data(all_rows);
+        }
+        row_count
+    }
+
+    /// Number of columns per row in multi-key mode (including the key column)
+    pub fn multi_key_columns_per_row(&self) -> usize {
+        match &self.table_type {
+            RedisTableType::String(_) => 2,
+            RedisTableType::Hash(_) => 3,
+            RedisTableType::List(_) => 2,
+            RedisTableType::Set(_) => 2,
+            RedisTableType::ZSet(_) => 3,
+            RedisTableType::Stream(_) => 4,
+            RedisTableType::None => 0,
+        }
+    }
+
+    /// Apply TTL to a Redis key based on per-row value or table default.
+    pub fn apply_ttl(&mut self, key: &str, row_ttl: Option<i64>) {
+        let effective_ttl = match row_ttl {
+            Some(0) => return,
+            Some(t) => t,
+            None => match self.default_ttl {
+                Some(t) => t,
+                None => return,
+            },
+        };
+
+        if let Some(ref mut conn) = self.redis_connection {
+            let conn_like = conn.as_connection_like_mut();
+            if effective_ttl > 0 {
+                if let Err(e) = redis::cmd("EXPIRE")
+                    .arg(key)
+                    .arg(effective_ttl)
+                    .query::<()>(conn_like)
+                {
+                    log!("WARNING: Failed to set EXPIRE on key '{}': {}", key, e);
+                }
+            } else if effective_ttl == -1 {
+                if let Err(e) = redis::cmd("PERSIST").arg(key).query::<()>(conn_like) {
+                    log!("WARNING: Failed to PERSIST key '{}': {}", key, e);
+                }
+            }
+        }
+    }
+
+    /// Read the current TTL for a key. Caches in single-key mode.
+    /// In multi-key mode, uses pre-fetched cache from `batch_read_ttls`.
+    pub fn read_ttl(&mut self, key: &str) -> i64 {
+        if !self.is_multi_key {
+            if let Some(cached) = self.cached_ttl {
+                return cached;
+            }
+        } else if let Some(&cached) = self.multi_key_ttl_cache.get(key) {
+            return cached;
+        }
+
+        let ttl = if let Some(ref mut conn) = self.redis_connection {
+            let conn_like = conn.as_connection_like_mut();
+            redis::cmd("TTL")
+                .arg(key)
+                .query::<i64>(conn_like)
+                .unwrap_or(-2)
+        } else {
+            -2
+        };
+
+        if !self.is_multi_key {
+            self.cached_ttl = Some(ttl);
+        }
+        ttl
+    }
+
+    /// Insert data to a specific key (used in multi-key mode)
+    pub fn insert_data_to_key(
+        &mut self,
+        key: &str,
+        data: &[String],
+    ) -> Result<(), redis::RedisError> {
+        if let Some(conn) = self.redis_connection.as_mut() {
+            let conn_like = conn.as_connection_like_mut();
+            self.table_type.insert(conn_like, key, data)
+        } else {
+            Err(redis::RedisError::from((
+                redis::ErrorKind::Io,
+                "Redis connection not initialized",
+            )))
+        }
+    }
+
+    pub fn update_data_to_key(
+        &mut self,
+        key: &str,
+        old_data: &[String],
+        new_data: &[String],
+    ) -> Result<(), redis::RedisError> {
+        if let Some(conn) = self.redis_connection.as_mut() {
+            let conn_like = conn.as_connection_like_mut();
+            self.table_type.update(conn_like, key, old_data, new_data)
+        } else {
+            Err(redis::RedisError::from((
+                redis::ErrorKind::Io,
+                "Redis connection not initialized",
+            )))
+        }
+    }
+}
+
+pub fn is_multi_key_pattern(prefix: &str) -> bool {
+    prefix.contains('*') || prefix.contains('?') || prefix.contains('[')
 }
