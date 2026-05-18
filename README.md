@@ -26,7 +26,43 @@ A high-performance Redis Foreign Data Wrapper (FDW) for PostgreSQL written in Ru
 
 ## Installation
 
-### Quick Start with Docker
+### Install via APT (Recommended)
+
+**Quick Install** (auto-detects PostgreSQL version):
+
+```bash
+curl -fsSL https://isdaniel.github.io/redis_fdw_rs/install.sh | sudo bash
+```
+
+**Manual Install:**
+
+```bash
+# Add GPG key
+curl -fsSL https://isdaniel.github.io/redis_fdw_rs/gpg.key | \
+  sudo gpg --dearmor -o /etc/apt/keyrings/redis-fdw-rs.gpg
+
+# Add repository (auto-detects your distro)
+echo "deb [signed-by=/etc/apt/keyrings/redis-fdw-rs.gpg] \
+  https://isdaniel.github.io/redis_fdw_rs $(lsb_release -cs) main" | \
+  sudo tee /etc/apt/sources.list.d/redis-fdw-rs.list
+
+# Install (replace 16 with your PostgreSQL version)
+sudo apt update
+sudo apt install postgresql-16-redis-fdw-rs
+```
+
+**Supported Platforms:**
+
+| OS | Codename | Architectures |
+|----|----------|---------------|
+| Ubuntu 22.04 | jammy | amd64, arm64 |
+| Ubuntu 24.04 | noble | amd64, arm64 |
+| Debian 11 | bullseye | amd64, arm64 |
+| Debian 12 | bookworm | amd64, arm64 |
+
+PostgreSQL versions: 14, 15, 16, 17, 18
+
+### Build from Source with Docker
 
 1. **Start Redis server:**
 
