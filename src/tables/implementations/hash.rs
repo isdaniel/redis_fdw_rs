@@ -117,7 +117,7 @@ impl RedisTableOperations for RedisHashTable {
         if let Some(conditions) = conditions {
             let scan_conditions = extract_scan_conditions(conditions);
 
-            if scan_conditions.has_optimizable_conditions() {
+            if !scan_conditions.pattern_conditions.is_empty() {
                 return self.load_with_scan_optimization(
                     conn,
                     key_prefix,
@@ -126,7 +126,6 @@ impl RedisTableOperations for RedisHashTable {
                 );
             }
 
-            // legacy non-pattern pushdowns
             if let Some(first) = conditions.first() {
                 match first.operator {
                     ComparisonOperator::Equal => {

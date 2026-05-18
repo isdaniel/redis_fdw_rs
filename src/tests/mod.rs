@@ -40,3 +40,6 @@ pub mod update_tests;
 
 #[cfg(any(test, feature = "pg_test"))]
 pub mod streaming_modify_tests;
+
+#[cfg(any(test, feature = "pg_test"))]
+pub mod pushdown_verification_tests;

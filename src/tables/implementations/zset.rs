@@ -133,8 +133,7 @@ impl RedisTableOperations for RedisZSetTable {
             if !member_conditions.is_empty() {
                 let scan_conditions = extract_scan_conditions(&member_conditions);
 
-                // Check for SCAN-optimizable conditions first
-                if scan_conditions.has_optimizable_conditions() {
+                if !scan_conditions.pattern_conditions.is_empty() {
                     return self.load_with_scan_optimization(
                         conn,
                         key_prefix,

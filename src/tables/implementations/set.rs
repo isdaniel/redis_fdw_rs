@@ -171,7 +171,7 @@ impl RedisTableOperations for RedisSetTable {
         let members = if let Some(conds) = conditions {
             let scan_conditions = extract_scan_conditions(conds);
 
-            if scan_conditions.has_optimizable_conditions() {
+            if !scan_conditions.pattern_conditions.is_empty() {
                 let pattern = scan_conditions.get_primary_pattern().unwrap();
                 self.match_like(conn, key, &pattern, limit_offset)?
             } else {
