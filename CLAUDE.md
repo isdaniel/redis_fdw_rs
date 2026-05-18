@@ -2,13 +2,13 @@
 
 ## Project Overview
 
-PostgreSQL Foreign Data Wrapper (FDW) extension written in Rust that exposes Redis data as PostgreSQL tables. Built with **pgrx 0.16.1**, supports PostgreSQL 14-17, Redis standalone and cluster modes.
+PostgreSQL Foreign Data Wrapper (FDW) extension written in Rust that exposes Redis data as PostgreSQL tables. Built with **pgrx 0.18.0**, supports PostgreSQL 14-18, Redis standalone and cluster modes.
 
 ## Build & Test Commands
 
 ```bash
 # Build (debug)
-cargo build
+cargo build 
 
 # Build (release)
 cargo build --release
@@ -20,6 +20,7 @@ cargo pgrx test pg14
 cargo pgrx test pg15
 cargo pgrx test pg16
 cargo pgrx test pg17
+cargo pgrx test pg18
 
 # Install extension into PG
 cargo pgrx install --release
@@ -88,12 +89,13 @@ Stream is append-only; UPDATE returns an error at the trait level and `IsForeign
 
 ## CI/CD
 
-- `.github/workflows/ci.yaml` — Build + test on push/PR (PG14-17 matrix)
-- `.github/workflows/release.yaml` — Auto-release on `v*` tag push, builds packages for PG14-17
+- `.github/workflows/ci.yaml` — Build + test on push/PR (PG14-18 matrix)
+- `.github/workflows/release.yaml` — Auto-release on `v*` tag push, builds packages for PG14-18
+- `.github/workflows/release-apt.yaml` — APT package release on `v*` tag (main branch only), PG14-18 × amd64/arm64
 
 ## Common Gotchas
 
-- pgrx version must match exactly: `cargo-pgrx 0.16.1` ↔ `pgrx = "=0.16.1"`
+- pgrx version must match exactly: `cargo-pgrx 0.18.0` ↔ `pgrx = "=0.18.0"`
 - `IsForeignRelUpdatable` uses CmdType bit positions: CMD_UPDATE=2, CMD_INSERT=3, CMD_DELETE=4 → bitmask is `(1<<CmdType)`
 - Memory contexts: FDW state lives in a custom `MemoryContext` created per scan/modify operation
 - `PgBox::from_pg()` does NOT take ownership — the memory is still managed by PG

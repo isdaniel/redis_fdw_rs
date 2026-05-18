@@ -1,0 +1,9 @@
+Package: postgresql-__PG_VER__-redis-fdw-rs
+Version: __VERSION__-1
+Architecture: __ARCH__
+Depends: postgresql-__PG_VER__
+Maintainer: Daniel Shih <dog830228@gmail.com>
+Section: database
+Priority: optional
+Description: PostgreSQL Foreign Data Wrapper for Redis (Rust) Exposes Redis data structures (string, hash, list, set, zset, stream) as PostgreSQL foreign tables. Supports standalone and cluster modes.
+Homepage: https://github.com/danielshih/redis_fdw_rs
