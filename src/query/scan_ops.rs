@@ -98,7 +98,7 @@ impl ScanConfig {
             ScanType::ZSetScan => ScanConfig {
                 command_name: "ZSCAN",
                 requires_key: true,
-                limit_multiply_size: 1,
+                limit_multiply_size: 2,
                 default_error_msg: "ZSet key is required for ZSCAN",
             },
         }
@@ -211,23 +211,16 @@ impl RedisScanBuilder {
                 cmd.arg("MATCH").arg(pattern);
             }
 
-            // Add COUNT for most scan types (ZSCAN has special handling)
-            if self.scan_type != ScanType::ZSetScan {
-                cmd.arg("COUNT").arg(Self::SCAN_DEFAULT_COUNT);
-            }
+            // Add COUNT for scan pagination
+            cmd.arg("COUNT").arg(Self::SCAN_DEFAULT_COUNT);
 
             let (new_cursor, results): (u64, Vec<T>) = cmd.query(conn)?;
 
-            // Handle limit checking - ZSCAN doesn't apply limit during scanning
-            if self.scan_type == ScanType::ZSetScan {
-                collected_results.extend(results);
-            } else {
-                for item in results {
-                    if collected_results.len() < limit {
-                        collected_results.push(item);
-                    } else {
-                        return Ok(collected_results);
-                    }
+            for item in results {
+                if collected_results.len() < limit {
+                    collected_results.push(item);
+                } else {
+                    return Ok(collected_results);
                 }
             }
 

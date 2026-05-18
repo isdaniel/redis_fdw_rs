@@ -320,6 +320,7 @@ impl RedisTableOperations for RedisSetTable {
                         conds.iter().all(|c| match c.operator {
                             ComparisonOperator::Equal => member == &c.value,
                             ComparisonOperator::NotEqual => member != &c.value,
+                            ComparisonOperator::In => c.value.split(',').any(|v| v == member),
                             ComparisonOperator::Like => {
                                 if Some(&c.value) == first_like_value {
                                     true // handled by MATCH

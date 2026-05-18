@@ -330,6 +330,7 @@ impl RedisTableOperations for RedisHashTable {
                         conds.iter().all(|c| match c.operator {
                             ComparisonOperator::Equal => field == &c.value,
                             ComparisonOperator::NotEqual => field != &c.value,
+                            ComparisonOperator::In => c.value.split(',').any(|v| v == field),
                             ComparisonOperator::Like => {
                                 if Some(&c.value) == first_like_value {
                                     true // handled by MATCH
