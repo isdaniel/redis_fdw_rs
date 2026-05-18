@@ -526,6 +526,14 @@ unsafe extern "C-unwind" fn exec_foreign_insert(
         }
         let key = data[0].clone();
         let row_data = &data[1..];
+        let required_cols = state.multi_key_columns_per_row() - 1;
+        if row_data.len() < required_cols {
+            error!(
+                "Multi-key INSERT requires {} data columns, got {}",
+                required_cols,
+                row_data.len()
+            );
+        }
         if let Err(e) = state.insert_data_to_key(&key, row_data) {
             error!("Failed to insert data to key '{}': {:?}", key, e);
         }

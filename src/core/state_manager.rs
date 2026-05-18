@@ -386,6 +386,7 @@ impl RedisFdwState {
     }
 
     fn fetch_multi_key_with_conn(&mut self, conn: &mut dyn redis::ConnectionLike) -> bool {
+        self.multi_key_ttl_cache.clear();
         loop {
             pgrx::check_for_interrupts!();
 
