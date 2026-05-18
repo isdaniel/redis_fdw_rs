@@ -493,11 +493,7 @@ impl RedisFdwState {
         }
 
         let cols_per_row = self.multi_key_columns_per_row();
-        let row_count = if cols_per_row > 0 {
-            all_rows.len() / cols_per_row
-        } else {
-            0
-        };
+        let row_count = all_rows.len().checked_div(cols_per_row).unwrap_or(0);
 
         if !all_rows.is_empty() {
             self.table_type.set_multi_key_data(all_rows);
@@ -532,12 +528,17 @@ impl RedisFdwState {
         if let Some(ref mut conn) = self.redis_connection {
             let conn_like = conn.as_connection_like_mut();
             if effective_ttl > 0 {
-                let _: Result<(), _> = redis::cmd("EXPIRE")
+                if let Err(e) = redis::cmd("EXPIRE")
                     .arg(key)
                     .arg(effective_ttl)
-                    .query(conn_like);
+                    .query::<()>(conn_like)
+                {
+                    log!("WARNING: Failed to set EXPIRE on key '{}': {}", key, e);
+                }
             } else if effective_ttl == -1 {
-                let _: Result<(), _> = redis::cmd("PERSIST").arg(key).query(conn_like);
+                if let Err(e) = redis::cmd("PERSIST").arg(key).query::<()>(conn_like) {
+                    log!("WARNING: Failed to PERSIST key '{}': {}", key, e);
+                }
             }
         }
     }
@@ -575,6 +576,23 @@ impl RedisFdwState {
         if let Some(conn) = self.redis_connection.as_mut() {
             let conn_like = conn.as_connection_like_mut();
             self.table_type.insert(conn_like, key, data)
+        } else {
+            Err(redis::RedisError::from((
+                redis::ErrorKind::Io,
+                "Redis connection not initialized",
+            )))
+        }
+    }
+
+    pub fn update_data_to_key(
+        &mut self,
+        key: &str,
+        old_data: &[String],
+        new_data: &[String],
+    ) -> Result<(), redis::RedisError> {
+        if let Some(conn) = self.redis_connection.as_mut() {
+            let conn_like = conn.as_connection_like_mut();
+            self.table_type.update(conn_like, key, old_data, new_data)
         } else {
             Err(redis::RedisError::from((
                 redis::ErrorKind::Io,

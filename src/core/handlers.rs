@@ -569,13 +569,20 @@ unsafe extern "C-unwind" fn exec_foreign_update(
 
     log!("Update: old_key={:?}, new_data={:?}", old_key, new_data);
 
-    if let Err(e) = state.update_data(std::slice::from_ref(&old_key), &new_data) {
-        error!("Failed to update data: {:?}", e);
+    if state.is_multi_key {
+        if let Err(e) =
+            state.update_data_to_key(&old_key, std::slice::from_ref(&old_key), &new_data)
+        {
+            error!("Failed to update data for key '{}': {:?}", old_key, e);
+        }
+        state.apply_ttl(&old_key, row_ttl);
+    } else {
+        if let Err(e) = state.update_data(std::slice::from_ref(&old_key), &new_data) {
+            error!("Failed to update data: {:?}", e);
+        }
+        let key = state.table_key_prefix.clone();
+        state.apply_ttl(&key, row_ttl);
     }
-
-    // Apply TTL after successful update
-    let key = state.table_key_prefix.clone();
-    state.apply_ttl(&key, row_ttl);
 
     (*slot).tts_tableOid = pgrx::pg_sys::InvalidOid;
     slot
