@@ -21,8 +21,8 @@ pgrx::extension_sql!(
 );
 
 /// Raw C wrapper for the FDW validator.
-/// PostgreSQL's FDW VALIDATOR mechanism expects (text[], oid) at SQL level
-/// but actually passes a List* of DefElem* as the first datum at C level.
+/// PostgreSQL converts the options list to a text[] array (key=value format)
+/// before calling our function, matching the (text[], oid) SQL signature.
 #[no_mangle]
 #[pg_guard]
 pub unsafe extern "C-unwind" fn redis_fdw_validator_wrapper(

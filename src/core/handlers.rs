@@ -296,17 +296,27 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
         let dataset = state.table_type.get_dataset_ref();
         if let Some(flat_data) = dataset.as_filtered() {
             if row_offset + cols_per_row <= flat_data.len() {
-                // Clone the row slice to release the borrow on state
-                let row_slice: Vec<String> =
-                    flat_data[row_offset..row_offset + cols_per_row].to_vec();
+                let key = flat_data[row_offset].clone();
+                let ttl_value = if state.ttl_column_index.is_some() {
+                    Some(state.read_ttl(&key))
+                } else {
+                    None
+                };
+
+                let dataset = state.table_type.get_dataset_ref();
+                let flat_data = dataset.as_filtered().unwrap();
                 let mut data_idx = 0;
                 for col_idx in 0..natts {
                     if state.ttl_column_index == Some(col_idx) {
-                        let key = &row_slice[0]; // first col is always the key
-                        let ttl_value = state.read_ttl(key);
-                        write_datum_to_slot(slot, tupdesc, col_idx, &ttl_value.to_string());
+                        let ttl_str = ttl_value.unwrap().to_string();
+                        write_datum_to_slot(slot, tupdesc, col_idx, &ttl_str);
                     } else if data_idx < cols_per_row {
-                        write_datum_to_slot(slot, tupdesc, col_idx, &row_slice[data_idx]);
+                        write_datum_to_slot(
+                            slot,
+                            tupdesc,
+                            col_idx,
+                            &flat_data[row_offset + data_idx],
+                        );
                         data_idx += 1;
                     }
                 }
@@ -316,25 +326,31 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
         } else {
             return slot;
         }
-    } else if let Some(row_data) = state.get_row(state.row_count as usize) {
-        let row_data: Vec<String> = row_data.iter().map(|c| c.to_string()).collect();
-        let mut data_idx = 0;
-        for col_idx in 0..natts {
-            if state.ttl_column_index == Some(col_idx) {
-                let key = state.table_key_prefix.clone();
-                let ttl_value = state.read_ttl(&key);
-                write_datum_to_slot(slot, tupdesc, col_idx, &ttl_value.to_string());
-            } else if data_idx < row_data.len() {
-                write_datum_to_slot(slot, tupdesc, col_idx, &row_data[data_idx]);
-                data_idx += 1;
-            }
-        }
     } else {
-        error!(
-            "Failed to get row data at index: {} (data_len={})",
-            state.row_count,
-            state.data_len()
-        );
+        let ttl_value = if state.ttl_column_index.is_some() {
+            let key = state.table_key_prefix.clone();
+            Some(state.read_ttl(&key))
+        } else {
+            None
+        };
+        if let Some(row_data) = state.get_row(state.row_count as usize) {
+            let mut data_idx = 0;
+            for col_idx in 0..natts {
+                if state.ttl_column_index == Some(col_idx) {
+                    let val = ttl_value.unwrap_or(-2);
+                    write_datum_to_slot(slot, tupdesc, col_idx, &val.to_string());
+                } else if data_idx < row_data.len() {
+                    write_datum_to_slot(slot, tupdesc, col_idx, row_data[data_idx].as_ref());
+                    data_idx += 1;
+                }
+            }
+        } else {
+            error!(
+                "Failed to get row data at index: {} (data_len={})",
+                state.row_count,
+                state.data_len()
+            );
+        }
     }
 
     state.row_count += 1;
@@ -487,13 +503,11 @@ unsafe extern "C-unwind" fn exec_foreign_insert(
                 s.parse::<i64>().ok()
             }
         });
-        let filtered: Vec<String> = all_data
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i != ttl_idx)
-            .map(|(_, v)| v.clone())
-            .collect();
-        (filtered, ttl_val)
+        let mut data = all_data;
+        if ttl_idx < data.len() {
+            data.remove(ttl_idx);
+        }
+        (data, ttl_val)
     } else {
         (all_data, None)
     };
@@ -556,13 +570,11 @@ unsafe extern "C-unwind" fn exec_foreign_update(
                 s.parse::<i64>().ok()
             }
         });
-        let filtered: Vec<String> = all_new_data
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i != ttl_idx)
-            .map(|(_, v)| v.clone())
-            .collect();
-        (filtered, ttl_val)
+        let mut data = all_new_data;
+        if ttl_idx < data.len() {
+            data.remove(ttl_idx);
+        }
+        (data, ttl_val)
     } else {
         (all_new_data, None)
     };
