@@ -597,12 +597,23 @@ unsafe extern "C-unwind" fn exec_foreign_update(
     log!("Update: old_key={:?}, new_data={:?}", old_key, new_data);
 
     if state.is_multi_key {
-        if let Err(e) =
-            state.update_data_to_key(&old_key, std::slice::from_ref(&old_key), &new_data)
-        {
-            error!("Failed to update data for key '{}': {:?}", old_key, e);
+        if new_data.is_empty() {
+            error!("Multi-key UPDATE requires at least a key column");
         }
-        state.apply_ttl(&old_key, row_ttl);
+        let key = new_data[0].clone();
+        let row_data = &new_data[1..];
+        let required_cols = state.multi_key_columns_per_row() - 1;
+        if row_data.len() < required_cols {
+            error!(
+                "Multi-key UPDATE requires {} data columns, got {}",
+                required_cols,
+                row_data.len()
+            );
+        }
+        if let Err(e) = state.update_data_to_key(&key, std::slice::from_ref(&old_key), row_data) {
+            error!("Failed to update data for key '{}': {:?}", key, e);
+        }
+        state.apply_ttl(&key, row_ttl);
     } else {
         if let Err(e) = state.update_data(std::slice::from_ref(&old_key), &new_data) {
             error!("Failed to update data: {:?}", e);

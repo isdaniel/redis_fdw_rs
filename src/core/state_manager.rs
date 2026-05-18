@@ -457,15 +457,15 @@ impl RedisFdwState {
         conn: &mut dyn redis::ConnectionLike,
         keys: &[String],
     ) -> usize {
-        let mut all_rows: Vec<String> = Vec::new();
+        let mut all_rows: Vec<String> =
+            Vec::with_capacity(keys.len() * self.multi_key_columns_per_row());
 
         match &self.table_type {
             RedisTableType::String(_) => {
                 let values: Vec<Option<String>> = match redis::cmd("MGET").arg(keys).query(conn) {
                     Ok(v) => v,
                     Err(e) => {
-                        log!("WARNING: Redis MGET error: {}", e);
-                        return 0;
+                        pgrx::error!("Redis MGET error: {}", e);
                     }
                 };
                 for (key, value) in keys.iter().zip(values) {
@@ -483,8 +483,7 @@ impl RedisFdwState {
                 let results: Vec<Vec<(String, String)>> = match pipe.query(conn) {
                     Ok(v) => v,
                     Err(e) => {
-                        log!("WARNING: Redis pipeline HGETALL error: {}", e);
-                        return 0;
+                        pgrx::error!("Redis pipeline HGETALL error: {}", e);
                     }
                 };
                 for (key, pairs) in keys.iter().zip(results) {
@@ -503,8 +502,7 @@ impl RedisFdwState {
                 let results: Vec<Vec<String>> = match pipe.query(conn) {
                     Ok(v) => v,
                     Err(e) => {
-                        log!("WARNING: Redis pipeline LRANGE error: {}", e);
-                        return 0;
+                        pgrx::error!("Redis pipeline LRANGE error: {}", e);
                     }
                 };
                 for (key, items) in keys.iter().zip(results) {
@@ -522,8 +520,7 @@ impl RedisFdwState {
                 let results: Vec<Vec<String>> = match pipe.query(conn) {
                     Ok(v) => v,
                     Err(e) => {
-                        log!("WARNING: Redis pipeline SMEMBERS error: {}", e);
-                        return 0;
+                        pgrx::error!("Redis pipeline SMEMBERS error: {}", e);
                     }
                 };
                 for (key, members) in keys.iter().zip(results) {
@@ -545,8 +542,7 @@ impl RedisFdwState {
                 let results: Vec<Vec<(String, f64)>> = match pipe.query(conn) {
                     Ok(v) => v,
                     Err(e) => {
-                        log!("WARNING: Redis pipeline ZRANGE error: {}", e);
-                        return 0;
+                        pgrx::error!("Redis pipeline ZRANGE error: {}", e);
                     }
                 };
                 for (key, items) in keys.iter().zip(results) {
