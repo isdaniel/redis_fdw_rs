@@ -3,7 +3,7 @@ name: Release APT Packages
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*' 
 
 permissions:
   contents: write
@@ -19,7 +19,7 @@ jobs:
 
       - name: Verify tag is on main branch
         run: |
-          if ! git branch --contains "${{ github.sha }}" | grep -qw main; then
+          if ! git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
             echo "ERROR: APT release only allowed from main branch"
             exit 1
           fi
