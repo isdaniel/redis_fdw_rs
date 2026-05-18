@@ -26,7 +26,6 @@ impl RedisHashTable {
     }
 
     #[allow(dead_code)]
-    /// Load data with HSCAN optimization for pattern matching
     fn load_with_scan_optimization(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -152,10 +151,6 @@ impl RedisTableOperations for RedisHashTable {
 
     fn get_dataset(&self) -> &DataSet {
         &self.dataset
-    }
-
-    fn get_dataset_mut(&mut self) -> &mut DataSet {
-        &mut self.dataset
     }
 
     /// Override the default get_row implementation to handle hash-specific filtered data format
@@ -317,6 +312,18 @@ impl RedisTableOperations for RedisHashTable {
                         None
                     }
                 });
+                let extra_like_matchers: Vec<(&str, PatternMatcher)> = conds
+                    .iter()
+                    .filter(|c| {
+                        c.operator == ComparisonOperator::Like && Some(&c.value) != first_like_value
+                    })
+                    .map(|c| {
+                        (
+                            c.value.as_str(),
+                            PatternMatcher::from_like_pattern(&c.value),
+                        )
+                    })
+                    .collect();
                 pairs
                     .into_iter()
                     .filter(|(field, _)| {
@@ -327,7 +334,10 @@ impl RedisTableOperations for RedisHashTable {
                                 if Some(&c.value) == first_like_value {
                                     true // handled by MATCH
                                 } else {
-                                    PatternMatcher::from_like_pattern(&c.value).matches(field)
+                                    extra_like_matchers
+                                        .iter()
+                                        .find(|(v, _)| *v == c.value.as_str())
+                                        .is_some_and(|(_, m)| m.matches(field))
                                 }
                             }
                             _ => true,

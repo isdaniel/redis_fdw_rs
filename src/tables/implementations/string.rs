@@ -140,10 +140,6 @@ impl RedisTableOperations for RedisStringTable {
         &self.dataset
     }
 
-    fn get_dataset_mut(&mut self) -> &mut DataSet {
-        &mut self.dataset
-    }
-
     fn insert(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -200,12 +196,19 @@ impl RedisTableOperations for RedisStringTable {
         // Apply conditions client-side on the single value
         let value = value.filter(|v| {
             conditions.is_none_or(|conds| {
-                conds.iter().all(|c| match c.operator {
+                let like_matchers: Vec<(usize, PatternMatcher)> = conds
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.operator == ComparisonOperator::Like)
+                    .map(|(i, c)| (i, PatternMatcher::from_like_pattern(&c.value)))
+                    .collect();
+                conds.iter().enumerate().all(|(i, c)| match c.operator {
                     ComparisonOperator::Equal => v == &c.value,
                     ComparisonOperator::NotEqual => v != &c.value,
-                    ComparisonOperator::Like => {
-                        PatternMatcher::from_like_pattern(&c.value).matches(v)
-                    }
+                    ComparisonOperator::Like => like_matchers
+                        .iter()
+                        .find(|(idx, _)| *idx == i)
+                        .is_some_and(|(_, m)| m.matches(v)),
                     _ => true,
                 })
             })

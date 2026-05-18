@@ -8,10 +8,9 @@ use crate::query::{
 use redis::{ConnectionLike, RedisError, RedisResult};
 
 /// Redis SCAN operation types
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScanType {
-    /// Database key scan (SCAN
-    KeyScan,
     /// Hash field scan (HSCAN)
     HashScan,
     /// Set member scan (SSCAN)
@@ -84,12 +83,6 @@ struct ScanConfig {
 impl ScanConfig {
     fn for_scan_type(scan_type: &ScanType) -> Self {
         match scan_type {
-            ScanType::KeyScan => ScanConfig {
-                command_name: "SCAN",
-                requires_key: false,
-                limit_multiply_size: 2,
-                default_error_msg: "Key scan error",
-            },
             ScanType::HashScan => ScanConfig {
                 command_name: "HSCAN",
                 requires_key: true,

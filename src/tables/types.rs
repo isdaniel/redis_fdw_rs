@@ -147,7 +147,6 @@ pub enum DataSet {
 
 /// Container for complete data sets with type-specific storage
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum DataContainer {
     /// Single string value (Redis String type)
     String(Option<String>),

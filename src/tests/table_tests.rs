@@ -14,7 +14,6 @@ mod tests {
         types::{DataContainer, DataSet, RedisTableType},
     };
 
-    #[allow(dead_code)]
     fn cow_vec_to_string_vec(row: Option<Vec<Cow<'_, str>>>) -> Option<Vec<String>> {
         row.map(|v| v.into_iter().map(|c| c.into_owned()).collect())
     }

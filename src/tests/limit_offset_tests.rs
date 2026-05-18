@@ -117,35 +117,6 @@ mod tests {
     }
 
     #[test]
-    fn test_set_filtered_data() {
-        let mut string_table = RedisStringTable::new();
-        let mut list_table = RedisListTable::new();
-        let mut hash_table = RedisHashTable::new();
-
-        let test_data = vec!["data1".to_string(), "data2".to_string()];
-
-        // Test set_filtered_data for all table types
-        string_table.set_filtered_data(test_data.clone());
-        list_table.set_filtered_data(test_data.clone());
-        hash_table.set_filtered_data(test_data.clone());
-
-        match &string_table.dataset {
-            DataSet::Filtered(data) => assert_eq!(data, &test_data),
-            _ => panic!("Expected Filtered dataset for string table"),
-        }
-
-        match &list_table.dataset {
-            DataSet::Filtered(data) => assert_eq!(data, &test_data),
-            _ => panic!("Expected Filtered dataset for list table"),
-        }
-
-        match &hash_table.dataset {
-            DataSet::Filtered(data) => assert_eq!(data, &test_data),
-            _ => panic!("Expected Filtered dataset for hash table"),
-        }
-    }
-
-    #[test]
     fn pg_test_limit_offset_basic_functionality() {
         let data = vec![
             "a".to_string(),

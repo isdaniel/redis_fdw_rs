@@ -204,10 +204,6 @@ impl RedisTableOperations for RedisSetTable {
         &self.dataset
     }
 
-    fn get_dataset_mut(&mut self) -> &mut DataSet {
-        &mut self.dataset
-    }
-
     fn insert(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -306,6 +302,18 @@ impl RedisTableOperations for RedisSetTable {
                         None
                     }
                 });
+                let extra_like_matchers: Vec<(&str, PatternMatcher)> = conds
+                    .iter()
+                    .filter(|c| {
+                        c.operator == ComparisonOperator::Like && Some(&c.value) != first_like_value
+                    })
+                    .map(|c| {
+                        (
+                            c.value.as_str(),
+                            PatternMatcher::from_like_pattern(&c.value),
+                        )
+                    })
+                    .collect();
                 members
                     .into_iter()
                     .filter(|member| {
@@ -316,7 +324,10 @@ impl RedisTableOperations for RedisSetTable {
                                 if Some(&c.value) == first_like_value {
                                     true // handled by MATCH
                                 } else {
-                                    PatternMatcher::from_like_pattern(&c.value).matches(member)
+                                    extra_like_matchers
+                                        .iter()
+                                        .find(|(v, _)| *v == c.value.as_str())
+                                        .is_some_and(|(_, m)| m.matches(member))
                                 }
                             }
                             _ => true,

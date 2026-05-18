@@ -28,7 +28,6 @@ pub struct RedisStreamTable {
     /// Last processed stream ID for pagination
     pub last_id: Option<String>,
     /// Batch size for streaming operations to handle large data sets
-    #[allow(dead_code)]
     pub batch_size: usize,
 }
 
@@ -218,10 +217,6 @@ impl RedisTableOperations for RedisStreamTable {
         &self.dataset
     }
 
-    fn get_dataset_mut(&mut self) -> &mut DataSet {
-        &mut self.dataset
-    }
-
     fn data_len(&self) -> usize {
         if !self.entries.is_empty() {
             self.entries.len()
@@ -376,21 +371,34 @@ impl RedisTableOperations for RedisStreamTable {
             .map(|conds| conds.iter().filter(|c| c.column_name != "id").collect())
             .unwrap_or_default();
 
+        // Pre-calculate PatternMatchers for LIKE conditions (index-based)
+        let like_matchers: Vec<(usize, crate::query::scan_ops::PatternMatcher)> = non_id_conds
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.operator == ComparisonOperator::Like)
+            .map(|(i, c)| {
+                (
+                    i,
+                    crate::query::scan_ops::PatternMatcher::from_like_pattern(&c.value),
+                )
+            })
+            .collect();
+
         let mut structured_entries = Vec::with_capacity(entries.len());
         let mut flat_data = Vec::with_capacity(entries.len());
         for (stream_id, fields) in entries {
             // Apply client-side filtering for non-ID conditions
             if !non_id_conds.is_empty() {
-                let matches = non_id_conds.iter().all(|c| {
+                let matches = non_id_conds.iter().enumerate().all(|(i, c)| {
                     fields.iter().any(|(f, v)| {
                         let target = if c.column_name == "field" { f } else { v };
                         match c.operator {
                             ComparisonOperator::Equal => target == &c.value,
                             ComparisonOperator::NotEqual => target != &c.value,
-                            ComparisonOperator::Like => {
-                                crate::query::scan_ops::PatternMatcher::from_like_pattern(&c.value)
-                                    .matches(target)
-                            }
+                            ComparisonOperator::Like => like_matchers
+                                .iter()
+                                .find(|(idx, _)| *idx == i)
+                                .is_some_and(|(_, m)| m.matches(target)),
                             _ => true,
                         }
                     })

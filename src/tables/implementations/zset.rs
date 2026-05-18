@@ -273,10 +273,6 @@ impl RedisTableOperations for RedisZSetTable {
         &self.dataset
     }
 
-    fn get_dataset_mut(&mut self) -> &mut DataSet {
-        &mut self.dataset
-    }
-
     /// Override the default get_row implementation to handle zset-specific filtered data format
     #[inline]
     fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
@@ -454,6 +450,18 @@ impl RedisTableOperations for RedisZSetTable {
                         None
                     }
                 });
+                let extra_like_matchers: Vec<(&str, PatternMatcher)> = conds
+                    .iter()
+                    .filter(|c| {
+                        c.operator == ComparisonOperator::Like && Some(&c.value) != first_like_value
+                    })
+                    .map(|c| {
+                        (
+                            c.value.as_str(),
+                            PatternMatcher::from_like_pattern(&c.value),
+                        )
+                    })
+                    .collect();
                 flat_data
                     .chunks(2)
                     .filter(|chunk| {
@@ -466,7 +474,10 @@ impl RedisTableOperations for RedisZSetTable {
                                     if Some(&c.value) == first_like_value {
                                         true // handled by MATCH
                                     } else {
-                                        PatternMatcher::from_like_pattern(&c.value).matches(member)
+                                        extra_like_matchers
+                                            .iter()
+                                            .find(|(v, _)| *v == c.value.as_str())
+                                            .is_some_and(|(_, m)| m.matches(member))
                                     }
                                 }
                                 _ => true,
