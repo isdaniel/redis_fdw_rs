@@ -23,7 +23,6 @@ impl RedisListTable {
         }
     }
 
-    #[allow(dead_code)]
     fn load_with_pattern_optimization(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,

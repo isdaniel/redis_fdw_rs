@@ -59,7 +59,6 @@ impl RedisStreamTable {
         }
     }
 
-    #[allow(dead_code)]
     fn load_with_xrange(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -115,7 +114,6 @@ impl RedisStreamTable {
         Ok(LoadDataResult::FullyLoaded)
     }
 
-    #[allow(dead_code)]
     fn load_with_stream_optimization(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,

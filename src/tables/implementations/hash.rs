@@ -25,7 +25,6 @@ impl RedisHashTable {
         }
     }
 
-    #[allow(dead_code)]
     fn load_with_scan_optimization(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -56,7 +55,6 @@ impl RedisHashTable {
         self.hgetall_all(conn, key_prefix)
     }
 
-    #[allow(dead_code)]
     fn hget_exact(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -75,7 +73,6 @@ impl RedisHashTable {
         }
     }
 
-    #[allow(dead_code)]
     fn hmget_fields(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -98,7 +95,6 @@ impl RedisHashTable {
         Ok(LoadDataResult::FullyLoaded)
     }
 
-    #[allow(dead_code)]
     fn hgetall_all(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -324,13 +320,23 @@ impl RedisTableOperations for RedisHashTable {
                         )
                     })
                     .collect();
+                let in_value_sets: Vec<Vec<&str>> = conds
+                    .iter()
+                    .map(|c| {
+                        if c.operator == ComparisonOperator::In {
+                            c.value.split(',').collect()
+                        } else {
+                            Vec::new()
+                        }
+                    })
+                    .collect();
                 pairs
                     .into_iter()
                     .filter(|(field, _)| {
-                        conds.iter().all(|c| match c.operator {
+                        conds.iter().enumerate().all(|(i, c)| match c.operator {
                             ComparisonOperator::Equal => field == &c.value,
                             ComparisonOperator::NotEqual => field != &c.value,
-                            ComparisonOperator::In => c.value.split(',').any(|v| v == field),
+                            ComparisonOperator::In => in_value_sets[i].contains(&field.as_str()),
                             ComparisonOperator::Like => {
                                 if Some(&c.value) == first_like_value {
                                     true // handled by MATCH

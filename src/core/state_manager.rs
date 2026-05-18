@@ -9,7 +9,7 @@ use crate::{
     },
     query::{
         cost_estimation::{CostEstimate, CostEstimator},
-        pushdown_types::PushdownAnalysis,
+        pushdown_types::{ComparisonOperator, PushdownAnalysis},
     },
     tables::types::RedisTableType,
 };
@@ -124,8 +124,42 @@ impl RedisFdwState {
             return false;
         }
 
+        // Determine strategy before borrowing connection
+        let use_direct_load = self.scan_cursor == 0 && self.should_use_direct_load();
+
         if let Some(ref mut conn) = self.redis_connection {
             let conn_like = conn.as_connection_like_mut();
+
+            // On first call, use optimized direct-load path when conditions support it
+            // (Equal → HGET/SISMEMBER/ZSCORE, In → HMGET/SMISMEMBER, Like+LIMIT → SCAN with limit)
+            if use_direct_load {
+                let conditions = self
+                    .pushdown_analysis
+                    .as_ref()
+                    .map(|a| a.pushable_conditions.as_slice());
+                let limit_offset = self
+                    .pushdown_analysis
+                    .as_ref()
+                    .and_then(|a| a.limit_offset.clone())
+                    .unwrap_or_default();
+
+                match self.table_type.load_data(
+                    conn_like,
+                    &self.table_key_prefix,
+                    conditions,
+                    &limit_offset,
+                ) {
+                    Ok(_) => {
+                        self.scan_complete = true;
+                        return self.table_type.data_len() > 0;
+                    }
+                    Err(e) => {
+                        pgrx::error!("Redis error during optimized data load: {}", e);
+                    }
+                }
+            }
+
+            // Streaming path: cursor-based SCAN for large datasets without direct-lookup conditions
             let conditions = self.pushdown_analysis.as_ref().and_then(|a| {
                 if a.has_optimizations() {
                     Some(a.pushable_conditions.as_slice())
@@ -135,6 +169,7 @@ impl RedisFdwState {
             });
 
             loop {
+                pgrx::check_for_interrupts!();
                 match self.table_type.load_batch(
                     conn_like,
                     &self.table_key_prefix,
@@ -163,6 +198,34 @@ impl RedisFdwState {
             self.scan_complete = true;
             false
         }
+    }
+
+    /// Determine whether to use the optimized `load_data` path instead of streaming `load_batch`.
+    /// Returns true when conditions can leverage direct Redis commands (HGET, HMGET, SISMEMBER, etc.)
+    /// which are O(1) or O(K) instead of O(N) cursor-based scanning.
+    fn should_use_direct_load(&self) -> bool {
+        if let Some(ref analysis) = self.pushdown_analysis {
+            if !analysis.has_optimizations() {
+                return false;
+            }
+
+            // Use direct load if any condition is Equal or In (direct lookup commands)
+            let has_direct_lookup = analysis.pushable_conditions.iter().any(|c| {
+                matches!(
+                    c.operator,
+                    ComparisonOperator::Equal | ComparisonOperator::In
+                )
+            });
+            if has_direct_lookup {
+                return true;
+            }
+
+            // Use direct load if we have LIMIT/OFFSET (load_data handles it efficiently)
+            if analysis.has_limit_pushdown() {
+                return true;
+            }
+        }
+        false
     }
 
     /// Set pushdown analysis from planner

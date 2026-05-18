@@ -168,21 +168,6 @@ pub unsafe fn write_datum_to_slot(
     (*slot).tts_isnull.add(colno).write(false);
 }
 
-#[allow(dead_code)]
-pub unsafe fn tuple_desc_attr_address(desc: *mut TupleDescData) -> *mut FormData_pg_attribute {
-    #[cfg(feature = "pg18")]
-    {
-        let _ = desc;
-        unreachable!("Use pg_sys::TupleDescAttr on PG18");
-    }
-    #[cfg(not(feature = "pg18"))]
-    {
-        let base = desc as *mut u8;
-        let offset = std::mem::size_of::<TupleDescData>();
-        base.add(offset) as *mut FormData_pg_attribute
-    }
-}
-
 pub unsafe fn tuple_desc_attr(desc: *mut TupleDescData, i: usize) -> *mut FormData_pg_attribute {
     assert!(!desc.is_null());
     assert!(i < (*desc).natts as usize);
@@ -193,7 +178,9 @@ pub unsafe fn tuple_desc_attr(desc: *mut TupleDescData, i: usize) -> *mut FormDa
     }
     #[cfg(not(feature = "pg18"))]
     {
-        let attrs = tuple_desc_attr_address(desc);
+        let base = desc as *mut u8;
+        let offset = std::mem::size_of::<TupleDescData>();
+        let attrs = base.add(offset) as *mut FormData_pg_attribute;
         attrs.add(i)
     }
 }

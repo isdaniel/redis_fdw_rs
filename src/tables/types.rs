@@ -41,7 +41,6 @@ impl RedisTableType {
         }
     }
 
-    #[allow(dead_code)]
     pub fn load_data(
         &mut self,
         conn: &mut dyn redis::ConnectionLike,
@@ -125,7 +124,6 @@ impl RedisTableType {
 
 /// Result type for data loading operations
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum LoadDataResult {
     /// Data was loaded into internal storage (possibly with pushdown applied)
     FullyLoaded,

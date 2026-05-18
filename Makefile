@@ -111,8 +111,6 @@ cleanup-redis:
 redis-status:
 	@docker ps --filter "name=redis" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
-setup-cluster: setup-redis
-
 # ─── Development ──────────────────────────────────────────────────────────────
 
 format:

@@ -56,7 +56,6 @@ impl PushdownAnalysis {
     }
 
     /// Check if LIMIT/OFFSET pushdown is possible
-    #[allow(dead_code)]
     pub fn has_limit_pushdown(&self) -> bool {
         self.limit_offset
             .as_ref()

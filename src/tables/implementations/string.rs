@@ -23,7 +23,6 @@ impl RedisStringTable {
         }
     }
 
-    #[allow(dead_code)]
     /// Load data with SCAN optimization for value matching
     fn load_with_scan_optimization(
         &mut self,

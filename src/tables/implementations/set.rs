@@ -23,7 +23,6 @@ impl RedisSetTable {
         }
     }
 
-    #[allow(dead_code)]
     fn match_equal(
         &self,
         conn: &mut dyn redis::ConnectionLike,
@@ -38,7 +37,6 @@ impl RedisSetTable {
         })
     }
 
-    #[allow(dead_code)]
     fn match_in(
         &self,
         conn: &mut dyn redis::ConnectionLike,
@@ -100,7 +98,6 @@ impl RedisSetTable {
         }
     }
 
-    #[allow(dead_code)]
     fn match_like(
         &self,
         conn: &mut dyn redis::ConnectionLike,
@@ -119,7 +116,6 @@ impl RedisSetTable {
         }
     }
 
-    #[allow(dead_code)]
     fn all_members(
         &self,
         conn: &mut dyn redis::ConnectionLike,
@@ -128,7 +124,6 @@ impl RedisSetTable {
         redis::cmd("SMEMBERS").arg(key).query(conn)
     }
 
-    #[allow(dead_code)]
     fn apply_conditions(
         &self,
         conn: &mut dyn redis::ConnectionLike,
@@ -314,13 +309,23 @@ impl RedisTableOperations for RedisSetTable {
                         )
                     })
                     .collect();
+                let in_value_sets: Vec<Vec<&str>> = conds
+                    .iter()
+                    .map(|c| {
+                        if c.operator == ComparisonOperator::In {
+                            c.value.split(',').collect()
+                        } else {
+                            Vec::new()
+                        }
+                    })
+                    .collect();
                 members
                     .into_iter()
                     .filter(|member| {
-                        conds.iter().all(|c| match c.operator {
+                        conds.iter().enumerate().all(|(i, c)| match c.operator {
                             ComparisonOperator::Equal => member == &c.value,
                             ComparisonOperator::NotEqual => member != &c.value,
-                            ComparisonOperator::In => c.value.split(',').any(|v| v == member),
+                            ComparisonOperator::In => in_value_sets[i].contains(&member.as_str()),
                             ComparisonOperator::Like => {
                                 if Some(&c.value) == first_like_value {
                                     true // handled by MATCH
