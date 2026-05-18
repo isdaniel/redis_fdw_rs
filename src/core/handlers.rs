@@ -200,13 +200,14 @@ unsafe extern "C-unwind" fn get_foreign_plan(
         pg_sys::relation_close(relation, pg_sys::AccessShareLock as _);
     });
 
-    // fdw_private pointer remains valid — owned by the memory context
+    // Serialize state pointer to a proper PG List for safe plan copying
+    let fdw_private = serialize_ptr_to_list((*baserel).fdw_private);
     pgrx::pg_sys::make_foreignscan(
         tlist,
         pg_sys::extract_actual_clauses(scan_clauses, false),
         (*baserel).relid,
         ptr::null_mut(),
-        (*baserel).fdw_private as _,
+        fdw_private as _,
         ptr::null_mut(),
         ptr::null_mut(),
         outer_plan,
@@ -224,7 +225,8 @@ extern "C-unwind" fn begin_foreign_scan(
         let plan: *mut pg_sys::ForeignScan = scan_state.ps.plan as *mut pg_sys::ForeignScan;
         let relation = (*node).ss.ss_currentRelation;
         let relid = (*relation).rd_id;
-        let state = state_from_ptr((*plan).fdw_private as _);
+        let state_ptr = deserialize_ptr_from_list((*plan).fdw_private as _);
+        let state = state_from_ptr(state_ptr);
         PgMemoryContexts::For(state.tmp_ctx).switch_to(|_| {
             let options = get_foreign_table_options(relid);
             log!("Foreign table options: {:?}", options);
@@ -238,9 +240,8 @@ extern "C-unwind" fn begin_foreign_scan(
             state.set_table_type();
         });
 
-        // Connect to Redis and handle potential errors
         log!("Connected to Redis");
-        (*node).fdw_state = (*plan).fdw_private as _;
+        (*node).fdw_state = state_ptr;
     }
 }
 

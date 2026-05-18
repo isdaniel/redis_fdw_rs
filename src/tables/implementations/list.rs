@@ -303,20 +303,13 @@ impl RedisTableOperations for RedisListTable {
 
         // Apply conditions as client-side post-filter (no LSCAN in Redis)
         let filtered: Vec<String> = if let Some(conds) = conditions {
-            let like_matcher = conds.iter().find_map(|c| {
-                if c.operator == ComparisonOperator::Like {
-                    Some(PatternMatcher::from_like_pattern(&c.value))
-                } else {
-                    None
-                }
-            });
             data.into_iter()
                 .filter(|item| {
                     conds.iter().all(|c| match c.operator {
                         ComparisonOperator::Equal => item == &c.value,
                         ComparisonOperator::NotEqual => item != &c.value,
                         ComparisonOperator::Like => {
-                            like_matcher.as_ref().is_none_or(|m| m.matches(item))
+                            PatternMatcher::from_like_pattern(&c.value).matches(item)
                         }
                         _ => true,
                     })

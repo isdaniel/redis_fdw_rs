@@ -51,12 +51,9 @@ impl RedisHashTable {
                 self.dataset = DataSet::Filtered(matching_fields);
                 return Ok(LoadDataResult::FullyLoaded);
             }
-            //info!("scan_conditions:{:?}",scan_conditions);
-            // exact match case
             return self.hget_exact(conn, key_prefix, &pattern);
         }
 
-        // no pattern — fallback
         self.hgetall_all(conn, key_prefix)
     }
 
@@ -164,7 +161,6 @@ impl RedisTableOperations for RedisHashTable {
     /// Override the default get_row implementation to handle hash-specific filtered data format
     #[inline]
     fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
-        //info!("Getting row for hash table self: {:?}", self);
         match &self.dataset {
             DataSet::Filtered(data) => {
                 // Hash filtered data is stored as [key1, value1, key2, value2, ...]

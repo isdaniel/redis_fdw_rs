@@ -371,9 +371,35 @@ impl RedisTableOperations for RedisStreamTable {
 
         self.last_id = entries.last().map(|(id, _)| id.clone());
 
+        // Collect non-ID conditions for client-side filtering
+        let non_id_conds: Vec<&PushableCondition> = conditions
+            .map(|conds| conds.iter().filter(|c| c.column_name != "id").collect())
+            .unwrap_or_default();
+
         let mut structured_entries = Vec::with_capacity(entries.len());
         let mut flat_data = Vec::with_capacity(entries.len());
         for (stream_id, fields) in entries {
+            // Apply client-side filtering for non-ID conditions
+            if !non_id_conds.is_empty() {
+                let matches = non_id_conds.iter().all(|c| {
+                    fields.iter().any(|(f, v)| {
+                        let target = if c.column_name == "field" { f } else { v };
+                        match c.operator {
+                            ComparisonOperator::Equal => target == &c.value,
+                            ComparisonOperator::NotEqual => target != &c.value,
+                            ComparisonOperator::Like => {
+                                crate::query::scan_ops::PatternMatcher::from_like_pattern(&c.value)
+                                    .matches(target)
+                            }
+                            _ => true,
+                        }
+                    })
+                });
+                if !matches {
+                    continue;
+                }
+            }
+
             let mut row = vec![stream_id.clone()];
             for (field, value) in fields {
                 row.push(field);
@@ -383,8 +409,9 @@ impl RedisTableOperations for RedisStreamTable {
             structured_entries.push(row);
         }
 
+        let filtered_count = structured_entries.len();
         self.entries = structured_entries;
         self.dataset = DataSet::Filtered(flat_data);
-        Ok((new_cursor, row_count))
+        Ok((new_cursor, filtered_count))
     }
 }

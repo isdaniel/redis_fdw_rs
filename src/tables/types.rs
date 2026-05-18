@@ -74,7 +74,11 @@ impl RedisTableType {
             RedisTableType::List(t) => t.dataset = DataSet::default(),
             RedisTableType::Set(t) => t.dataset = DataSet::default(),
             RedisTableType::ZSet(t) => t.dataset = DataSet::default(),
-            RedisTableType::Stream(t) => t.dataset = DataSet::default(),
+            RedisTableType::Stream(t) => {
+                t.dataset = DataSet::default();
+                t.entries.clear();
+                t.last_id = None;
+            }
             RedisTableType::None => {}
         }
     }

@@ -10,8 +10,6 @@ use redis::{ConnectionLike, RedisError, RedisResult};
 /// Redis SCAN operation types
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScanType {
-    /// Database key scan (SCAN
-    KeyScan,
     /// Hash field scan (HSCAN)
     HashScan,
     /// Set member scan (SSCAN)
