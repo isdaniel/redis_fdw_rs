@@ -8,3 +8,8 @@ pg_regress/results
 pg_regress/regression.diffs
 pg_regress/regression.out
 benchmark_results_*
+
+# Packaging build artifacts
+*.deb
+apt-repo/
+postgresql-*-redis-fdw-rs_*/

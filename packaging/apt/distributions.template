@@ -1,0 +1,31 @@
+Origin: redis_fdw_rs
+Label: redis_fdw_rs
+Suite: jammy
+Codename: jammy
+Architectures: amd64 arm64
+Components: main
+SignWith: __GPG_KEY_ID__
+
+Origin: redis_fdw_rs
+Label: redis_fdw_rs
+Suite: noble
+Codename: noble
+Architectures: amd64 arm64
+Components: main
+SignWith: __GPG_KEY_ID__
+
+Origin: redis_fdw_rs
+Label: redis_fdw_rs
+Suite: bullseye
+Codename: bullseye
+Architectures: amd64 arm64
+Components: main
+SignWith: __GPG_KEY_ID__
+
+Origin: redis_fdw_rs
+Label: redis_fdw_rs
+Suite: bookworm
+Codename: bookworm
+Architectures: amd64 arm64
+Components: main
+SignWith: __GPG_KEY_ID__

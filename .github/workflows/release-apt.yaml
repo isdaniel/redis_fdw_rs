@@ -1,0 +1,167 @@
+name: Release APT Packages
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  pages: write
+
+jobs:
+  verify-main:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag is on main branch
+        run: |
+          if ! git branch --contains "${{ github.sha }}" | grep -qw main; then
+            echo "ERROR: APT release only allowed from main branch"
+            exit 1
+          fi
+
+  build-deb:
+    needs: verify-main
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        pg-version: [14, 15, 16, 17, 18]
+        arch: [amd64, arm64]
+      fail-fast: false
+
+    env:
+      PG_VER: ${{ matrix.pg-version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set extension version from tag
+        run: echo "EXT_VER=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-pg${{ matrix.pg-version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-cargo-pg${{ matrix.pg-version }}-
+
+      - name: Setup QEMU (arm64 only)
+        if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build amd64 package
+        if: matrix.arch == 'amd64'
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang llvm libreadline-dev zlib1g-dev \
+            postgresql-${{ env.PG_VER }} \
+            postgresql-server-dev-${{ env.PG_VER }}
+          cargo install cargo-pgrx --version 0.18.0
+          cargo pgrx init --pg${{ env.PG_VER }} /usr/lib/postgresql/${{ env.PG_VER }}/bin/pg_config
+          sudo chmod 777 /usr/share/postgresql/${{ env.PG_VER }} -R
+          sudo chmod 777 /usr/lib/postgresql/${{ env.PG_VER }} -R
+          cargo pgrx package --pg-config=/usr/lib/postgresql/${{ env.PG_VER }}/bin/pg_config
+
+      - name: Build arm64 package
+        if: matrix.arch == 'arm64'
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
+            -e DEBIAN_FRONTEND=noninteractive \
+            ubuntu:22.04 bash -c '
+              set -euo pipefail
+              ln -fs /usr/share/zoneinfo/UTC /etc/localtime
+              apt-get update
+              apt-get install -y curl build-essential clang llvm libreadline-dev zlib1g-dev \
+                lsb-release wget gnupg2
+              sh -c "echo \"deb http://apt.postgresql.org/pub/repos/apt \$(lsb_release -cs)-pgdg main\" > /etc/apt/sources.list.d/pgdg.list"
+              wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
+              apt-get update
+              apt-get install -y postgresql-${{ env.PG_VER }} postgresql-server-dev-${{ env.PG_VER }}
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+              source "$HOME/.cargo/env"
+              cargo install cargo-pgrx --version 0.18.0
+              cargo pgrx init --pg${{ env.PG_VER }} /usr/lib/postgresql/${{ env.PG_VER }}/bin/pg_config
+              chmod 777 /usr/share/postgresql/${{ env.PG_VER }} -R
+              chmod 777 /usr/lib/postgresql/${{ env.PG_VER }} -R
+              cargo pgrx package --pg-config=/usr/lib/postgresql/${{ env.PG_VER }}/bin/pg_config
+            '
+
+      - name: Assemble deb package
+        run: |
+          sudo apt-get install -y dpkg-dev
+          PGRX_OUT="target/release/redis_fdw_rs-pg${{ env.PG_VER }}"
+          bash packaging/deb/build-deb.sh \
+            "${{ env.PG_VER }}" \
+            "${{ env.EXT_VER }}" \
+            "${{ matrix.arch }}" \
+            "${PGRX_OUT}"
+
+      - name: Upload deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-pg${{ matrix.pg-version }}-${{ matrix.arch }}
+          path: "*.deb"
+
+  publish-apt:
+    needs: build-deb
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all deb artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: debs
+          pattern: deb-*
+          merge-multiple: true
+
+      - name: List downloaded debs
+        run: find debs -name "*.deb" -ls
+
+      - name: Install reprepro
+        run: sudo apt-get install -y reprepro
+
+      - name: Import GPG key
+        run: |
+          echo "${{ secrets.APT_GPG_PRIVATE_KEY }}" | gpg --batch --import
+          GPG_KEY_ID=$(gpg --list-keys --with-colons | grep '^pub' | head -1 | cut -d: -f5)
+          echo "GPG_KEY_ID=${GPG_KEY_ID}" >> $GITHUB_ENV
+
+      - name: Determine repo URL
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          REPO="${{ github.event.repository.name }}"
+          echo "REPO_URL=${OWNER}.github.io/${REPO}" >> $GITHUB_ENV
+
+      - name: Build apt repository
+        run: |
+          bash packaging/apt/publish-repo.sh \
+            debs \
+            "${{ env.GPG_KEY_ID }}" \
+            "${{ env.REPO_URL }}"
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./apt-repo
+          force_orphan: true
