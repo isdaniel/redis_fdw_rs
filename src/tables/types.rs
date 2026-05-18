@@ -120,6 +120,45 @@ impl RedisTableType {
     pub fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
         table_dispatch!(self, supports_pushdown(operator) -> false)
     }
+
+    /// Store flat multi-key data (used by multi-key mode)
+    pub fn set_multi_key_data(&mut self, data: Vec<String>) {
+        match self {
+            RedisTableType::String(t) => t.dataset = DataSet::Filtered(data),
+            RedisTableType::Hash(t) => t.dataset = DataSet::Filtered(data),
+            RedisTableType::List(t) => t.dataset = DataSet::Filtered(data),
+            RedisTableType::Set(t) => t.dataset = DataSet::Filtered(data),
+            RedisTableType::ZSet(t) => t.dataset = DataSet::Filtered(data),
+            RedisTableType::Stream(t) => t.dataset = DataSet::Filtered(data),
+            RedisTableType::None => {}
+        }
+    }
+
+    /// Redis TYPE name for SCAN TYPE filter (Redis 6.0+)
+    pub fn redis_type_name(&self) -> &'static str {
+        match self {
+            RedisTableType::String(_) => "string",
+            RedisTableType::Hash(_) => "hash",
+            RedisTableType::List(_) => "list",
+            RedisTableType::Set(_) => "set",
+            RedisTableType::ZSet(_) => "zset",
+            RedisTableType::Stream(_) => "stream",
+            RedisTableType::None => "",
+        }
+    }
+
+    /// Get a reference to the dataset (for multi-key mode)
+    pub fn get_dataset_ref(&self) -> &DataSet {
+        match self {
+            RedisTableType::String(t) => &t.dataset,
+            RedisTableType::Hash(t) => &t.dataset,
+            RedisTableType::List(t) => &t.dataset,
+            RedisTableType::Set(t) => &t.dataset,
+            RedisTableType::ZSet(t) => &t.dataset,
+            RedisTableType::Stream(t) => &t.dataset,
+            RedisTableType::None => &DataSet::Empty,
+        }
+    }
 }
 
 /// Result type for data loading operations
@@ -184,6 +223,13 @@ impl DataSet {
                     .map(|item| vec![Cow::Borrowed(item.as_str())])
             }
             DataSet::Complete(container) => container.get_row(index),
+        }
+    }
+
+    pub fn as_filtered(&self) -> Option<&Vec<String>> {
+        match self {
+            DataSet::Filtered(data) => Some(data),
+            _ => None,
         }
     }
 }

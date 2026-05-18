@@ -99,7 +99,7 @@ jobs:
               ln -fs /usr/share/zoneinfo/UTC /etc/localtime
               apt-get update
               apt-get install -y curl build-essential clang llvm libreadline-dev zlib1g-dev \
-                lsb-release wget gnupg2
+                lsb-release wget gnupg2 pkg-config libssl-dev
               sh -c "echo \"deb http://apt.postgresql.org/pub/repos/apt \$(lsb_release -cs)-pgdg main\" > /etc/apt/sources.list.d/pgdg.list"
               wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
               apt-get update

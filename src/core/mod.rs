@@ -9,3 +9,4 @@ pub mod connection_factory;
 pub mod handlers;
 pub mod pool_manager;
 pub mod state_manager;
+pub mod validator;
