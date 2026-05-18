@@ -431,65 +431,97 @@ impl RedisFdwState {
     ) -> usize {
         let mut all_rows: Vec<String> = Vec::new();
 
-        for key in keys {
-            match &self.table_type {
-                RedisTableType::String(_) => {
-                    let value: Option<String> =
-                        redis::cmd("GET").arg(key).query(conn).unwrap_or(None);
+        match &self.table_type {
+            RedisTableType::String(_) => {
+                let values: Vec<Option<String>> = match redis::cmd("MGET").arg(keys).query(conn) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log!("WARNING: Redis MGET error: {}", e);
+                        return 0;
+                    }
+                };
+                for (key, value) in keys.iter().zip(values) {
                     if let Some(v) = value {
                         all_rows.push(key.clone());
                         all_rows.push(v);
                     }
                 }
-                RedisTableType::Hash(_) => {
-                    let pairs: Vec<(String, String)> = redis::cmd("HGETALL")
-                        .arg(key)
-                        .query(conn)
-                        .unwrap_or_default();
+            }
+            RedisTableType::Hash(_) => {
+                for key in keys {
+                    let pairs: Vec<(String, String)> =
+                        match redis::cmd("HGETALL").arg(key).query(conn) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                log!("WARNING: Redis HGETALL error for key '{}': {}", key, e);
+                                continue;
+                            }
+                        };
                     for (field, value) in pairs {
                         all_rows.push(key.clone());
                         all_rows.push(field);
                         all_rows.push(value);
                     }
                 }
-                RedisTableType::List(_) => {
-                    let items: Vec<String> = redis::cmd("LRANGE")
+            }
+            RedisTableType::List(_) => {
+                for key in keys {
+                    let items: Vec<String> = match redis::cmd("LRANGE")
                         .arg(key)
                         .arg(0i64)
                         .arg(-1i64)
                         .query(conn)
-                        .unwrap_or_default();
+                    {
+                        Ok(v) => v,
+                        Err(e) => {
+                            log!("WARNING: Redis LRANGE error for key '{}': {}", key, e);
+                            continue;
+                        }
+                    };
                     for item in items {
                         all_rows.push(key.clone());
                         all_rows.push(item);
                     }
                 }
-                RedisTableType::Set(_) => {
-                    let members: Vec<String> = redis::cmd("SMEMBERS")
-                        .arg(key)
-                        .query(conn)
-                        .unwrap_or_default();
+            }
+            RedisTableType::Set(_) => {
+                for key in keys {
+                    let members: Vec<String> = match redis::cmd("SMEMBERS").arg(key).query(conn) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            log!("WARNING: Redis SMEMBERS error for key '{}': {}", key, e);
+                            continue;
+                        }
+                    };
                     for member in members {
                         all_rows.push(key.clone());
                         all_rows.push(member);
                     }
                 }
-                RedisTableType::ZSet(_) => {
-                    let items: Vec<(String, f64)> = redis::cmd("ZRANGE")
+            }
+            RedisTableType::ZSet(_) => {
+                for key in keys {
+                    let items: Vec<(String, f64)> = match redis::cmd("ZRANGE")
                         .arg(key)
                         .arg(0i64)
                         .arg(-1i64)
                         .arg("WITHSCORES")
                         .query(conn)
-                        .unwrap_or_default();
+                    {
+                        Ok(v) => v,
+                        Err(e) => {
+                            log!("WARNING: Redis ZRANGE error for key '{}': {}", key, e);
+                            continue;
+                        }
+                    };
                     for (member, score) in items {
                         all_rows.push(key.clone());
                         all_rows.push(score.to_string());
                         all_rows.push(member);
                     }
                 }
-                RedisTableType::Stream(_) | RedisTableType::None => {}
             }
+            RedisTableType::Stream(_) | RedisTableType::None => {}
         }
 
         let cols_per_row = self.multi_key_columns_per_row();
