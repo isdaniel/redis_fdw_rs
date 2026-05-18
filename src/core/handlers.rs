@@ -19,6 +19,18 @@ unsafe fn state_from_ptr<'a>(ptr: *mut std::os::raw::c_void) -> &'a mut RedisFdw
     &mut *(ptr as *mut RedisFdwState)
 }
 
+unsafe fn detect_ttl_column(tupdesc: pg_sys::TupleDesc) -> Option<usize> {
+    let natts = (*tupdesc).natts as usize;
+    for i in 0..natts {
+        let attr = tuple_desc_attr(tupdesc, i);
+        let name = pgrx::name_data_to_str(&(*attr).attname);
+        if name == "ttl" {
+            return Some(i);
+        }
+    }
+    None
+}
+
 const REDISMODY: &str = "__redis_UD_key_name";
 
 pub type FdwRoutine<A = AllocatedByRust> = PgBox<pgrx::pg_sys::FdwRoutine, A>;
@@ -240,6 +252,11 @@ extern "C-unwind" fn begin_foreign_scan(
             state.set_table_type();
         });
 
+        // Detect TTL column
+        let relation = (*node).ss.ss_currentRelation;
+        let tupdesc = (*relation).rd_att;
+        state.ttl_column_index = detect_ttl_column(tupdesc);
+
         log!("Connected to Redis");
         (*node).fdw_state = state_ptr;
     }
@@ -271,9 +288,46 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
         return slot;
     }
 
-    if let Some(row_data) = state.get_row(state.row_count as usize) {
-        for (col_idx, value) in row_data.iter().enumerate() {
-            write_datum_to_slot(slot, tupdesc, col_idx, value.as_ref());
+    let natts = (*tupdesc).natts as usize;
+
+    if state.is_multi_key {
+        let cols_per_row = state.multi_key_columns_per_row();
+        let row_offset = state.row_count as usize * cols_per_row;
+        let dataset = state.table_type.get_dataset_ref();
+        if let Some(flat_data) = dataset.as_filtered() {
+            if row_offset + cols_per_row <= flat_data.len() {
+                // Clone the row slice to release the borrow on state
+                let row_slice: Vec<String> =
+                    flat_data[row_offset..row_offset + cols_per_row].to_vec();
+                let mut data_idx = 0;
+                for col_idx in 0..natts {
+                    if state.ttl_column_index == Some(col_idx) {
+                        let key = &row_slice[0]; // first col is always the key
+                        let ttl_value = state.read_ttl(key);
+                        write_datum_to_slot(slot, tupdesc, col_idx, &ttl_value.to_string());
+                    } else if data_idx < cols_per_row {
+                        write_datum_to_slot(slot, tupdesc, col_idx, &row_slice[data_idx]);
+                        data_idx += 1;
+                    }
+                }
+            } else {
+                return slot;
+            }
+        } else {
+            return slot;
+        }
+    } else if let Some(row_data) = state.get_row(state.row_count as usize) {
+        let row_data: Vec<String> = row_data.iter().map(|c| c.to_string()).collect();
+        let mut data_idx = 0;
+        for col_idx in 0..natts {
+            if state.ttl_column_index == Some(col_idx) {
+                let key = state.table_key_prefix.clone();
+                let ttl_value = state.read_ttl(&key);
+                write_datum_to_slot(slot, tupdesc, col_idx, &ttl_value.to_string());
+            } else if data_idx < row_data.len() {
+                write_datum_to_slot(slot, tupdesc, col_idx, &row_data[data_idx]);
+                data_idx += 1;
+            }
         }
     } else {
         error!(
@@ -393,6 +447,12 @@ unsafe extern "C-unwind" fn begin_foreign_modify(
     state.key_attno =
         pg_sys::ExecFindJunkAttributeInTlist((*subplan).targetlist, REDISMODY.as_ptr() as _);
     log!("Key attribute number: {}", state.key_attno);
+
+    // Detect TTL column in the target relation
+    let relation = (*rinfo).ri_RelationDesc;
+    let tupdesc = (*relation).rd_att;
+    state.ttl_column_index = detect_ttl_column(tupdesc);
+
     (*rinfo).ri_FdwState = state_ptr;
 }
 
@@ -412,16 +472,49 @@ unsafe extern "C-unwind" fn exec_foreign_insert(
     let state = state_from_ptr((*rinfo).ri_FdwState);
     let row: Row = tuple_table_slot_to_row(slot);
 
-    // Convert row cells to string data
-    let data: Vec<String> = row
+    let all_data: Vec<String> = row
         .cells
         .iter()
         .map(|cell| cell_to_string(cell.as_ref()))
         .collect();
 
-    // Use the new unified insert method
-    if let Err(e) = state.insert_data(&data) {
-        error!("Failed to insert data: {:?}", e);
+    // Extract and strip TTL column value
+    let (data, row_ttl) = if let Some(ttl_idx) = state.ttl_column_index {
+        let ttl_val = all_data.get(ttl_idx).and_then(|s| {
+            if s == "NULL" {
+                None
+            } else {
+                s.parse::<i64>().ok()
+            }
+        });
+        let filtered: Vec<String> = all_data
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != ttl_idx)
+            .map(|(_, v)| v.clone())
+            .collect();
+        (filtered, ttl_val)
+    } else {
+        (all_data, None)
+    };
+
+    if state.is_multi_key {
+        // Multi-key mode: first column is the Redis key, remaining columns are data
+        if data.is_empty() {
+            error!("Multi-key INSERT requires at least a key column");
+        }
+        let key = data[0].clone();
+        let row_data = &data[1..];
+        if let Err(e) = state.insert_data_to_key(&key, row_data) {
+            error!("Failed to insert data to key '{}': {:?}", key, e);
+        }
+        state.apply_ttl(&key, row_ttl);
+    } else {
+        if let Err(e) = state.insert_data(&data) {
+            error!("Failed to insert data: {:?}", e);
+        }
+        let key = state.table_key_prefix.clone();
+        state.apply_ttl(&key, row_ttl);
     }
 
     (*slot).tts_tableOid = pgrx::pg_sys::InvalidOid;
@@ -448,17 +541,41 @@ unsafe extern "C-unwind" fn exec_foreign_update(
 
     // Extract new row from the slot
     let new_row: Row = tuple_table_slot_to_row(slot);
-    let new_data: Vec<String> = new_row
+    let all_new_data: Vec<String> = new_row
         .cells
         .iter()
         .map(|cell| cell_to_string(cell.as_ref()))
         .collect();
+
+    // Extract and strip TTL column value
+    let (new_data, row_ttl) = if let Some(ttl_idx) = state.ttl_column_index {
+        let ttl_val = all_new_data.get(ttl_idx).and_then(|s| {
+            if s == "NULL" {
+                None
+            } else {
+                s.parse::<i64>().ok()
+            }
+        });
+        let filtered: Vec<String> = all_new_data
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != ttl_idx)
+            .map(|(_, v)| v.clone())
+            .collect();
+        (filtered, ttl_val)
+    } else {
+        (all_new_data, None)
+    };
 
     log!("Update: old_key={:?}, new_data={:?}", old_key, new_data);
 
     if let Err(e) = state.update_data(std::slice::from_ref(&old_key), &new_data) {
         error!("Failed to update data: {:?}", e);
     }
+
+    // Apply TTL after successful update
+    let key = state.table_key_prefix.clone();
+    state.apply_ttl(&key, row_ttl);
 
     (*slot).tts_tableOid = pgrx::pg_sys::InvalidOid;
     slot
@@ -481,12 +598,21 @@ unsafe extern "C-unwind" fn exec_foreign_delete(
         Ok(key) => {
             log!("Attempting to delete key: '{}'", key);
 
-            // Perform the deletion operation
-            if let Err(e) = state.delete_data(std::slice::from_ref(&key)) {
+            if state.is_multi_key {
+                // Multi-key mode: DEL the entire Redis key
+                if let Some(conn) = state.redis_connection.as_mut() {
+                    let conn_like = conn.as_connection_like_mut();
+                    let result: Result<(), _> = redis::cmd("DEL").arg(&key).query(conn_like);
+                    if let Err(e) = result {
+                        error!("Failed to delete Redis key '{}': {:?}", key, e);
+                    }
+                } else {
+                    error!("Redis connection not available for delete");
+                }
+            } else if let Err(e) = state.delete_data(std::slice::from_ref(&key)) {
                 error!("Failed to delete key '{}': {:?}", key, e);
-            } else {
-                log!("Successfully deleted key: '{}'", key);
             }
+            log!("Successfully deleted key: '{}'", key);
         }
         Err(err_msg) => {
             error!("Failed to extract delete key: {}", err_msg);

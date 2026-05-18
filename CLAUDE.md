@@ -38,7 +38,7 @@ cargo fmt
 ## Key Architecture
 
 ### Module Structure
-- `src/core/` — FDW handler callbacks (`handlers.rs`), state management (`state_manager.rs`), connection pool (`pool_manager.rs`), connection factory (`connection_factory.rs`)
+- `src/core/` — FDW handler callbacks (`handlers.rs`), state management (`state_manager.rs`), connection pool (`pool_manager.rs`), connection factory (`connection_factory.rs`), DDL validator (`validator.rs`)
 - `src/tables/` — Trait interface (`interface.rs`), type enum + dispatch (`types.rs`, `macros.rs`), per-type implementations in `implementations/`
 - `src/query/` — WHERE pushdown (`pushdown.rs`), cost estimation (`cost_estimation.rs`), LIMIT handling (`limit.rs`), scan ops (`scan_ops.rs`)
 - `src/auth/` — Redis authentication
@@ -70,6 +70,27 @@ Dispatch from `RedisTableType` enum uses macros in `src/tables/macros.rs`.
 | Stream  | ✅     | ✅     | ❌     | ✅     |
 
 Stream is append-only; UPDATE returns an error at the trait level and `IsForeignRelUpdatable` omits the UPDATE bit for stream tables.
+
+### TTL Support
+- Table option `ttl` sets default key expiration (seconds); -1 = persist
+- Optional `ttl bigint` column allows per-row override on INSERT/UPDATE
+- On SELECT, the `ttl` column returns remaining seconds (-1 = no expiry, -2 = missing)
+- TTL detection: `detect_ttl_column()` in handlers.rs finds column by name "ttl"
+- TTL stripping: handlers strip the ttl column from data before delegating to table type impl
+
+### Multi-Key Pattern Mode
+- If `table_key_prefix` contains `*`, `?`, or `[`, FDW enters multi-key mode
+- Detection: `is_multi_key_pattern()` in state_manager.rs
+- Scanning uses top-level `SCAN MATCH pattern` to find keys
+- Data stored as flat `DataSet::Filtered(Vec<String>)` with N columns per row
+- First column is always the Redis key name
+- INSERT routes to specific key (first column); DELETE uses `DEL` on the full key
+
+### FDW Validator
+- `redis_fdw_validator_wrapper` — raw C function (not `#[pg_extern]`) with `pg_finfo`
+- SQL type: `(text[], oid)` — PG passes options as `key=value` text array
+- Validates server options (host_port required, cluster_mode boolean)
+- Validates table options (table_type, table_key_prefix required; database 0-15; ttl; batch_size 100-100000)
 
 ## Code Conventions
 
