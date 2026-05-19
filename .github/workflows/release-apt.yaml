@@ -39,7 +39,7 @@ jobs:
     strategy:
       matrix:
         pg-version: [14, 15, 16, 17, 18]
-        arch: [amd64, arm64]
+        arch: [amd64]
       fail-fast: false
 
     env:
@@ -65,14 +65,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.arch }}-cargo-pg${{ matrix.pg-version }}-
 
-      - name: Setup QEMU (arm64 only)
-        if: matrix.arch == 'arm64'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
       - name: Build amd64 package
-        if: matrix.arch == 'amd64'
         run: |
           sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
           wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
@@ -86,32 +79,6 @@ jobs:
           sudo chmod 777 /usr/share/postgresql/${{ env.PG_VER }} -R
           sudo chmod 777 /usr/lib/postgresql/${{ env.PG_VER }} -R
           cargo pgrx package --pg-config=/usr/lib/postgresql/${{ env.PG_VER }}/bin/pg_config
-
-      - name: Build arm64 package
-        if: matrix.arch == 'arm64'
-        run: |
-          docker run --rm --platform linux/arm64 \
-            -v "${{ github.workspace }}:/workspace" \
-            -w /workspace \
-            -e DEBIAN_FRONTEND=noninteractive \
-            ubuntu:22.04 bash -c '
-              set -euo pipefail
-              ln -fs /usr/share/zoneinfo/UTC /etc/localtime
-              apt-get update
-              apt-get install -y curl build-essential clang llvm libreadline-dev zlib1g-dev \
-                lsb-release wget gnupg2 pkg-config libssl-dev
-              sh -c "echo \"deb http://apt.postgresql.org/pub/repos/apt \$(lsb_release -cs)-pgdg main\" > /etc/apt/sources.list.d/pgdg.list"
-              wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
-              apt-get update
-              apt-get install -y postgresql-${{ env.PG_VER }} postgresql-server-dev-${{ env.PG_VER }}
-              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-              source "$HOME/.cargo/env"
-              cargo install cargo-pgrx --version 0.18.0
-              cargo pgrx init --pg${{ env.PG_VER }} /usr/lib/postgresql/${{ env.PG_VER }}/bin/pg_config
-              chmod 777 /usr/share/postgresql/${{ env.PG_VER }} -R
-              chmod 777 /usr/lib/postgresql/${{ env.PG_VER }} -R
-              cargo pgrx package --pg-config=/usr/lib/postgresql/${{ env.PG_VER }}/bin/pg_config
-            '
 
       - name: Assemble deb package
         run: |
