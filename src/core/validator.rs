@@ -183,7 +183,38 @@ pub mod validation_rules {
     }
 
     pub fn is_valid_host_port(s: &str) -> bool {
-        !s.is_empty() && s.contains(':')
+        if s.is_empty() {
+            return false;
+        }
+        s.split(',').all(|node| {
+            let node = node.trim();
+            if node.is_empty() {
+                return false;
+            }
+            // Strip scheme case-insensitively (RFC 3986)
+            let node_lower = node.to_ascii_lowercase();
+            let without_scheme = if node_lower.starts_with("rediss://") {
+                &node[9..]
+            } else if node_lower.starts_with("redis://") {
+                &node[8..]
+            } else {
+                node
+            };
+            // Strip fragment (#insecure) if present
+            let without_fragment = without_scheme.split('#').next().unwrap_or(without_scheme);
+            // Ensure no path segments are present in the host:port part
+            let authority = without_fragment.trim_end_matches('/');
+            if authority.is_empty() || authority.contains('/') {
+                return false;
+            }
+            // Must have host:port format with numeric port
+            match authority.rfind(':') {
+                Some(pos) if pos > 0 && pos < authority.len() - 1 => {
+                    authority[pos + 1..].parse::<u16>().is_ok()
+                }
+                _ => false,
+            }
+        })
     }
 }
 
@@ -241,5 +272,54 @@ mod tests {
         assert!(is_valid_host_port("redis.example.com:6379"));
         assert!(!is_valid_host_port(""));
         assert!(!is_valid_host_port("no-port"));
+    }
+
+    #[test]
+    fn test_valid_host_port_rediss_scheme() {
+        assert!(is_valid_host_port("rediss://redis.example.com:6380"));
+        assert!(is_valid_host_port("rediss://127.0.0.1:6380"));
+        assert!(is_valid_host_port("rediss://host:6380/#insecure"));
+        assert!(is_valid_host_port("redis://127.0.0.1:6379"));
+    }
+
+    #[test]
+    fn test_valid_host_port_rediss_invalid() {
+        assert!(!is_valid_host_port("rediss://"));
+        assert!(!is_valid_host_port("rediss://no-port"));
+    }
+
+    #[test]
+    fn test_valid_host_port_cluster_string() {
+        assert!(is_valid_host_port("node1:6379,node2:6379,node3:6379"));
+        assert!(is_valid_host_port(
+            "rediss://node1:6380,rediss://node2:6380,rediss://node3:6380"
+        ));
+        assert!(!is_valid_host_port("node1:6379,node2"));
+        assert!(!is_valid_host_port("node1:6379,,node3:6379"));
+    }
+
+    #[test]
+    fn test_valid_host_port_rejects_path_segments() {
+        assert!(!is_valid_host_port("redis://host:6379/extra/path"));
+        assert!(!is_valid_host_port("rediss://host:6380/db/path"));
+    }
+
+    #[test]
+    fn test_valid_host_port_case_insensitive_scheme() {
+        assert!(is_valid_host_port("REDISS://host:6380"));
+        assert!(is_valid_host_port("Redis://host:6379"));
+        assert!(is_valid_host_port("REDIS://host:6379"));
+    }
+
+    #[test]
+    fn test_valid_host_port_rejects_ipv6_without_port() {
+        assert!(!is_valid_host_port("[::1]"));
+        assert!(!is_valid_host_port("redis://[::1]"));
+    }
+
+    #[test]
+    fn test_valid_host_port_rejects_non_numeric_port() {
+        assert!(!is_valid_host_port("host:abc"));
+        assert!(!is_valid_host_port("redis://host:notaport"));
     }
 }

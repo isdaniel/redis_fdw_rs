@@ -6,6 +6,7 @@ A high-performance Redis Foreign Data Wrapper (FDW) for PostgreSQL written in Ru
 
 - **High-performance data access** from Redis to PostgreSQL
 - **Redis Cluster support** with automatic failover and sharding across multiple nodes
+- **TLS/SSL support** via `rediss://` URI scheme with rustls backend (no OpenSSL dependency)
 - **Connection pooling** with R2D2 for efficient connection reuse and resource management
 - **WHERE clause pushdown optimization** for significantly improved query performance
 - **Redis data types support**: Hash, List, Set, ZSet, String, and Stream (with varying levels of implementation)
@@ -19,7 +20,7 @@ A high-performance Redis Foreign Data Wrapper (FDW) for PostgreSQL written in Ru
 - **Built with Rust** for memory safety and performance
 - **Unified trait interface** providing consistent behavior across all Redis table types
 - **Enhanced error handling** for robust foreign data operations
-- **Compatible with PostgreSQL 14-17**
+- **Compatible with PostgreSQL 14-18**
 
 ## Prerequisites
 
@@ -334,6 +335,47 @@ INSERT INTO user_sessions VALUES ('user123', 'session_token_abc');
 SELECT * FROM user_sessions WHERE field = 'user123';
 ```
 
+### 4. TLS/SSL Encrypted Connections
+
+Redis FDW supports TLS/SSL connections using the `rediss://` URI scheme. This is required for cloud Redis services (AWS ElastiCache, Azure Cache for Redis, GCP Memorystore) and any Redis deployment with TLS enabled.
+
+```sql
+-- TLS with certificate verification (production)
+CREATE SERVER redis_secure 
+FOREIGN DATA WRAPPER redis_wrapper
+OPTIONS (host_port 'rediss://redis.cloud.example.com:6380');
+
+-- TLS without certificate verification (dev/staging with self-signed certs)
+CREATE SERVER redis_dev 
+FOREIGN DATA WRAPPER redis_wrapper
+OPTIONS (host_port 'rediss://redis-dev.internal:6380/#insecure');
+
+-- Cluster with TLS
+CREATE SERVER redis_cluster_tls 
+FOREIGN DATA WRAPPER redis_wrapper
+OPTIONS (host_port 'rediss://node1:6380,rediss://node2:6380,rediss://node3:6380');
+
+-- TLS + Authentication
+CREATE SERVER redis_auth_tls 
+FOREIGN DATA WRAPPER redis_wrapper
+OPTIONS (host_port 'rediss://redis.cloud.example.com:6380');
+CREATE USER MAPPING FOR CURRENT_USER SERVER redis_auth_tls
+  OPTIONS (username 'default', password 'secret');
+```
+
+**Connection Schemes:**
+| Scheme | Behavior |
+|--------|----------|
+| `host:port` | Plaintext TCP connection |
+| `redis://host:port` | Plaintext TCP connection (explicit) |
+| `rediss://host:port` | TLS with certificate verification |
+| `rediss://host:port/#insecure` | TLS without certificate verification |
+
+**Notes:**
+- TLS uses the **rustls** backend (pure Rust, no OpenSSL dependency)
+- The `#insecure` fragment should only be used for development with self-signed certificates
+- All connection modes (single, cluster) support TLS
+
 ## Supported Redis Data Types (Usage Examples)
 
 ### TTL Support
@@ -539,7 +581,7 @@ SELECT * FROM redis_stream LIMIT 1000;
 ## Configuration Options
 
 ### Server Options
-- `host_port`: Redis connection string (format: `host:port`) - **Required**
+- `host_port`: Redis connection string (format: `host:port`, `redis://host:port`, or `rediss://host:port` for TLS) - **Required**
 
 ### Table Options
 - `database`: Redis database number (default: 0) - **Optional**
@@ -1039,5 +1081,6 @@ This project is licensed under the terms specified in the LICENSE file.
 ## Dependencies
 
 - **pgrx**: PostgreSQL extension framework for Rust
-- **redis**: Redis client library for Rust with integrated R2D2 connection pooling support
+- **redis**: Redis client library for Rust with integrated R2D2 connection pooling and TLS support
 - **r2d2**: Generic connection pool library providing efficient connection management and reuse
+- **rustls**: TLS implementation (pulled in via redis crate's `tls-rustls` feature)

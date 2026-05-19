@@ -128,12 +128,27 @@ pub enum PoolError {
 
 /// Build a Redis URL from host:port with optional database and auth
 fn build_redis_url(host_port: &str, database: i64, auth_config: &RedisAuthConfig) -> String {
-    let base_url = if host_port.starts_with("redis://") {
-        format!("{}/{}", host_port, database)
-    } else {
-        format!("redis://{}/{}", host_port, database)
+    let host_port = host_port.trim();
+    // Separate the fragment (#insecure) from the host if present
+    let (host_part, fragment) = match host_port.split_once('#') {
+        Some((h, f)) => (h.trim_end_matches('/'), Some(f)),
+        None => (host_port.trim_end_matches('/'), None),
     };
-    auth_config.apply_to_url(&base_url)
+
+    let host_part_lower = host_part.to_ascii_lowercase();
+    let base_url =
+        if host_part_lower.starts_with("rediss://") || host_part_lower.starts_with("redis://") {
+            format!("{}/{}", host_part, database)
+        } else {
+            format!("redis://{}/{}", host_part, database)
+        };
+
+    let url = auth_config.apply_to_url(&base_url);
+
+    match fragment {
+        Some(frag) => format!("{}#{}", url, frag),
+        None => url,
+    }
 }
 
 /// Build URLs for cluster nodes
@@ -752,5 +767,85 @@ mod tests {
 
         let err = PoolError::LockPoisoned;
         assert!(err.to_string().contains("poisoned"));
+    }
+
+    // --------------------------------
+    // TLS URL Building Tests
+    // --------------------------------
+
+    #[test]
+    fn test_build_redis_url_with_rediss_scheme() {
+        let auth = RedisAuthConfig::default();
+        let url = build_redis_url("rediss://redis.example.com:6380", 0, &auth);
+        assert_eq!(url, "rediss://redis.example.com:6380/0");
+    }
+
+    #[test]
+    fn test_build_redis_url_with_rediss_insecure() {
+        let auth = RedisAuthConfig::default();
+        let url = build_redis_url("rediss://redis-dev.internal:6380/#insecure", 0, &auth);
+        assert_eq!(url, "rediss://redis-dev.internal:6380/0#insecure");
+    }
+
+    #[test]
+    fn test_build_redis_url_plain_host_unchanged() {
+        let auth = RedisAuthConfig::default();
+        let url = build_redis_url("127.0.0.1:6379", 0, &auth);
+        assert_eq!(url, "redis://127.0.0.1:6379/0");
+    }
+
+    #[test]
+    fn test_build_redis_url_rediss_with_auth() {
+        let auth = RedisAuthConfig {
+            password: Some("secret".to_string()),
+            username: None,
+        };
+        let url = build_redis_url("rediss://redis.cloud.com:6380", 3, &auth);
+        assert!(url.starts_with("rediss://"));
+        assert!(url.contains(":secret@"));
+        assert!(url.ends_with("/3"));
+    }
+
+    #[test]
+    fn test_build_redis_url_rediss_insecure_with_database() {
+        let auth = RedisAuthConfig::default();
+        let url = build_redis_url("rediss://host:6380/#insecure", 5, &auth);
+        assert_eq!(url, "rediss://host:6380/5#insecure");
+    }
+
+    #[test]
+    fn test_build_cluster_urls_with_rediss() {
+        let auth = RedisAuthConfig::default();
+        let urls = build_cluster_urls(
+            "rediss://node1:6380,rediss://node2:6380,rediss://node3:6380",
+            0,
+            &auth,
+        )
+        .unwrap();
+        assert_eq!(urls.len(), 3);
+        assert_eq!(urls[0], "rediss://node1:6380/0");
+        assert_eq!(urls[1], "rediss://node2:6380/0");
+        assert_eq!(urls[2], "rediss://node3:6380/0");
+    }
+
+    #[test]
+    fn test_build_redis_url_trailing_slash_no_fragment() {
+        let auth = RedisAuthConfig::default();
+        let url = build_redis_url("rediss://host:6380/", 0, &auth);
+        assert_eq!(url, "rediss://host:6380/0");
+    }
+
+    #[test]
+    fn test_build_redis_url_case_insensitive_scheme() {
+        let auth = RedisAuthConfig::default();
+        let url = build_redis_url("REDISS://host:6380", 0, &auth);
+        assert_eq!(url, "REDISS://host:6380/0");
+    }
+
+    #[test]
+    fn test_build_redis_url_whitespace_trimmed() {
+        let auth = RedisAuthConfig::default();
+        let url = build_redis_url("  redis://host:6379  ", 0, &auth);
+        assert_eq!(url, "redis://host:6379/0");
     }
 }

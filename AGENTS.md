@@ -12,6 +12,7 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 - TTL support: table-level default + per-row override via virtual `ttl` column
 - Multi-key pattern queries: glob patterns in `table_key_prefix` for scanning multiple keys
 - DDL-time option validation via `redis_fdw_validator`
+- TLS/SSL support: `rediss://` URI scheme for encrypted connections (rustls backend)
 - UPDATE support implemented for all types (except Stream)
 - Cost estimation for query planner (`src/query/cost_estimation.rs`)
 - Connection pooling via R2D2 with global pool manager
@@ -96,7 +97,7 @@ FDW Callbacks (handlers.rs)
 | Crate | Version | Purpose |
 |-------|---------|---------|
 | pgrx | =0.18.0 | PostgreSQL extension framework |
-| redis | 1.2.1 | Redis client (with cluster, streams, r2d2 features) |
+| redis | 1.2.1 | Redis client (with cluster, streams, r2d2, tls-rustls features) |
 | r2d2 | 0.8.10 | Connection pooling |
 | thiserror | 2.0.12 | Error types |
 | rand | 0.9.2 | Random generation utilities |
