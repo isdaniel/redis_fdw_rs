@@ -285,11 +285,11 @@ mod tests {
         };
         assert_eq!(
             config.apply_to_url("REDISS://host:6380/0"),
-            "rediss://:secret@host:6380/0"
+            "REDISS://:secret@host:6380/0"
         );
         assert_eq!(
             config.apply_to_url("Redis://host:6379/0"),
-            "redis://:secret@host:6379/0"
+            "Redis://:secret@host:6379/0"
         );
     }
 }
