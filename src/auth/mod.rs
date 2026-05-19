@@ -47,26 +47,27 @@ impl RedisAuthConfig {
 
         let auth_component = self.get_auth_url_component();
 
-        // Handle different URL formats
-        if url.starts_with("redis://") {
-            // Remove existing auth if present
-            let url_without_auth = if let Some(at_pos) = url.find('@') {
-                // Check if there's a scheme before @ to distinguish auth from domain
-                if url[7..at_pos].contains(':') {
-                    format!("redis://{}", &url[at_pos + 1..])
-                } else {
-                    url.to_string()
-                }
-            } else {
-                url.to_string()
-            };
-
-            // Insert auth component
-            format!("redis://{}{}", auth_component, &url_without_auth[8..])
+        // Detect scheme (check rediss:// before redis:// since redis:// is a prefix of rediss://)
+        let (scheme, rest) = if let Some(rest) = url.strip_prefix("rediss://") {
+            ("rediss://", rest)
+        } else if let Some(rest) = url.strip_prefix("redis://") {
+            ("redis://", rest)
         } else {
-            // For non-redis:// URLs, prepend redis:// with auth
-            format!("redis://{}{}", auth_component, url)
-        }
+            return format!("redis://{}{}", auth_component, url);
+        };
+
+        // Remove existing auth if present
+        let cleaned = if let Some(at_pos) = rest.find('@') {
+            if rest[..at_pos].contains(':') {
+                &rest[at_pos + 1..]
+            } else {
+                rest
+            }
+        } else {
+            rest
+        };
+
+        format!("{}{}{}", scheme, auth_component, cleaned)
     }
 
     /// Generate a cache key for pool identification
@@ -197,5 +198,48 @@ mod tests {
             username: Some("admin".to_string()),
         };
         assert_eq!(full_auth.cache_key(), "auth:user:admin");
+    }
+
+    #[test]
+    fn test_apply_to_url_rediss_no_auth() {
+        let config = RedisAuthConfig::default();
+        let url = "rediss://redis.cloud.com:6380/0";
+        assert_eq!(config.apply_to_url(url), url);
+    }
+
+    #[test]
+    fn test_apply_to_url_rediss_with_password() {
+        let config = RedisAuthConfig {
+            password: Some("secret".to_string()),
+            username: None,
+        };
+        assert_eq!(
+            config.apply_to_url("rediss://redis.cloud.com:6380/0"),
+            "rediss://:secret@redis.cloud.com:6380/0"
+        );
+    }
+
+    #[test]
+    fn test_apply_to_url_rediss_with_username_password() {
+        let config = RedisAuthConfig {
+            password: Some("pass".to_string()),
+            username: Some("user".to_string()),
+        };
+        assert_eq!(
+            config.apply_to_url("rediss://redis.cloud.com:6380/0"),
+            "rediss://user:pass@redis.cloud.com:6380/0"
+        );
+    }
+
+    #[test]
+    fn test_apply_to_url_rediss_replace_existing_auth() {
+        let config = RedisAuthConfig {
+            password: Some("new_pass".to_string()),
+            username: Some("new_user".to_string()),
+        };
+        assert_eq!(
+            config.apply_to_url("rediss://old:old@redis.cloud.com:6380/0"),
+            "rediss://new_user:new_pass@redis.cloud.com:6380/0"
+        );
     }
 }

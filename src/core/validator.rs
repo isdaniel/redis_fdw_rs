@@ -183,7 +183,27 @@ pub mod validation_rules {
     }
 
     pub fn is_valid_host_port(s: &str) -> bool {
-        !s.is_empty() && s.contains(':')
+        if s.is_empty() {
+            return false;
+        }
+        // Strip scheme if present
+        let without_scheme = if let Some(rest) = s.strip_prefix("rediss://") {
+            rest
+        } else if let Some(rest) = s.strip_prefix("redis://") {
+            rest
+        } else {
+            s
+        };
+        // Strip fragment (#insecure) if present
+        let without_fragment = without_scheme.split('#').next().unwrap_or(without_scheme);
+        if without_fragment.is_empty() {
+            return false;
+        }
+        // Must have host:port format
+        match without_fragment.rfind(':') {
+            Some(pos) => pos > 0 && pos < without_fragment.len() - 1,
+            None => false,
+        }
     }
 }
 
@@ -241,5 +261,19 @@ mod tests {
         assert!(is_valid_host_port("redis.example.com:6379"));
         assert!(!is_valid_host_port(""));
         assert!(!is_valid_host_port("no-port"));
+    }
+
+    #[test]
+    fn test_valid_host_port_rediss_scheme() {
+        assert!(is_valid_host_port("rediss://redis.example.com:6380"));
+        assert!(is_valid_host_port("rediss://127.0.0.1:6380"));
+        assert!(is_valid_host_port("rediss://host:6380/#insecure"));
+        assert!(is_valid_host_port("redis://127.0.0.1:6379"));
+    }
+
+    #[test]
+    fn test_valid_host_port_rediss_invalid() {
+        assert!(!is_valid_host_port("rediss://"));
+        assert!(!is_valid_host_port("rediss://no-port"));
     }
 }
