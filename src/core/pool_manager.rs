@@ -128,17 +128,20 @@ pub enum PoolError {
 
 /// Build a Redis URL from host:port with optional database and auth
 fn build_redis_url(host_port: &str, database: i64, auth_config: &RedisAuthConfig) -> String {
+    let host_port = host_port.trim();
     // Separate the fragment (#insecure) from the host if present
     let (host_part, fragment) = match host_port.split_once('#') {
         Some((h, f)) => (h.trim_end_matches('/'), Some(f)),
         None => (host_port.trim_end_matches('/'), None),
     };
 
-    let base_url = if host_part.starts_with("rediss://") || host_part.starts_with("redis://") {
-        format!("{}/{}", host_part, database)
-    } else {
-        format!("redis://{}/{}", host_part, database)
-    };
+    let host_part_lower = host_part.to_ascii_lowercase();
+    let base_url =
+        if host_part_lower.starts_with("rediss://") || host_part_lower.starts_with("redis://") {
+            format!("{}/{}", host_part, database)
+        } else {
+            format!("redis://{}/{}", host_part, database)
+        };
 
     let url = auth_config.apply_to_url(&base_url);
 
@@ -830,5 +833,19 @@ mod tests {
         let auth = RedisAuthConfig::default();
         let url = build_redis_url("rediss://host:6380/", 0, &auth);
         assert_eq!(url, "rediss://host:6380/0");
+    }
+
+    #[test]
+    fn test_build_redis_url_case_insensitive_scheme() {
+        let auth = RedisAuthConfig::default();
+        let url = build_redis_url("REDISS://host:6380", 0, &auth);
+        assert_eq!(url, "REDISS://host:6380/0");
+    }
+
+    #[test]
+    fn test_build_redis_url_whitespace_trimmed() {
+        let auth = RedisAuthConfig::default();
+        let url = build_redis_url("  redis://host:6379  ", 0, &auth);
+        assert_eq!(url, "redis://host:6379/0");
     }
 }
