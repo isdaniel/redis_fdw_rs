@@ -186,24 +186,32 @@ pub mod validation_rules {
         if s.is_empty() {
             return false;
         }
-        // Strip scheme if present
-        let without_scheme = if let Some(rest) = s.strip_prefix("rediss://") {
-            rest
-        } else if let Some(rest) = s.strip_prefix("redis://") {
-            rest
-        } else {
-            s
-        };
-        // Strip fragment (#insecure) if present
-        let without_fragment = without_scheme.split('#').next().unwrap_or(without_scheme);
-        if without_fragment.is_empty() {
-            return false;
-        }
-        // Must have host:port format
-        match without_fragment.rfind(':') {
-            Some(pos) => pos > 0 && pos < without_fragment.len() - 1,
-            None => false,
-        }
+        s.split(',').all(|node| {
+            let node = node.trim();
+            if node.is_empty() {
+                return false;
+            }
+            // Strip scheme if present
+            let without_scheme = if let Some(rest) = node.strip_prefix("rediss://") {
+                rest
+            } else if let Some(rest) = node.strip_prefix("redis://") {
+                rest
+            } else {
+                node
+            };
+            // Strip fragment (#insecure) if present
+            let without_fragment = without_scheme.split('#').next().unwrap_or(without_scheme);
+            // Ensure no path segments are present in the host:port part
+            let authority = without_fragment.trim_end_matches('/');
+            if authority.is_empty() || authority.contains('/') {
+                return false;
+            }
+            // Must have host:port format
+            match authority.rfind(':') {
+                Some(pos) => pos > 0 && pos < authority.len() - 1,
+                None => false,
+            }
+        })
     }
 }
 
@@ -275,5 +283,21 @@ mod tests {
     fn test_valid_host_port_rediss_invalid() {
         assert!(!is_valid_host_port("rediss://"));
         assert!(!is_valid_host_port("rediss://no-port"));
+    }
+
+    #[test]
+    fn test_valid_host_port_cluster_string() {
+        assert!(is_valid_host_port("node1:6379,node2:6379,node3:6379"));
+        assert!(is_valid_host_port(
+            "rediss://node1:6380,rediss://node2:6380,rediss://node3:6380"
+        ));
+        assert!(!is_valid_host_port("node1:6379,node2"));
+        assert!(!is_valid_host_port("node1:6379,,node3:6379"));
+    }
+
+    #[test]
+    fn test_valid_host_port_rejects_path_segments() {
+        assert!(!is_valid_host_port("redis://host:6379/extra/path"));
+        assert!(!is_valid_host_port("rediss://host:6380/db/path"));
     }
 }

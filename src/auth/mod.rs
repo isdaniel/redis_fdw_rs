@@ -56,9 +56,9 @@ impl RedisAuthConfig {
             return format!("redis://{}{}", auth_component, url);
         };
 
-        // Remove existing auth if present (only look in the authority component, not path/fragment)
-        let authority = rest.split('/').next().unwrap_or("");
-        let cleaned = if let Some(at_pos) = authority.find('@') {
+        // Remove existing auth if present (only look in the authority component, not path/query/fragment)
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+        let cleaned = if let Some(at_pos) = authority.rfind('@') {
             &rest[at_pos + 1..]
         } else {
             rest
@@ -261,6 +261,18 @@ mod tests {
         assert_eq!(
             config.apply_to_url("redis://127.0.0.1:6379/0"),
             "redis://:secret@127.0.0.1:6379/0"
+        );
+    }
+
+    #[test]
+    fn test_apply_to_url_replace_password_with_at_sign() {
+        let config = RedisAuthConfig {
+            password: Some("new_pass".to_string()),
+            username: Some("new_user".to_string()),
+        };
+        assert_eq!(
+            config.apply_to_url("redis://user:p%40ss@127.0.0.1:6379/0"),
+            "redis://new_user:new_pass@127.0.0.1:6379/0"
         );
     }
 }
