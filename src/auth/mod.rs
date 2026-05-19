@@ -47,11 +47,12 @@ impl RedisAuthConfig {
 
         let auth_component = self.get_auth_url_component();
 
-        // Detect scheme (check rediss:// before redis:// since redis:// is a prefix of rediss://)
-        let (scheme, rest) = if let Some(rest) = url.strip_prefix("rediss://") {
-            ("rediss://", rest)
-        } else if let Some(rest) = url.strip_prefix("redis://") {
-            ("redis://", rest)
+        // Detect scheme case-insensitively (RFC 3986: schemes are case-insensitive)
+        let url_lower = url.to_ascii_lowercase();
+        let (scheme, rest) = if url_lower.starts_with("rediss://") {
+            ("rediss://", &url[9..])
+        } else if url_lower.starts_with("redis://") {
+            ("redis://", &url[8..])
         } else {
             return format!("redis://{}{}", auth_component, url);
         };
@@ -273,6 +274,22 @@ mod tests {
         assert_eq!(
             config.apply_to_url("redis://user:p%40ss@127.0.0.1:6379/0"),
             "redis://new_user:new_pass@127.0.0.1:6379/0"
+        );
+    }
+
+    #[test]
+    fn test_apply_to_url_case_insensitive_scheme() {
+        let config = RedisAuthConfig {
+            password: Some("secret".to_string()),
+            username: None,
+        };
+        assert_eq!(
+            config.apply_to_url("REDISS://host:6380/0"),
+            "rediss://:secret@host:6380/0"
+        );
+        assert_eq!(
+            config.apply_to_url("Redis://host:6379/0"),
+            "redis://:secret@host:6379/0"
         );
     }
 }

@@ -191,11 +191,12 @@ pub mod validation_rules {
             if node.is_empty() {
                 return false;
             }
-            // Strip scheme if present
-            let without_scheme = if let Some(rest) = node.strip_prefix("rediss://") {
-                rest
-            } else if let Some(rest) = node.strip_prefix("redis://") {
-                rest
+            // Strip scheme case-insensitively (RFC 3986)
+            let node_lower = node.to_ascii_lowercase();
+            let without_scheme = if node_lower.starts_with("rediss://") {
+                &node[9..]
+            } else if node_lower.starts_with("redis://") {
+                &node[8..]
             } else {
                 node
             };
@@ -206,10 +207,12 @@ pub mod validation_rules {
             if authority.is_empty() || authority.contains('/') {
                 return false;
             }
-            // Must have host:port format
+            // Must have host:port format with numeric port
             match authority.rfind(':') {
-                Some(pos) => pos > 0 && pos < authority.len() - 1,
-                None => false,
+                Some(pos) if pos > 0 && pos < authority.len() - 1 => {
+                    authority[pos + 1..].parse::<u16>().is_ok()
+                }
+                _ => false,
             }
         })
     }
@@ -299,5 +302,24 @@ mod tests {
     fn test_valid_host_port_rejects_path_segments() {
         assert!(!is_valid_host_port("redis://host:6379/extra/path"));
         assert!(!is_valid_host_port("rediss://host:6380/db/path"));
+    }
+
+    #[test]
+    fn test_valid_host_port_case_insensitive_scheme() {
+        assert!(is_valid_host_port("REDISS://host:6380"));
+        assert!(is_valid_host_port("Redis://host:6379"));
+        assert!(is_valid_host_port("REDIS://host:6379"));
+    }
+
+    #[test]
+    fn test_valid_host_port_rejects_ipv6_without_port() {
+        assert!(!is_valid_host_port("[::1]"));
+        assert!(!is_valid_host_port("redis://[::1]"));
+    }
+
+    #[test]
+    fn test_valid_host_port_rejects_non_numeric_port() {
+        assert!(!is_valid_host_port("host:abc"));
+        assert!(!is_valid_host_port("redis://host:notaport"));
     }
 }
