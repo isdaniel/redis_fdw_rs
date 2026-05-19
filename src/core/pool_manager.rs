@@ -131,7 +131,7 @@ fn build_redis_url(host_port: &str, database: i64, auth_config: &RedisAuthConfig
     // Separate the fragment (#insecure) from the host if present
     let (host_part, fragment) = match host_port.split_once('#') {
         Some((h, f)) => (h.trim_end_matches('/'), Some(f)),
-        None => (host_port, None),
+        None => (host_port.trim_end_matches('/'), None),
     };
 
     let base_url = if host_part.starts_with("rediss://") || host_part.starts_with("redis://") {
@@ -823,5 +823,12 @@ mod tests {
         assert_eq!(urls[0], "rediss://node1:6380/0");
         assert_eq!(urls[1], "rediss://node2:6380/0");
         assert_eq!(urls[2], "rediss://node3:6380/0");
+    }
+
+    #[test]
+    fn test_build_redis_url_trailing_slash_no_fragment() {
+        let auth = RedisAuthConfig::default();
+        let url = build_redis_url("rediss://host:6380/", 0, &auth);
+        assert_eq!(url, "rediss://host:6380/0");
     }
 }
