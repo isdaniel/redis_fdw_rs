@@ -92,6 +92,13 @@ Stream is append-only; UPDATE returns an error at the trait level and `IsForeign
 - Validates server options (host_port required, cluster_mode boolean)
 - Validates table options (table_type, table_key_prefix required; database 0-15; ttl; batch_size 100-100000)
 
+### TLS/SSL Support
+- Controlled via URI scheme in `host_port`: `rediss://` enables TLS, `#insecure` fragment skips cert verification
+- Uses rustls backend via redis crate features (`tls-rustls`, `tls-rustls-insecure`)
+- `build_redis_url()` in pool_manager.rs preserves `rediss://` scheme and `#insecure` fragment
+- `apply_to_url()` in auth/mod.rs handles both `redis://` and `rediss://` schemes
+- Validator's `is_valid_host_port()` strips scheme and fragment before checking host:port format
+
 ## Code Conventions
 
 - Use `pgrx::error!()` for PostgreSQL-level errors (never `panic!`)
