@@ -24,7 +24,7 @@ A high-performance Redis Foreign Data Wrapper (FDW) for PostgreSQL written in Ru
 
 ## Prerequisites
 
-- PostgreSQL 14, 15, 16, or 17
+- PostgreSQL 14, 15, 16, 17 or 18
 - Redis server
 - Rust toolchain (for building from source)
 
