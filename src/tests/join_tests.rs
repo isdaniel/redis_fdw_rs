@@ -443,27 +443,133 @@ mod tests {
         .unwrap();
         Spi::run(&format!("INSERT INTO {} VALUES ('x');", set_table)).unwrap();
 
-        // Check EXPLAIN output contains Redis Join info
-        let explain = Spi::get_one::<String>(&format!(
-            "EXPLAIN (FORMAT TEXT, VERBOSE) SELECT * FROM {} h JOIN {} s ON h.field = s.member;",
-            hash_table, set_table
-        ))
-        .unwrap()
-        .unwrap_or_default();
+        // Collect full EXPLAIN output across all rows
+        let explain_rows: Vec<String> = Spi::connect(|client| {
+            let mut rows = Vec::new();
+            let query = format!(
+                "EXPLAIN (FORMAT TEXT) SELECT * FROM {} h JOIN {} s ON h.field = s.member;",
+                hash_table, set_table
+            );
+            let tup_table = client.select(&query, None, &[]).unwrap();
+            for row in tup_table {
+                if let Some(line) = row.get::<String>(1).unwrap_or(None) {
+                    rows.push(line);
+                }
+            }
+            rows
+        });
 
-        log!("EXPLAIN output: {}", explain);
+        let full_explain = explain_rows.join("\n");
+        log!("Full EXPLAIN output:\n{}", full_explain);
 
-        // The plan should show Foreign Scan (whether push-down or nested loop)
+        // Verify plan contains Foreign Scan (pushdown) on the join relation
+        let has_foreign_scan = full_explain.contains("Foreign Scan");
+        let has_nested_loop = full_explain.contains("Nested Loop");
         assert!(
-            explain.contains("Foreign Scan") || explain.contains("Nested Loop"),
-            "EXPLAIN should show Foreign Scan or Nested Loop, got: {}",
-            explain
+            has_foreign_scan || has_nested_loop,
+            "EXPLAIN should show Foreign Scan (pushdown) or Nested Loop, got:\n{}",
+            full_explain
         );
 
         Spi::run(&format!("DELETE FROM {} WHERE field = 'x';", hash_table)).unwrap();
         Spi::run(&format!("DELETE FROM {} WHERE member = 'x';", set_table)).unwrap();
         let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", hash_table));
         let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", set_table));
+        cleanup_join_fdw();
+    }
+
+    #[pg_test]
+    fn test_join_content_verification() {
+        setup_join_fdw();
+
+        let hash_table = "join_content_hash";
+        let hash_key = "join_test:content_hash";
+        create_join_table(hash_table, "field text, value text", "hash", hash_key);
+
+        Spi::run(&format!(
+            "INSERT INTO {} VALUES ('key1', 'hello'), ('key2', 'world');",
+            hash_table
+        ))
+        .unwrap();
+
+        Spi::run("CREATE TEMPORARY TABLE join_content_local (id text, label text);").unwrap();
+        Spi::run("INSERT INTO join_content_local VALUES ('key1', 'first'), ('key2', 'second');")
+            .unwrap();
+
+        // Verify actual content of joined rows, not just count
+        let result = Spi::get_one::<String>(&format!(
+            "SELECT r.value FROM join_content_local l JOIN {} r ON l.id = r.field WHERE l.id = 'key1';",
+            hash_table
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(result, "hello", "JOIN should return correct value for key1");
+
+        let result2 = Spi::get_one::<String>(&format!(
+            "SELECT l.label FROM join_content_local l JOIN {} r ON l.id = r.field WHERE r.field = 'key2';",
+            hash_table
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            result2, "second",
+            "JOIN should return correct local column for key2"
+        );
+
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'key1';", hash_table)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'key2';", hash_table)).unwrap();
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", hash_table));
+        let _ = Spi::run("DROP TABLE IF EXISTS join_content_local;");
+        cleanup_join_fdw();
+    }
+
+    #[pg_test]
+    fn test_join_left_join_content_with_nulls() {
+        setup_join_fdw();
+
+        let hash_table = "join_nullcontent_hash";
+        let hash_key = "join_test:nullcontent_hash";
+        create_join_table(hash_table, "field text, value text", "hash", hash_key);
+
+        Spi::run(&format!(
+            "INSERT INTO {} VALUES ('a', 'found_a');",
+            hash_table
+        ))
+        .unwrap();
+
+        Spi::run("CREATE TEMPORARY TABLE join_nullcontent_local (id text);").unwrap();
+        Spi::run("INSERT INTO join_nullcontent_local VALUES ('a'), ('missing');").unwrap();
+
+        // LEFT JOIN: 'missing' should produce NULL for the Redis side
+        let null_value = Spi::get_one::<String>(&format!(
+            "SELECT r.value FROM join_nullcontent_local l LEFT JOIN {} r ON l.id = r.field WHERE l.id = 'missing';",
+            hash_table
+        ))
+        .unwrap();
+
+        assert!(
+            null_value.is_none(),
+            "LEFT JOIN with no match should produce NULL, got: {:?}",
+            null_value
+        );
+
+        let found_value = Spi::get_one::<String>(&format!(
+            "SELECT r.value FROM join_nullcontent_local l LEFT JOIN {} r ON l.id = r.field WHERE l.id = 'a';",
+            hash_table
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            found_value, "found_a",
+            "LEFT JOIN with match should return the value"
+        );
+
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'a';", hash_table)).unwrap();
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", hash_table));
+        let _ = Spi::run("DROP TABLE IF EXISTS join_nullcontent_local;");
         cleanup_join_fdw();
     }
 }

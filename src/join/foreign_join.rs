@@ -2,14 +2,26 @@ use crate::join::types::{RedisJoinState, RedisJoinType};
 use crate::tables::types::RedisTableType;
 use std::collections::HashMap;
 
+const MAX_JOIN_DATASET_ROWS: usize = 500_000;
+
 pub fn execute_foreign_join(state: &mut RedisJoinState) -> usize {
     let conn = match state.connection.as_mut() {
         Some(c) => c.as_connection_like_mut(),
-        None => return 0,
+        None => {
+            pgrx::error!("Redis FDW: no connection available for join execution");
+        }
     };
 
     let outer_data = fetch_dataset(conn, &state.outer_table_type, &state.outer_key_prefix);
     let inner_data = fetch_dataset(conn, &state.inner_table_type, &state.inner_key_prefix);
+
+    if outer_data.len() > MAX_JOIN_DATASET_ROWS || inner_data.len() > MAX_JOIN_DATASET_ROWS {
+        pgrx::warning!(
+            "Redis FDW: join materializing large datasets (outer={}, inner={})",
+            outer_data.len(),
+            inner_data.len()
+        );
+    }
 
     let (build_data, probe_data, build_col, probe_col, build_is_outer) =
         if outer_data.len() <= inner_data.len() {
@@ -37,8 +49,23 @@ pub fn execute_foreign_join(state: &mut RedisJoinState) -> usize {
         }
     }
 
+    let outer_cols = expected_columns_for_type(&state.outer_table_type);
+    let inner_cols = expected_columns_for_type(&state.inner_table_type);
+
     let mut result: Vec<Vec<String>> = Vec::new();
     let mut matched_build: Vec<bool> = vec![false; build_data.len()];
+
+    // Pre-allocate null padding row outside the loop for LEFT JOIN
+    let null_pad_row = if state.join_type == RedisJoinType::Left && !build_is_outer {
+        let null_cols = if build_is_outer {
+            inner_cols
+        } else {
+            outer_cols
+        };
+        vec!["NULL".to_string(); null_cols]
+    } else {
+        Vec::new()
+    };
 
     for probe_row in probe_data {
         if let Some(probe_key) = probe_row.get(probe_col) {
@@ -53,15 +80,14 @@ pub fn execute_foreign_join(state: &mut RedisJoinState) -> usize {
                     result.push(combined);
                 }
             } else if state.join_type == RedisJoinType::Left && !build_is_outer {
-                let null_row = vec!["NULL".to_string(); build_data.first().map_or(0, |r| r.len())];
-                let combined = combine_rows(probe_row, &null_row);
+                let combined = combine_rows(probe_row, &null_pad_row);
                 result.push(combined);
             }
         }
     }
 
     if state.join_type == RedisJoinType::Left && build_is_outer {
-        let null_inner = vec!["NULL".to_string(); probe_data.first().map_or(0, |r| r.len())];
+        let null_inner = vec!["NULL".to_string(); inner_cols];
         for (idx, matched) in matched_build.iter().enumerate() {
             if !matched {
                 let combined = combine_rows(&build_data[idx], &null_inner);
@@ -87,14 +113,18 @@ fn fetch_dataset(
             let pairs: Vec<(String, String)> = redis::cmd("HGETALL")
                 .arg(key_prefix)
                 .query(conn)
-                .unwrap_or_default();
+                .unwrap_or_else(|e| {
+                    pgrx::error!("Redis FDW: HGETALL '{}' failed: {}", key_prefix, e);
+                });
             pairs.into_iter().map(|(f, v)| vec![f, v]).collect()
         }
         RedisTableType::Set(_) => {
             let members: Vec<String> = redis::cmd("SMEMBERS")
                 .arg(key_prefix)
                 .query(conn)
-                .unwrap_or_default();
+                .unwrap_or_else(|e| {
+                    pgrx::error!("Redis FDW: SMEMBERS '{}' failed: {}", key_prefix, e);
+                });
             members.into_iter().map(|m| vec![m]).collect()
         }
         RedisTableType::ZSet(_) => {
@@ -104,7 +134,9 @@ fn fetch_dataset(
                 .arg(-1i64)
                 .arg("WITHSCORES")
                 .query(conn)
-                .unwrap_or_default();
+                .unwrap_or_else(|e| {
+                    pgrx::error!("Redis FDW: ZRANGE '{}' failed: {}", key_prefix, e);
+                });
             items
                 .into_iter()
                 .map(|(member, score)| vec![member, score.to_string()])
@@ -116,20 +148,35 @@ fn fetch_dataset(
                 .arg(0i64)
                 .arg(-1i64)
                 .query(conn)
-                .unwrap_or_default();
+                .unwrap_or_else(|e| {
+                    pgrx::error!("Redis FDW: LRANGE '{}' failed: {}", key_prefix, e);
+                });
             items.into_iter().map(|v| vec![v]).collect()
         }
         RedisTableType::String(_) => {
             let val: Option<String> = redis::cmd("GET")
                 .arg(key_prefix)
                 .query(conn)
-                .unwrap_or(None);
+                .unwrap_or_else(|e| {
+                    pgrx::error!("Redis FDW: GET '{}' failed: {}", key_prefix, e);
+                });
             match val {
                 Some(v) => vec![vec![key_prefix.to_string(), v]],
                 None => vec![],
             }
         }
         _ => vec![],
+    }
+}
+
+fn expected_columns_for_type(table_type: &RedisTableType) -> usize {
+    match table_type {
+        RedisTableType::Hash(_) => 2,
+        RedisTableType::Set(_) => 1,
+        RedisTableType::ZSet(_) => 2,
+        RedisTableType::List(_) => 1,
+        RedisTableType::String(_) => 2,
+        _ => 1,
     }
 }
 

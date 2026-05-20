@@ -142,6 +142,9 @@ extern "C-unwind" fn get_foreign_rel_size(
             cost_estimate.width
         );
 
+        // Release planning-phase connection back to pool immediately, begin_foreign_scan will re-acquire from pool (fast path: read-lock only).
+        state.redis_connection = None;
+
         // Store the estimate for use in get_foreign_paths
         let estimated_rows = cost_estimate.rows;
         state.cost_estimate = Some(cost_estimate);
@@ -381,7 +384,7 @@ extern "C-unwind" fn begin_foreign_scan(
             log!("Foreign table options: {:?}", options);
             state.update_from_options(options);
 
-            // Reuse existing connection from planning phase if available
+            // Acquire connection from pool (fast path: read-lock on existing pool)
             if state.redis_connection.is_none() {
                 if let Err(e) = state.init_redis_connection_from_options() {
                     pgrx::error!("Failed to connect to Redis: {}", e);
@@ -1834,11 +1837,12 @@ unsafe fn extract_join_columns(
         let right_in_outer = pg_sys::bms_is_member(right_var.varno as i32, outer_relids);
         let right_in_inner = pg_sys::bms_is_member(right_var.varno as i32, inner_relids);
 
-        if left_in_outer && right_in_inner {
+        if left_in_outer && right_in_inner && left_var.varattno > 0 && right_var.varattno > 0 {
             let outer_col = (left_var.varattno - 1) as usize;
             let inner_col = (right_var.varattno - 1) as usize;
             return Some((outer_col, inner_col));
-        } else if right_in_outer && left_in_inner {
+        } else if right_in_outer && left_in_inner && right_var.varattno > 0 && left_var.varattno > 0
+        {
             let outer_col = (right_var.varattno - 1) as usize;
             let inner_col = (left_var.varattno - 1) as usize;
             return Some((outer_col, inner_col));

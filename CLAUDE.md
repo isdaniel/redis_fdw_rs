@@ -41,7 +41,7 @@ cargo fmt
 - `src/core/` — FDW handler callbacks (`handlers.rs`), state management (`state_manager.rs`), connection pool (`pool_manager.rs`), connection factory (`connection_factory.rs`), DDL validator (`validator.rs`)
 - `src/tables/` — Trait interface (`interface.rs`), type enum + dispatch (`types.rs`, `macros.rs`), per-type implementations in `implementations/`
 - `src/query/` — WHERE pushdown (`pushdown.rs`), cost estimation (`cost_estimation.rs`), LIMIT handling (`limit.rs`), scan ops (`scan_ops.rs`)
-- `src/join/` — JOIN support: parameterized paths (`parameterized.rs`), FDW-to-FDW pushdown (`foreign_join.rs`), types (`types.rs`)
+- `src/join/` — JOIN support: FDW-to-FDW pushdown (`foreign_join.rs`), types (`types.rs`)
 - `src/auth/` — Redis authentication
 - `src/utils/` — Cell/Row types, memory context helpers, general utilities
 
@@ -103,7 +103,7 @@ Stream is append-only; UPDATE returns an error at the trait level and `IsForeign
 - **FDW-to-FDW**: `GetForeignJoinPaths` detects same-server tables, extracts join columns from restrictlist, creates pushdown join path
 - **Join column detection**: Walks `extra.restrictlist` → `RestrictInfo` → `OpExpr` → `Var` nodes to find equality condition columns
 - **Join execution**: Fetch both datasets → build HashMap on smaller side → probe with larger
-- **Connection lifecycle**: acquired at `get_foreign_rel_size`, reused through execution, released at `shutdown_foreign_scan`
+- **Connection lifecycle**: acquired at `get_foreign_rel_size` for cost estimation, released immediately; re-acquired from pool at `begin_foreign_scan`, released at `shutdown_foreign_scan`
 
 ### FDW Validator
 - `redis_fdw_validator_wrapper` — raw C function (not `#[pg_extern]`) with `pg_finfo`
