@@ -111,6 +111,7 @@ fn fetch_dataset(
         RedisTableType::Set(_) => redis::cmd("SCARD").arg(key_prefix).query(conn),
         RedisTableType::ZSet(_) => redis::cmd("ZCARD").arg(key_prefix).query(conn),
         RedisTableType::List(_) => redis::cmd("LLEN").arg(key_prefix).query(conn),
+        RedisTableType::Stream(_) => redis::cmd("XLEN").arg(key_prefix).query(conn),
         _ => Ok(0),
     }
     .unwrap_or_else(|e| {
@@ -197,7 +198,8 @@ pub fn expected_columns_for_type(table_type: &RedisTableType) -> usize {
         RedisTableType::ZSet(_) => 2,
         RedisTableType::List(_) => 1,
         RedisTableType::String(_) => 2,
-        _ => 1,
+        RedisTableType::Stream(_) => 3,
+        RedisTableType::None => 0,
     }
 }
 

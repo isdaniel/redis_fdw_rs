@@ -759,6 +759,113 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_join_right_join_fallback() {
+        setup_join_fdw();
+
+        let table_name = "join_right_hash";
+        let key_prefix = "join_test:right_hash";
+        create_join_table(table_name, "field text, value text", "hash", key_prefix);
+
+        Spi::run(&format!(
+            "INSERT INTO {} VALUES ('a', 'val_a'), ('b', 'val_b'), ('c', 'val_c');",
+            table_name
+        ))
+        .unwrap();
+
+        Spi::run("CREATE TEMPORARY TABLE join_right_local (id text, label text);").unwrap();
+        Spi::run("INSERT INTO join_right_local VALUES ('a', 'L1'), ('b', 'L2'), ('d', 'L4');")
+            .unwrap();
+
+        // RIGHT JOIN: all local rows kept, Redis rows only where matched
+        let count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM {} r RIGHT JOIN join_right_local l ON r.field = l.id;",
+            table_name
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            count, 3,
+            "RIGHT JOIN should return all 3 local rows (a, b, d)"
+        );
+
+        // Verify unmatched Redis side produces NULL
+        let null_field = Spi::get_one::<String>(&format!(
+            "SELECT r.field FROM {} r RIGHT JOIN join_right_local l ON r.field = l.id WHERE l.id = 'd';",
+            table_name
+        ))
+        .unwrap();
+
+        assert!(
+            null_field.is_none(),
+            "RIGHT JOIN unmatched Redis row should be NULL, got: {:?}",
+            null_field
+        );
+
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'a';", table_name)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'b';", table_name)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'c';", table_name)).unwrap();
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", table_name));
+        let _ = Spi::run("DROP TABLE IF EXISTS join_right_local;");
+        cleanup_join_fdw();
+    }
+
+    #[pg_test]
+    fn test_join_cross_database_no_pushdown() {
+        setup_join_fdw();
+
+        // Create a second server pointing to a different database
+        let server2 = "redis_join_server_db2";
+        Spi::run(&format!(
+            "CREATE SERVER {} FOREIGN DATA WRAPPER {} OPTIONS (host_port '{}');",
+            server2, FDW_NAME, REDIS_HOST_PORT
+        ))
+        .unwrap();
+
+        let table1 = "join_crossdb_hash1";
+        let table2 = "join_crossdb_hash2";
+        let key1 = "join_test:crossdb_h1";
+        let key2 = "join_test:crossdb_h2";
+
+        // Table 1 on database 15 (default server)
+        create_join_table(table1, "field text, value text", "hash", key1);
+
+        // Table 2 on database 14 (different database via second server)
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE {} (field text, value text) SERVER {} OPTIONS (
+                database '14',
+                table_type 'hash',
+                table_key_prefix '{}'
+            );",
+            table2, server2, key2
+        ))
+        .unwrap();
+
+        Spi::run(&format!("INSERT INTO {} VALUES ('x', 'val_x');", table1)).unwrap();
+        Spi::run(&format!("INSERT INTO {} VALUES ('x', 'val_x2');", table2)).unwrap();
+
+        // JOIN across different databases — should still work via nested-loop
+        let count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM {} t1 JOIN {} t2 ON t1.field = t2.field;",
+            table1, table2
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            count, 1,
+            "Cross-database JOIN should work via nested-loop fallback"
+        );
+
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'x';", table1)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'x';", table2)).unwrap();
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", table1));
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", table2));
+        let _ = Spi::run(&format!("DROP SERVER IF EXISTS {} CASCADE;", server2));
+        cleanup_join_fdw();
+    }
+
+    #[pg_test]
     fn test_join_fdw_to_fdw_left_join_null_handling() {
         setup_join_fdw();
 

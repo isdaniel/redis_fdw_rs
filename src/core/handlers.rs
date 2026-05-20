@@ -1945,6 +1945,14 @@ unsafe extern "C-unwind" fn get_foreign_join_paths(
         return;
     }
 
+    // Stream tables have variable-width rows; pushdown not supported
+    if matches!(outer_state.table_type, RedisTableType::Stream(_))
+        || matches!(inner_state.table_type, RedisTableType::Stream(_))
+    {
+        log!("Stream table detected, join pushdown not supported");
+        return;
+    }
+
     // Skip pushdown when either base relation has WHERE restrictions.
     // Our pushdown fetches all data from both sides; PG's base restrictions
     // assume the base scan already filtered rows. Without a way to re-evaluate

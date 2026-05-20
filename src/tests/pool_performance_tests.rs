@@ -129,6 +129,52 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_pool_reuse_across_queries() {
+        setup_pool_test();
+        let table_name = "pool_reuse_hash";
+        let key_prefix = "pool_perf:reuse_test";
+
+        create_pool_test_table(table_name, "field text, value text", "hash", key_prefix);
+
+        Spi::run(&format!("INSERT INTO {} VALUES ('k1', 'v1');", table_name)).unwrap();
+
+        // Run multiple sequential queries to the same table — pool should be reused
+        for i in 0..10 {
+            let count = Spi::get_one::<i64>(&format!("SELECT COUNT(*) FROM {};", table_name))
+                .unwrap()
+                .unwrap();
+            assert_eq!(count, 1, "Query {} should return 1 row", i);
+        }
+
+        // Run queries interleaved with inserts — pool connection returned and reacquired
+        for i in 0..5 {
+            Spi::run(&format!(
+                "INSERT INTO {} VALUES ('iter{}', 'val{}');",
+                table_name, i, i
+            ))
+            .unwrap();
+        }
+
+        let final_count = Spi::get_one::<i64>(&format!("SELECT COUNT(*) FROM {};", table_name))
+            .unwrap()
+            .unwrap();
+        assert_eq!(final_count, 6, "Should have 1 original + 5 new rows");
+
+        // Cleanup all inserted rows
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'k1';", table_name)).unwrap();
+        for i in 0..5 {
+            Spi::run(&format!(
+                "DELETE FROM {} WHERE field = 'iter{}';",
+                table_name, i
+            ))
+            .unwrap();
+        }
+
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", table_name));
+        cleanup_pool_test();
+    }
+
+    #[pg_test]
     fn test_pool_multiple_tables_same_server() {
         setup_pool_test();
         let table1 = "pool_multi_hash";

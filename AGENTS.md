@@ -34,7 +34,7 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 
 ### Known Issues
 - Cluster integration tests (9 tests) fail without Redis Cluster infrastructure running
-- All non-cluster tests pass (331/331)
+- All non-cluster tests pass (including 16 JOIN tests and 4 pool performance tests)
 
 ## How to Work on This Project
 
@@ -87,6 +87,7 @@ JOIN tests create temporary local tables + Redis foreign tables and verify:
 2. Neither table in multi-key pattern mode (no glob in table_key_prefix)
 3. Equality operator in join condition (`op_mergejoinable()` check)
 4. INNER JOIN or LEFT JOIN only (RIGHT/FULL not pushed down)
+5. Neither relation has base WHERE restrictions (`baserestrictinfo` must be empty)
 
 ### Adding a New Feature
 

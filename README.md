@@ -458,17 +458,21 @@ JOIN redis_set s ON h.field = s.member;
 The FDW automatically detects which columns are used in the join condition from the query. Supported join types: INNER JOIN, LEFT JOIN.
 
 **Limitations:**
-- FDW-to-FDW pushdown requires both tables on the same Redis server
-- Only single-column equality joins are pushed down
+- FDW-to-FDW pushdown requires both tables on the same Redis server (same `host_port`)
+- Only single-column equality joins are pushed down (merge-joinable operators)
+- Neither table can have base WHERE restrictions (these force nested-loop fallback)
+- Multi-key pattern tables (glob in `table_key_prefix`) cannot be push-down joined
+- RIGHT JOIN and FULL OUTER JOIN are not pushed down (handled via nested-loop)
 - Both datasets are loaded into memory for the hash join (warning emitted if >500K rows)
 - Redis command errors during join fetch are raised as SQL errors (no silent data loss)
 - LEFT JOIN unmatched rows produce proper SQL NULLs (not string literals)
 
 ### Performance Tips for JOINs
 
-- Use `EXPLAIN` to verify the planner chose an efficient strategy
+- Use `EXPLAIN` to verify the planner chose an efficient strategy (look for "Foreign Scan" on the join relation)
 - For large Redis datasets, add WHERE conditions to reduce data volume before the join
-- FDW-to-FDW same-server joins avoid redundant connection overhead
+- FDW-to-FDW same-server joins avoid redundant connection overhead (single pooled connection for both datasets)
+- The smaller dataset is always used as the hash-join build side for optimal memory usage
 
 ## Connection Pool Configuration
 
