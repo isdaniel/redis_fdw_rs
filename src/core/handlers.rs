@@ -1204,15 +1204,15 @@ unsafe extern "C-unwind" fn import_foreign_schema(
         let table_name = sanitize_table_name(prefix);
 
         match list_type {
-            pg_sys::ImportForeignSchemaType::FDW_IMPORT_SCHEMA_LIMIT_TO => {
-                if !filter_names.contains(&table_name) {
-                    continue;
-                }
+            pg_sys::ImportForeignSchemaType::FDW_IMPORT_SCHEMA_LIMIT_TO
+                if !filter_names.contains(&table_name) =>
+            {
+                continue;
             }
-            pg_sys::ImportForeignSchemaType::FDW_IMPORT_SCHEMA_EXCEPT => {
-                if filter_names.contains(&table_name) {
-                    continue;
-                }
+            pg_sys::ImportForeignSchemaType::FDW_IMPORT_SCHEMA_EXCEPT
+                if filter_names.contains(&table_name) =>
+            {
+                continue;
             }
             _ => {}
         }
@@ -1226,7 +1226,12 @@ unsafe extern "C-unwind" fn import_foreign_schema(
             table_name, columns, server_name, database_str, redis_type, key_pattern
         );
 
-        let ddl_cstr = CString::new(ddl).unwrap();
+        let ddl_cstr = match CString::new(ddl) {
+            Ok(c) => c,
+            Err(_) => {
+                error!("import_foreign_schema: table name contains null byte");
+            }
+        };
         let pg_str = pg_sys::pstrdup(ddl_cstr.as_ptr());
         result_list = pg_sys::lappend(result_list, pg_str as *mut std::ffi::c_void);
     }
@@ -1414,6 +1419,7 @@ unsafe extern "C-unwind" fn acquire_sample_rows(
     let mut table_type = RedisTableType::from_str(table_type_str);
     let is_multi_key = is_multi_key_pattern(&key_prefix);
 
+    let max_per_key = targrows as usize;
     let sample_data: Vec<Vec<String>> = if is_multi_key {
         let (_, keys): (u64, Vec<String>) = redis::cmd("SCAN")
             .arg(0u64)
@@ -1427,6 +1433,10 @@ unsafe extern "C-unwind" fn acquire_sample_rows(
         let sample_keys: Vec<&String> = keys.iter().take(targrows as usize).collect();
         let mut result = Vec::new();
         for key in sample_keys {
+            if result.len() >= max_per_key {
+                break;
+            }
+            let remaining = max_per_key - result.len();
             let type_vals: Vec<String> = match table_type_str {
                 "string" => {
                     let val: String = redis::cmd("GET")
@@ -1440,20 +1450,18 @@ unsafe extern "C-unwind" fn acquire_sample_rows(
                         .arg(key)
                         .query(conn_like)
                         .unwrap_or_default();
-                    let mut rows = Vec::new();
-                    for chunk in vals.chunks(2) {
+                    for chunk in vals.chunks(2).take(remaining) {
                         if chunk.len() == 2 {
-                            rows.push(vec![key.clone(), chunk[0].clone(), chunk[1].clone()]);
+                            result.push(vec![key.clone(), chunk[0].clone(), chunk[1].clone()]);
                         }
                     }
-                    result.extend(rows);
                     continue;
                 }
                 "list" => {
                     let vals: Vec<String> = redis::cmd("LRANGE")
                         .arg(key)
                         .arg(0i64)
-                        .arg(-1i64)
+                        .arg((remaining as i64) - 1)
                         .query(conn_like)
                         .unwrap_or_default();
                     for v in vals {
@@ -1462,11 +1470,14 @@ unsafe extern "C-unwind" fn acquire_sample_rows(
                     continue;
                 }
                 "set" => {
-                    let vals: Vec<String> = redis::cmd("SMEMBERS")
+                    let (_, vals): (u64, Vec<String>) = redis::cmd("SSCAN")
                         .arg(key)
+                        .arg(0u64)
+                        .arg("COUNT")
+                        .arg(remaining)
                         .query(conn_like)
-                        .unwrap_or_default();
-                    for v in vals {
+                        .unwrap_or((0, Vec::new()));
+                    for v in vals.into_iter().take(remaining) {
                         result.push(vec![key.clone(), v]);
                     }
                     continue;
@@ -1475,7 +1486,7 @@ unsafe extern "C-unwind" fn acquire_sample_rows(
                     let vals: Vec<String> = redis::cmd("ZRANGE")
                         .arg(key)
                         .arg(0i64)
-                        .arg(-1i64)
+                        .arg((remaining as i64) - 1)
                         .arg("WITHSCORES")
                         .query(conn_like)
                         .unwrap_or_default();
