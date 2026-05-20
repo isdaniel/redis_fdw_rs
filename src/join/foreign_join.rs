@@ -104,12 +104,19 @@ fn fetch_dataset(
 ) -> Vec<Vec<String>> {
     // Pre-check cardinality to avoid OOM from unbounded HGETALL/SMEMBERS
     let cardinality: u64 = match table_type {
-        RedisTableType::Hash(_) => redis::cmd("HLEN").arg(key_prefix).query(conn).unwrap_or(0),
-        RedisTableType::Set(_) => redis::cmd("SCARD").arg(key_prefix).query(conn).unwrap_or(0),
-        RedisTableType::ZSet(_) => redis::cmd("ZCARD").arg(key_prefix).query(conn).unwrap_or(0),
-        RedisTableType::List(_) => redis::cmd("LLEN").arg(key_prefix).query(conn).unwrap_or(0),
-        _ => 0,
-    };
+        RedisTableType::Hash(_) => redis::cmd("HLEN").arg(key_prefix).query(conn),
+        RedisTableType::Set(_) => redis::cmd("SCARD").arg(key_prefix).query(conn),
+        RedisTableType::ZSet(_) => redis::cmd("ZCARD").arg(key_prefix).query(conn),
+        RedisTableType::List(_) => redis::cmd("LLEN").arg(key_prefix).query(conn),
+        _ => Ok(0),
+    }
+    .unwrap_or_else(|e| {
+        pgrx::error!(
+            "Redis FDW: failed to get cardinality for key '{}': {}",
+            key_prefix,
+            e
+        )
+    });
     if cardinality > MAX_JOIN_DATASET_ROWS as u64 {
         pgrx::error!(
             "Redis FDW: join dataset '{}' has {} elements, exceeding limit of {}. Use a WHERE clause to reduce data volume.",

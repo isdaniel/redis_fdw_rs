@@ -579,11 +579,10 @@ extern "C-unwind" fn re_scan_foreign_scan(node: *mut pgrx::pg_sys::ForeignScanSt
         let state = &mut *fdw_state;
 
         if state.is_join_scan {
-            // Reset join iteration so it re-executes on next iterate call
+            // Reset iterator to re-read materialized results without re-fetching from Redis
             if let Some(ref mut join_state) = state.join_state {
                 join_state.current_row = 0;
             }
-            state.join_executed = false;
         } else {
             state.row_count = 0;
             state.scan_cursor = 0;
