@@ -1324,15 +1324,24 @@ unsafe extern "C-unwind" fn analyze_foreign_table(
         .unwrap_or("string");
 
     let estimated_rows: u64 = if is_multi_key_pattern(&key_prefix) {
-        let (_, keys): (u64, Vec<String>) = redis::cmd("SCAN")
-            .arg(0u64)
-            .arg("MATCH")
-            .arg(&key_prefix)
-            .arg("COUNT")
-            .arg(10000u32)
-            .query(conn_like)
-            .unwrap_or((0, Vec::new()));
-        keys.len() as u64
+        let mut cursor = 0u64;
+        let mut total_keys = 0u64;
+        loop {
+            let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(&key_prefix)
+                .arg("COUNT")
+                .arg(10000u32)
+                .query(conn_like)
+                .unwrap_or((0, Vec::new()));
+            total_keys += keys.len() as u64;
+            cursor = next_cursor;
+            if cursor == 0 {
+                break;
+            }
+        }
+        total_keys
     } else {
         match table_type {
             "hash" => redis::cmd("HLEN")
@@ -1425,18 +1434,26 @@ unsafe extern "C-unwind" fn acquire_sample_rows(
 
     let max_per_key = targrows as usize;
     let sample_data: Vec<Vec<String>> = if is_multi_key {
-        let (_, keys): (u64, Vec<String>) = redis::cmd("SCAN")
-            .arg(0u64)
-            .arg("MATCH")
-            .arg(&key_prefix)
-            .arg("COUNT")
-            .arg(targrows as u32)
-            .query(conn_like)
-            .unwrap_or((0, Vec::new()));
-
-        let sample_keys: Vec<&String> = keys.iter().take(targrows as usize).collect();
+        let mut keys = Vec::new();
+        let mut cursor = 0u64;
+        loop {
+            let (next_cursor, batch): (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(&key_prefix)
+                .arg("COUNT")
+                .arg(targrows as u32)
+                .query(conn_like)
+                .unwrap_or((0, Vec::new()));
+            keys.extend(batch);
+            cursor = next_cursor;
+            if cursor == 0 || keys.len() >= max_per_key {
+                break;
+            }
+        }
+        keys.truncate(max_per_key);
         let mut result = Vec::new();
-        for key in sample_keys {
+        for key in &keys {
             if result.len() >= max_per_key {
                 break;
             }
@@ -1450,10 +1467,13 @@ unsafe extern "C-unwind" fn acquire_sample_rows(
                     vec![key.clone(), val]
                 }
                 "hash" => {
-                    let vals: Vec<String> = redis::cmd("HGETALL")
+                    let (_, vals): (u64, Vec<String>) = redis::cmd("HSCAN")
                         .arg(key)
+                        .arg(0u64)
+                        .arg("COUNT")
+                        .arg(remaining)
                         .query(conn_like)
-                        .unwrap_or_default();
+                        .unwrap_or((0, Vec::new()));
                     for chunk in vals.chunks(2).take(remaining) {
                         if chunk.len() == 2 {
                             result.push(vec![key.clone(), chunk[0].clone(), chunk[1].clone()]);

@@ -870,9 +870,17 @@ impl RedisFdwState {
                 }
             }
             RedisTableType::ZSet(_) => {
-                if data.len() >= 2 && data[1].parse::<f64>().is_ok() {
-                    pipe.cmd("ZADD").arg(key).arg(&data[1]).arg(&data[0]);
-                    return true;
+                if data.len() >= 2 {
+                    if data[1].parse::<f64>().is_ok() {
+                        pipe.cmd("ZADD").arg(key).arg(&data[1]).arg(&data[0]);
+                        return true;
+                    } else {
+                        pgrx::warning!(
+                            "ZSet batch insert: invalid score '{}' for member '{}', row skipped",
+                            data[1],
+                            data[0]
+                        );
+                    }
                 }
             }
             RedisTableType::String(_) => {
@@ -922,9 +930,17 @@ impl RedisFdwState {
                 }
             }
             RedisTableType::ZSet(_) => {
-                if data.len() >= 2 && data[1].parse::<f64>().is_ok() {
-                    pipe.cmd("ZADD").arg(key).arg(&data[1]).arg(&data[0]);
-                    return true;
+                if data.len() >= 2 {
+                    if data[1].parse::<f64>().is_ok() {
+                        pipe.cmd("ZADD").arg(key).arg(&data[1]).arg(&data[0]);
+                        return true;
+                    } else {
+                        pgrx::warning!(
+                            "ZSet batch insert: invalid score '{}' for member '{}', row skipped",
+                            data[1],
+                            data[0]
+                        );
+                    }
                 }
             }
             RedisTableType::String(_) => {
