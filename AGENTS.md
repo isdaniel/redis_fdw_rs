@@ -9,6 +9,8 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 **Feature-complete for all CRUD operations plus EXPLAIN, batch INSERT, TRUNCATE, IMPORT FOREIGN SCHEMA, ANALYZE, and COPY FROM.** All Redis types (String, Hash, List, Set, ZSet) support SELECT, INSERT, UPDATE, DELETE, TRUNCATE. Stream supports SELECT, INSERT, DELETE, TRUNCATE only (append-only by design).
 
 ### Recent Work
+- JOIN support: FDW-to-FDW join pushdown for same-server tables with automatic join column detection from query clauses
+- Connection pool optimization: planning phase now connects to Redis for real cardinality statistics
 - FDW lifecycle refactoring: batch insert logic moved to `state_manager.batch_insert_data()`; handlers is now a thin dispatch layer
 - ANALYZE support: `analyze_foreign_table` + `acquire_sample_rows` for query planning statistics
 - COPY FROM / INSERT SELECT: `begin_foreign_insert` / `end_foreign_insert` callbacks
@@ -32,7 +34,7 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 
 ### Known Issues
 - Cluster integration tests (9 tests) fail without Redis Cluster infrastructure running
-- All non-cluster tests pass (331/331)
+- All non-cluster tests pass (including 16 JOIN tests and 4 pool performance tests)
 
 ## How to Work on This Project
 
@@ -53,6 +55,40 @@ cargo pgrx test pg14           # run all tests (needs Redis)
 cargo clippy --features pg14   # lint
 cargo fmt                      # format
 ```
+
+### Testing JOINs
+
+JOIN tests require both Redis and local PostgreSQL tables:
+
+```bash
+# Start Redis infrastructure
+make setup-redis
+
+# Run join-specific tests
+cargo pgrx test pg16 join_tests
+
+# Run pool performance tests
+cargo pgrx test pg16 pool_performance
+```
+
+JOIN tests create temporary local tables + Redis foreign tables and verify:
+- FDW-to-local INNER/LEFT JOINs return correct row counts
+- FDW-to-FDW same-server joins work with automatic column detection
+- Cross-type FDW-to-FDW joins (e.g., hash.field = zset.member)
+- JOIN + WHERE pushdown combinations
+- NULL padding for unmatched LEFT JOIN rows
+- Empty table edge cases
+- List type JOINs and String multi-key JOINs
+- Large dataset JOINs (100+ rows)
+- Rescan correctness (duplicate local rows trigger multiple scans)
+
+**Join pushdown eligibility requires ALL of:**
+1. Both tables on same Redis server (host_port match)
+2. Neither table in multi-key pattern mode (no glob in table_key_prefix)
+3. Neither table is a Stream type (variable-width rows not supported)
+4. Equality operator in join condition (`op_mergejoinable()` check)
+5. INNER JOIN or LEFT JOIN only (RIGHT/FULL not pushed down)
+6. Neither relation has base WHERE restrictions (`baserestrictinfo` must be empty)
 
 ### Adding a New Feature
 
@@ -104,8 +140,11 @@ FDW Callbacks (handlers.rs)
     ├── Import Schema: import_foreign_schema
     │       └── SCAN → TYPE pipeline → group by prefix → generate DDL
     │
-    └── Analyze: analyze_foreign_table → acquire_sample_rows
-            └── Enables ANALYZE for query planning (HLEN/SCARD/ZCARD/XLEN + sampling)
+    ├── Analyze: analyze_foreign_table → acquire_sample_rows
+    │       └── Enables ANALYZE for query planning (HLEN/SCARD/ZCARD/XLEN + sampling)
+    │
+    └── Join Pushdown: get_foreign_join_paths → plan_foreign_join → begin_foreign_join_scan
+            └── Same-server detection → hash-join execution (build/probe) → iterate results
                     │
                     ▼
               Redis (via R2D2 pool_manager.rs)

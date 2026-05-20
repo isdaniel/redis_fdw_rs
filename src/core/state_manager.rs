@@ -47,6 +47,12 @@ pub struct RedisFdwState {
     pub cached_ttl: Option<i64>,
     /// Cached TTL values for multi-key mode (batch-fetched via pipeline)
     pub multi_key_ttl_cache: HashMap<String, i64>,
+    /// Whether this is a join pushdown scan (FDW-to-FDW on same server)
+    pub is_join_scan: bool,
+    /// Join execution state (populated during begin_foreign_scan for join scans)
+    pub join_state: Option<crate::join::types::RedisJoinState>,
+    /// Whether the join has been executed (lazy: execute on first iterate call)
+    pub join_executed: bool,
 }
 
 impl RedisFdwState {
@@ -71,6 +77,9 @@ impl RedisFdwState {
             is_multi_key: false,
             cached_ttl: None,
             multi_key_ttl_cache: HashMap::new(),
+            is_join_scan: false,
+            join_state: None,
+            join_executed: false,
         }
     }
 

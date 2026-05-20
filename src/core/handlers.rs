@@ -1,5 +1,9 @@
 use crate::{
     core::state_manager::RedisFdwState,
+    join::{
+        foreign_join::execute_foreign_join,
+        types::{RedisJoinState, RedisJoinType},
+    },
     query::{limit::extract_limit_offset_info, pushdown::WhereClausePushdown},
     tables::types::RedisTableType,
     utils::{helpers::*, memory::create_wrappers_memctx, row::Row},
@@ -90,6 +94,9 @@ pub extern "C" fn redis_fdw_handler() -> FdwRoutine {
         // analyze
         fdw_routine.AnalyzeForeignTable = Some(analyze_foreign_table);
 
+        // join pushdown (FDW-to-FDW on same Redis server)
+        fdw_routine.GetForeignJoinPaths = Some(get_foreign_join_paths);
+
         fdw_routine
     }
 }
@@ -117,6 +124,14 @@ extern "C-unwind" fn get_foreign_rel_size(
             state.table_type = RedisTableType::from_str(table_type_str);
         }
 
+        // Connect to Redis for real statistics gathering
+        if let Err(e) = state.init_redis_connection_from_options() {
+            log!(
+                "Could not connect to Redis for cost estimation, using defaults: {}",
+                e
+            );
+        }
+
         // Calculate cost estimate using actual Redis statistics
         let cost_estimate = state.estimate_costs();
         log!(
@@ -126,6 +141,9 @@ extern "C-unwind" fn get_foreign_rel_size(
             cost_estimate.total_cost,
             cost_estimate.width
         );
+
+        // Release planning-phase connection back to pool immediately, begin_foreign_scan will re-acquire from pool (fast path: read-lock only).
+        state.redis_connection = None;
 
         // Store the estimate for use in get_foreign_paths
         let estimated_rows = cost_estimate.rows;
@@ -193,14 +211,19 @@ unsafe extern "C-unwind" fn get_foreign_plan(
     root: *mut pgrx::pg_sys::PlannerInfo,
     baserel: *mut pgrx::pg_sys::RelOptInfo,
     foreigntableid: pgrx::pg_sys::Oid,
-    _best_path: *mut pgrx::pg_sys::ForeignPath,
+    best_path: *mut pgrx::pg_sys::ForeignPath,
     tlist: *mut pgrx::pg_sys::List,
     scan_clauses: *mut pgrx::pg_sys::List,
     outer_plan: *mut pgrx::pg_sys::Plan,
 ) -> *mut pgrx::pg_sys::ForeignScan {
     log!("---> get_foreign_plan");
 
-    // Get the FDW state from baserel to analyze table type
+    // Join relation: scanrelid=0, build join plan
+    if (*baserel).reloptkind == pg_sys::RelOptKind::RELOPT_JOINREL {
+        return plan_foreign_join(root, baserel, best_path, tlist, scan_clauses, outer_plan);
+    }
+
+    // Base relation: normal scan plan
     let state = state_from_ptr((*baserel).fdw_private);
 
     PgMemoryContexts::For(state.tmp_ctx).switch_to(|_| {
@@ -254,6 +277,123 @@ unsafe extern "C-unwind" fn get_foreign_plan(
     )
 }
 
+unsafe fn plan_foreign_join(
+    _root: *mut pgrx::pg_sys::PlannerInfo,
+    joinrel: *mut pgrx::pg_sys::RelOptInfo,
+    best_path: *mut pgrx::pg_sys::ForeignPath,
+    tlist: *mut pgrx::pg_sys::List,
+    scan_clauses: *mut pgrx::pg_sys::List,
+    outer_plan: *mut pgrx::pg_sys::Plan,
+) -> *mut pgrx::pg_sys::ForeignScan {
+    log!("---> plan_foreign_join");
+
+    // Extract outer/inner state from the ForeignPath's fdw_private
+    let path_private = (*best_path).fdw_private;
+    let outer_state_ptr = deserialize_nth_ptr_from_list(path_private, 0) as *mut RedisFdwState;
+    let inner_state_ptr = deserialize_nth_ptr_from_list(path_private, 1) as *mut RedisFdwState;
+
+    if outer_state_ptr.is_null() || inner_state_ptr.is_null() {
+        pgrx::error!("Join plan: missing outer/inner state in fdw_private");
+    }
+
+    let outer_state = &*outer_state_ptr;
+    let inner_state = &*inner_state_ptr;
+
+    // Read the join type from the third list element
+    let jointype_val = deserialize_nth_ptr_from_list(path_private, 2) as i64;
+    let join_type = if jointype_val == pgrx::pg_sys::JoinType::JOIN_LEFT as i64 {
+        RedisJoinType::Left
+    } else {
+        RedisJoinType::Inner
+    };
+
+    // Read join columns from 4th and 5th list elements
+    let join_col_outer = deserialize_nth_ptr_from_list(path_private, 3) as usize;
+    let join_col_inner = deserialize_nth_ptr_from_list(path_private, 4) as usize;
+
+    // Read relation IDs from 6th and 7th list elements
+    let outer_relid = deserialize_nth_ptr_from_list(path_private, 5) as pg_sys::Index;
+    let inner_relid = deserialize_nth_ptr_from_list(path_private, 6) as pg_sys::Index;
+
+    // Build the RedisJoinState with table info from both sides
+    let join_state = RedisJoinState::new(
+        outer_state.table_type.clone(),
+        inner_state.table_type.clone(),
+        outer_state.table_key_prefix.clone(),
+        inner_state.table_key_prefix.clone(),
+        join_type,
+        join_col_outer,
+        join_col_inner,
+    );
+
+    // Create a new RedisFdwState for the join scan
+    let ctx_name = "Wrappers_join_scan";
+    let ctx = create_wrappers_memctx(ctx_name);
+    let mut state = RedisFdwState::new(ctx);
+
+    // Copy connection info from outer (same server guaranteed by get_foreign_join_paths)
+    state.host_port = outer_state.host_port.clone();
+    state.database = outer_state.database;
+    state.opts = outer_state.opts.clone();
+    state.is_join_scan = true;
+    state.join_state = Some(join_state);
+
+    let state_ptr = PgMemoryContexts::For(ctx).leak_and_drop_on_delete(state);
+    (*joinrel).fdw_private = state_ptr as *mut std::os::raw::c_void;
+
+    let outer_ncols = crate::join::foreign_join::expected_columns_for_type(&outer_state.table_type);
+    let inner_ncols = crate::join::foreign_join::expected_columns_for_type(&inner_state.table_type);
+
+    // Build fdw_scan_tlist: declare our scan produces [outer_col1..N, inner_col1..M]
+    // This matches the combined row layout from execute_foreign_join.
+    // Since we skip pushdown when base restrictions exist (checked in
+    // get_foreign_join_paths), all quals here only reference join columns
+    // that are already in the tlist.
+    let mut fdw_scan_tlist: *mut pg_sys::List = ptr::null_mut();
+    let mut resno: i16 = 1;
+
+    for attno in 1..=(outer_ncols as i16) {
+        let var = pg_sys::makeVar(
+            outer_relid as _,
+            attno,
+            pg_sys::TEXTOID,
+            -1,
+            pg_sys::DEFAULT_COLLATION_OID,
+            0,
+        );
+        let tle = pg_sys::makeTargetEntry(var as *mut pg_sys::Expr, resno, ptr::null_mut(), false);
+        fdw_scan_tlist = pg_sys::lappend(fdw_scan_tlist, tle as *mut std::ffi::c_void);
+        resno += 1;
+    }
+    for attno in 1..=(inner_ncols as i16) {
+        let var = pg_sys::makeVar(
+            inner_relid as _,
+            attno,
+            pg_sys::TEXTOID,
+            -1,
+            pg_sys::DEFAULT_COLLATION_OID,
+            0,
+        );
+        let tle = pg_sys::makeTargetEntry(var as *mut pg_sys::Expr, resno, ptr::null_mut(), false);
+        fdw_scan_tlist = pg_sys::lappend(fdw_scan_tlist, tle as *mut std::ffi::c_void);
+        resno += 1;
+    }
+
+    let fdw_private = serialize_ptr_to_list(state_ptr as *mut std::os::raw::c_void);
+    let local_quals = pg_sys::extract_actual_clauses(scan_clauses, false);
+
+    pgrx::pg_sys::make_foreignscan(
+        tlist,
+        local_quals, // apply any joinrel-level quals locally after scan
+        0,           // scanrelid=0 for join
+        ptr::null_mut(),
+        fdw_private as _,
+        fdw_scan_tlist,
+        ptr::null_mut(),
+        outer_plan,
+    )
+}
+
 #[pg_guard]
 extern "C-unwind" fn begin_foreign_scan(
     node: *mut pgrx::pg_sys::ForeignScanState,
@@ -263,6 +403,15 @@ extern "C-unwind" fn begin_foreign_scan(
     unsafe {
         let scan_state = (*node).ss;
         let plan: *mut pg_sys::ForeignScan = scan_state.ps.plan as *mut pg_sys::ForeignScan;
+        let scanrelid = (*plan).scan.scanrelid;
+
+        // Join scan: scanrelid == 0 means this is a pushed-down join
+        if scanrelid == 0 {
+            begin_foreign_join_scan(node, plan);
+            return;
+        }
+
+        // Normal base relation scan
         let relation = (*node).ss.ss_currentRelation;
         let relid = (*relation).rd_id;
         let state_ptr = deserialize_ptr_from_list((*plan).fdw_private as _);
@@ -272,9 +421,11 @@ extern "C-unwind" fn begin_foreign_scan(
             log!("Foreign table options: {:?}", options);
             state.update_from_options(options);
 
-            // Initialize Redis connection and handle potential errors
-            if let Err(e) = state.init_redis_connection_from_options() {
-                pgrx::error!("Failed to connect to Redis: {}", e);
+            // Acquire connection from pool (fast path: read-lock on existing pool)
+            if state.redis_connection.is_none() {
+                if let Err(e) = state.init_redis_connection_from_options() {
+                    pgrx::error!("Failed to connect to Redis: {}", e);
+                }
             }
 
             state.set_table_type();
@@ -296,6 +447,29 @@ extern "C-unwind" fn begin_foreign_scan(
     }
 }
 
+unsafe fn begin_foreign_join_scan(
+    node: *mut pgrx::pg_sys::ForeignScanState,
+    plan: *mut pg_sys::ForeignScan,
+) {
+    log!("---> begin_foreign_join_scan");
+    let state_ptr = deserialize_ptr_from_list((*plan).fdw_private as _);
+    let state = state_from_ptr(state_ptr);
+
+    // Connect to Redis for the join execution
+    if state.redis_connection.is_none() {
+        if let Err(e) = state.init_redis_connection_from_options() {
+            pgrx::error!("Failed to connect to Redis for join scan: {}", e);
+        }
+    }
+
+    // Transfer connection to the join_state so execute_foreign_join can use it
+    if let Some(ref mut join_state) = state.join_state {
+        join_state.connection = state.redis_connection.take();
+    }
+
+    (*node).fdw_state = state_ptr;
+}
+
 #[pg_guard]
 unsafe extern "C-unwind" fn iterate_foreign_scan(
     node: *mut pgrx::pg_sys::ForeignScanState,
@@ -307,6 +481,34 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
     let tupdesc = (*slot).tts_tupleDescriptor;
 
     exec_clear_tuple(slot);
+
+    // Join pushdown mode: execute join on first call, then iterate results
+    if state.is_join_scan {
+        if let Some(ref mut join_state) = state.join_state {
+            if !state.join_executed {
+                execute_foreign_join(join_state);
+                state.join_executed = true;
+            }
+            if join_state.current_row < join_state.result_data.len() {
+                let row = &join_state.result_data[join_state.current_row];
+                let natts = (*tupdesc).natts as usize;
+                for (col_idx, value) in row.iter().enumerate().take(natts) {
+                    match value {
+                        None => {
+                            (*slot).tts_isnull.add(col_idx).write(true);
+                        }
+                        Some(v) => {
+                            write_datum_to_slot(slot, tupdesc, col_idx, v);
+                        }
+                    }
+                }
+                join_state.current_row += 1;
+                pgrx::pg_sys::ExecStoreVirtualTuple(slot);
+                return slot;
+            }
+        }
+        return slot;
+    }
 
     // Streaming iteration: if current batch is exhausted, fetch more
     if state.is_read_end() {
@@ -420,13 +622,19 @@ extern "C-unwind" fn re_scan_foreign_scan(node: *mut pgrx::pg_sys::ForeignScanSt
         }
         let state = &mut *fdw_state;
 
-        // Reset iteration and streaming state for rescan
-        state.row_count = 0;
-        state.scan_cursor = 0;
-        state.scan_complete = false;
-        state.cached_ttl = None;
-        state.multi_key_ttl_cache.clear();
-        state.table_type.clear_data();
+        if state.is_join_scan {
+            // Reset iterator to re-read materialized results without re-fetching from Redis
+            if let Some(ref mut join_state) = state.join_state {
+                join_state.current_row = 0;
+            }
+        } else {
+            state.row_count = 0;
+            state.scan_cursor = 0;
+            state.scan_complete = false;
+            state.cached_ttl = None;
+            state.multi_key_ttl_cache.clear();
+            state.table_type.clear_data();
+        }
     }
 }
 
@@ -449,6 +657,10 @@ extern "C-unwind" fn shutdown_foreign_scan(node: *mut pgrx::pg_sys::ForeignScanS
         }
         let state = &mut *fdw_state;
         state.redis_connection = None;
+        if let Some(ref mut join_state) = state.join_state {
+            join_state.connection = None;
+            join_state.result_data = Vec::new();
+        }
     }
 }
 
@@ -841,6 +1053,28 @@ unsafe extern "C-unwind" fn explain_foreign_scan(
         return;
     }
     let state = &*fdw_state;
+
+    if state.is_join_scan {
+        let label_join = c"Redis Join";
+        let join_desc = if let Some(ref js) = state.join_state {
+            format!(
+                "{}({}) x {}({})",
+                js.outer_table_type.redis_type_name(),
+                js.outer_key_prefix,
+                js.inner_table_type.redis_type_name(),
+                js.inner_key_prefix
+            )
+        } else {
+            "FDW-to-FDW pushdown".to_string()
+        };
+        let join_cstr = CString::new(join_desc).unwrap_or_default();
+        pg_sys::ExplainPropertyText(label_join.as_ptr(), join_cstr.as_ptr(), es);
+
+        let server_cstr = CString::new(state.host_port.as_str()).unwrap_or_default();
+        let label_server = c"Redis Server";
+        pg_sys::ExplainPropertyText(label_server.as_ptr(), server_cstr.as_ptr(), es);
+        return;
+    }
 
     let server_cstr = CString::new(state.host_port.as_str()).unwrap_or_default();
     let key_cstr = CString::new(state.table_key_prefix.as_str()).unwrap_or_default();
@@ -1576,4 +1810,217 @@ unsafe extern "C-unwind" fn acquire_sample_rows(
     }
 
     actual
+}
+
+/// Extract join column indices from the join restrictlist.
+/// Returns (outer_col_0based, inner_col_0based) if an equality condition is found
+/// between a Var on the outer rel and a Var on the inner rel.
+unsafe fn extract_join_columns(
+    extra: *mut pgrx::pg_sys::JoinPathExtraData,
+    outerrel: *mut pgrx::pg_sys::RelOptInfo,
+    innerrel: *mut pgrx::pg_sys::RelOptInfo,
+) -> Option<(usize, usize)> {
+    if extra.is_null() {
+        return None;
+    }
+
+    let restrictlist = (*extra).restrictlist;
+    if restrictlist.is_null() {
+        return None;
+    }
+
+    let outer_relids = (*outerrel).relids;
+    let inner_relids = (*innerrel).relids;
+
+    let restrict_items: Vec<*mut pg_sys::Node> = pgrx::memcx::current_context(|mcx| {
+        let list = pg_list_to_rust_list::<*mut std::ffi::c_void>(restrictlist, mcx);
+        list.iter().map(|item| *item as *mut pg_sys::Node).collect()
+    });
+
+    for node in &restrict_items {
+        let node = *node;
+        if node.is_null() {
+            continue;
+        }
+
+        // Unwrap RestrictInfo wrapper
+        let clause = if (*node).type_ == pg_sys::NodeTag::T_RestrictInfo {
+            let ri = node as *mut pg_sys::RestrictInfo;
+            (*ri).clause as *mut pg_sys::Node
+        } else {
+            node
+        };
+
+        if clause.is_null() || (*clause).type_ != pg_sys::NodeTag::T_OpExpr {
+            continue;
+        }
+
+        let op_expr = &*(clause as *mut pg_sys::OpExpr);
+
+        // Must be a merge-joinable (equality) operator with exactly 2 args
+        if !pg_sys::op_mergejoinable(op_expr.opno, pg_sys::InvalidOid) {
+            continue;
+        }
+
+        if pg_sys::list_length(op_expr.args) != 2 {
+            continue;
+        }
+
+        let left_arg = pg_sys::list_nth(op_expr.args, 0) as *mut pg_sys::Node;
+        let right_arg = pg_sys::list_nth(op_expr.args, 1) as *mut pg_sys::Node;
+
+        if left_arg.is_null() || right_arg.is_null() {
+            continue;
+        }
+
+        // Both args must be Var nodes
+        if (*left_arg).type_ != pg_sys::NodeTag::T_Var
+            || (*right_arg).type_ != pg_sys::NodeTag::T_Var
+        {
+            continue;
+        }
+
+        let left_var = &*(left_arg as *mut pg_sys::Var);
+        let right_var = &*(right_arg as *mut pg_sys::Var);
+
+        // Check which var belongs to outer/inner
+        let left_in_outer = pg_sys::bms_is_member(left_var.varno as i32, outer_relids);
+        let left_in_inner = pg_sys::bms_is_member(left_var.varno as i32, inner_relids);
+        let right_in_outer = pg_sys::bms_is_member(right_var.varno as i32, outer_relids);
+        let right_in_inner = pg_sys::bms_is_member(right_var.varno as i32, inner_relids);
+
+        if left_in_outer && right_in_inner && left_var.varattno > 0 && right_var.varattno > 0 {
+            let outer_col = (left_var.varattno - 1) as usize;
+            let inner_col = (right_var.varattno - 1) as usize;
+            return Some((outer_col, inner_col));
+        } else if right_in_outer && left_in_inner && right_var.varattno > 0 && left_var.varattno > 0
+        {
+            let outer_col = (right_var.varattno - 1) as usize;
+            let inner_col = (left_var.varattno - 1) as usize;
+            return Some((outer_col, inner_col));
+        }
+    }
+
+    None
+}
+
+#[pg_guard]
+unsafe extern "C-unwind" fn get_foreign_join_paths(
+    root: *mut pgrx::pg_sys::PlannerInfo,
+    joinrel: *mut pgrx::pg_sys::RelOptInfo,
+    outerrel: *mut pgrx::pg_sys::RelOptInfo,
+    innerrel: *mut pgrx::pg_sys::RelOptInfo,
+    jointype: pgrx::pg_sys::JoinType::Type,
+    _extra: *mut pgrx::pg_sys::JoinPathExtraData,
+) {
+    log!("---> get_foreign_join_paths");
+
+    if jointype != pgrx::pg_sys::JoinType::JOIN_INNER
+        && jointype != pgrx::pg_sys::JoinType::JOIN_LEFT
+    {
+        log!("Unsupported join type for pushdown");
+        return;
+    }
+
+    let outer_state_ptr = (*outerrel).fdw_private as *mut RedisFdwState;
+    let inner_state_ptr = (*innerrel).fdw_private as *mut RedisFdwState;
+
+    if outer_state_ptr.is_null() || inner_state_ptr.is_null() {
+        log!("One or both relations lack FDW state, cannot push down join");
+        return;
+    }
+
+    let outer_state = &*outer_state_ptr;
+    let inner_state = &*inner_state_ptr;
+
+    if outer_state.host_port != inner_state.host_port {
+        log!(
+            "Relations on different servers ({} vs {}), cannot push down",
+            outer_state.host_port,
+            inner_state.host_port
+        );
+        return;
+    }
+
+    // Multi-key pattern tables use SCAN-based iteration; pushdown not supported
+    if outer_state.is_multi_key || inner_state.is_multi_key {
+        log!("Multi-key pattern table detected, join pushdown not supported");
+        return;
+    }
+
+    // Stream tables have variable-width rows; pushdown not supported
+    if matches!(outer_state.table_type, RedisTableType::Stream(_))
+        || matches!(inner_state.table_type, RedisTableType::Stream(_))
+    {
+        log!("Stream table detected, join pushdown not supported");
+        return;
+    }
+
+    // Skip pushdown when either base relation has WHERE restrictions.
+    // Our pushdown fetches all data from both sides; PG's base restrictions
+    // assume the base scan already filtered rows. Without a way to re-evaluate
+    // base quals in the join scan, fall back to nested-loop which handles them.
+    if !(*outerrel).baserestrictinfo.is_null()
+        && pg_sys::list_length((*outerrel).baserestrictinfo) > 0
+    {
+        log!("Outer relation has base restrictions, skipping join pushdown");
+        return;
+    }
+    if !(*innerrel).baserestrictinfo.is_null()
+        && pg_sys::list_length((*innerrel).baserestrictinfo) > 0
+    {
+        log!("Inner relation has base restrictions, skipping join pushdown");
+        return;
+    }
+
+    // Extract join columns from the restrictlist in JoinPathExtraData
+    let (join_col_outer, join_col_inner) = match extract_join_columns(_extra, outerrel, innerrel) {
+        Some(cols) => cols,
+        None => {
+            log!("No equality join clause found between FDW rels, cannot push down");
+            return;
+        }
+    };
+
+    log!(
+        "Detected join columns: outer={}, inner={}",
+        join_col_outer,
+        join_col_inner
+    );
+
+    let outer_rows = (*outerrel).rows;
+    let inner_rows = (*innerrel).rows;
+    let startup_cost = 15.0;
+    let total_cost = startup_cost + outer_rows + inner_rows + (outer_rows.min(inner_rows) * 0.02);
+
+    let joinrel_rows = outer_rows.min(inner_rows);
+
+    // Store outer+inner state pointers, jointype, join columns, and relids
+    let fdw_private = serialize_join_info_to_list(&[
+        outer_state_ptr as i64,
+        inner_state_ptr as i64,
+        jointype as i64,
+        join_col_outer as i64,
+        join_col_inner as i64,
+        (*outerrel).relid as i64,
+        (*innerrel).relid as i64,
+    ]);
+
+    let path = pgrx::pg_sys::create_foreign_join_path(
+        root,
+        joinrel,
+        ptr::null_mut(),
+        joinrel_rows,
+        #[cfg(feature = "pg18")]
+        0,
+        startup_cost,
+        total_cost,
+        ptr::null_mut(),
+        (*joinrel).lateral_relids,
+        ptr::null_mut(),
+        #[cfg(any(feature = "pg17", feature = "pg18"))]
+        ptr::null_mut(),
+        fdw_private,
+    );
+    pgrx::pg_sys::add_path(joinrel, path as *mut pgrx::pg_sys::Path);
 }

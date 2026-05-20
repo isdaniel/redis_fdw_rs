@@ -7,6 +7,9 @@ mod core;
 // Query processing and optimization
 mod query;
 
+// JOIN support (parameterized paths and FDW-to-FDW pushdown)
+mod join;
+
 // Table type implementations
 mod tables;
 

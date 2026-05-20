@@ -12,7 +12,6 @@ use crate::{
 /// reuse across queries, significantly improving performance under concurrent workloads.
 use pgrx::prelude::*;
 use std::collections::HashMap;
-use std::time::Duration;
 
 /// Errors that can occur during connection creation
 #[derive(Debug, thiserror::Error)]
@@ -44,7 +43,6 @@ pub struct RedisConnectionConfig {
     pub host_port: String,
     pub database: i64,
     pub retry_attempts: Option<u32>,
-    pub retry_delay: Option<Duration>,
     pub auth_config: RedisAuthConfig,
     pub pool_config: PoolConfig,
 }
@@ -71,7 +69,6 @@ impl RedisConnectionConfig {
             host_port,
             database,
             retry_attempts: Some(3),
-            retry_delay: Some(Duration::from_millis(100)),
             auth_config: RedisAuthConfig::from_user_mapping_options(opts),
             pool_config: PoolConfig::from_options(opts),
         };
@@ -120,7 +117,6 @@ impl RedisConnectionFactory {
         config: &RedisConnectionConfig,
     ) -> ConnectionFactoryResult<PooledConnection> {
         let retry_attempts = config.retry_attempts.unwrap_or(3);
-        let retry_delay = config.retry_delay.unwrap_or(Duration::from_millis(100));
 
         for attempt in 1..=retry_attempts {
             match Self::create_pooled_connection(config) {
@@ -132,13 +128,9 @@ impl RedisConnectionFactory {
                     return Ok(connection);
                 }
                 Err(e) if attempt < retry_attempts => {
-                    log!(
-                        "Connection attempt {} failed, retrying in {:?}: {}",
-                        attempt,
-                        retry_delay,
-                        e
-                    );
-                    std::thread::sleep(retry_delay);
+                    log!("Connection attempt {} failed, retrying: {}", attempt, e);
+                    pgrx::check_for_interrupts!();
+                    std::thread::sleep(std::time::Duration::from_millis(100 * attempt as u64));
                 }
                 Err(e) => {
                     return Err(ConnectionFactoryError::ConnectionFailed(format!(
