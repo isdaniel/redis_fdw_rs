@@ -292,6 +292,8 @@ impl PoolManager {
         }
     }
 
+    const MAX_CACHED_POOLS: usize = 64;
+
     /// Get the global pool manager instance
     pub fn global() -> &'static RwLock<PoolManager> {
         POOL_MANAGER.get_or_init(|| RwLock::new(PoolManager::new()))
@@ -312,6 +314,15 @@ impl PoolManager {
         }
 
         let pool = Client::create_pool(host_port, database, auth_config, pool_config)?;
+
+        if self.single_pools.len() >= Self::MAX_CACHED_POOLS {
+            pgrx::warning!(
+                "Redis FDW: single pool cache full ({} pools), connection will not be cached",
+                Self::MAX_CACHED_POOLS
+            );
+            return Ok(pool);
+        }
+
         self.single_pools.insert(key, pool.clone());
         Ok(pool)
     }
@@ -331,6 +342,15 @@ impl PoolManager {
         }
 
         let pool = ClusterClient::create_pool(host_port, database, auth_config, pool_config)?;
+
+        if self.cluster_pools.len() >= Self::MAX_CACHED_POOLS {
+            pgrx::warning!(
+                "Redis FDW: cluster pool cache full ({} pools), connection will not be cached",
+                Self::MAX_CACHED_POOLS
+            );
+            return Ok(pool);
+        }
+
         self.cluster_pools.insert(key, pool.clone());
         Ok(pool)
     }
@@ -418,6 +438,13 @@ impl PooledConnection {
         match self {
             PooledConnection::Single(conn) => conn,
             PooledConnection::Cluster(conn) => conn,
+        }
+    }
+
+    pub fn as_cluster_connection_mut(&mut self) -> Option<&mut redis::cluster::ClusterConnection> {
+        match self {
+            PooledConnection::Cluster(conn) => Some(&mut *conn),
+            PooledConnection::Single(_) => None,
         }
     }
 }

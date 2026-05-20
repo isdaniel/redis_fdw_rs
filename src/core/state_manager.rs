@@ -65,7 +65,7 @@ impl RedisFdwState {
             cost_estimate: None,
             scan_cursor: 0,
             scan_complete: false,
-            batch_size: 1000,
+            batch_size: 5000,
             ttl_column_index: None,
             default_ttl: None,
             is_multi_key: false,
@@ -457,6 +457,8 @@ impl RedisFdwState {
         conn: &mut dyn redis::ConnectionLike,
         keys: &[String],
     ) -> usize {
+        const PER_KEY_WARN_THRESHOLD: usize = 200_000;
+
         let mut all_rows: Vec<String> =
             Vec::with_capacity(keys.len() * self.multi_key_columns_per_row());
 
@@ -487,6 +489,14 @@ impl RedisFdwState {
                     }
                 };
                 for (key, pairs) in keys.iter().zip(results) {
+                    pgrx::check_for_interrupts!();
+                    if pairs.len() > PER_KEY_WARN_THRESHOLD {
+                        pgrx::warning!(
+                            "Redis FDW: key '{}' contains {} elements, consider using LIMIT",
+                            key,
+                            pairs.len()
+                        );
+                    }
                     for (field, value) in pairs {
                         all_rows.push(key.clone());
                         all_rows.push(field);
@@ -506,6 +516,14 @@ impl RedisFdwState {
                     }
                 };
                 for (key, items) in keys.iter().zip(results) {
+                    pgrx::check_for_interrupts!();
+                    if items.len() > PER_KEY_WARN_THRESHOLD {
+                        pgrx::warning!(
+                            "Redis FDW: key '{}' contains {} elements, consider using LIMIT",
+                            key,
+                            items.len()
+                        );
+                    }
                     for item in items {
                         all_rows.push(key.clone());
                         all_rows.push(item);
@@ -524,6 +542,14 @@ impl RedisFdwState {
                     }
                 };
                 for (key, members) in keys.iter().zip(results) {
+                    pgrx::check_for_interrupts!();
+                    if members.len() > PER_KEY_WARN_THRESHOLD {
+                        pgrx::warning!(
+                            "Redis FDW: key '{}' contains {} elements, consider using LIMIT",
+                            key,
+                            members.len()
+                        );
+                    }
                     for member in members {
                         all_rows.push(key.clone());
                         all_rows.push(member);
@@ -546,6 +572,14 @@ impl RedisFdwState {
                     }
                 };
                 for (key, items) in keys.iter().zip(results) {
+                    pgrx::check_for_interrupts!();
+                    if items.len() > PER_KEY_WARN_THRESHOLD {
+                        pgrx::warning!(
+                            "Redis FDW: key '{}' contains {} elements, consider using LIMIT",
+                            key,
+                            items.len()
+                        );
+                    }
                     for (member, score) in items {
                         all_rows.push(key.clone());
                         all_rows.push(score.to_string());
@@ -558,6 +592,14 @@ impl RedisFdwState {
                 return 0;
             }
             RedisTableType::None => {}
+        }
+
+        const MULTI_KEY_WARN_THRESHOLD: usize = 1_000_000;
+        if all_rows.len() > MULTI_KEY_WARN_THRESHOLD {
+            pgrx::warning!(
+                "Redis FDW: multi-key batch accumulated {} elements, query may use excessive memory",
+                all_rows.len()
+            );
         }
 
         let cols_per_row = self.multi_key_columns_per_row();
@@ -664,6 +706,287 @@ impl RedisFdwState {
         if let Some(conn) = self.redis_connection.as_mut() {
             let conn_like = conn.as_connection_like_mut();
             self.table_type.update(conn_like, key, old_data, new_data)
+        } else {
+            Err(redis::RedisError::from((
+                redis::ErrorKind::Io,
+                "Redis connection not initialized",
+            )))
+        }
+    }
+
+    /// Batch insert multiple rows using Redis pipelining.
+    /// Handles cluster vs standalone internally. Applies TTL per row.
+    pub fn batch_insert_data(&mut self, rows: &[(Vec<String>, Option<i64>)]) -> Result<(), String> {
+        if let Some(ref mut conn) = self.redis_connection {
+            if let Some(cluster_conn) = conn.as_cluster_connection_mut() {
+                Self::batch_insert_cluster(
+                    cluster_conn,
+                    &self.table_type,
+                    &self.table_key_prefix,
+                    self.is_multi_key,
+                    self.default_ttl,
+                    rows,
+                )
+            } else {
+                let conn_like = conn.as_connection_like_mut();
+                Self::batch_insert_standalone(
+                    conn_like,
+                    &self.table_type,
+                    &self.table_key_prefix,
+                    self.is_multi_key,
+                    self.default_ttl,
+                    rows,
+                )
+            }
+        } else {
+            Err("Redis connection not available for batch insert".to_string())
+        }
+    }
+
+    fn batch_insert_standalone(
+        conn: &mut dyn redis::ConnectionLike,
+        table_type: &RedisTableType,
+        table_key_prefix: &str,
+        is_multi_key: bool,
+        default_ttl: Option<i64>,
+        rows: &[(Vec<String>, Option<i64>)],
+    ) -> Result<(), String> {
+        let mut pipe = redis::pipe();
+        let mut has_cmds = false;
+
+        for (data, row_ttl) in rows {
+            let (key, row_data) = if is_multi_key {
+                if data.is_empty() {
+                    continue;
+                }
+                (data[0].as_str(), &data[1..])
+            } else {
+                (table_key_prefix, data.as_slice())
+            };
+            if Self::add_insert_to_pipeline(&mut pipe, table_type, key, row_data) {
+                has_cmds = true;
+                has_cmds |= Self::add_ttl_to_pipeline(&mut pipe, key, *row_ttl, default_ttl);
+            }
+        }
+
+        if has_cmds {
+            pipe.query::<()>(conn)
+                .map_err(|e| format!("Redis batch insert pipeline failed: {}", e))?;
+        }
+
+        Ok(())
+    }
+
+    fn batch_insert_cluster(
+        cluster_conn: &mut redis::cluster::ClusterConnection,
+        table_type: &RedisTableType,
+        table_key_prefix: &str,
+        is_multi_key: bool,
+        default_ttl: Option<i64>,
+        rows: &[(Vec<String>, Option<i64>)],
+    ) -> Result<(), String> {
+        let mut pipe = redis::cluster::cluster_pipe();
+        let mut has_cmds = false;
+
+        for (data, row_ttl) in rows {
+            let (key, row_data) = if is_multi_key {
+                if data.is_empty() {
+                    continue;
+                }
+                (data[0].as_str(), &data[1..])
+            } else {
+                (table_key_prefix, data.as_slice())
+            };
+            if Self::add_insert_to_cluster_pipeline(&mut pipe, table_type, key, row_data) {
+                has_cmds = true;
+                has_cmds |=
+                    Self::add_ttl_to_cluster_pipeline(&mut pipe, key, *row_ttl, default_ttl);
+            }
+        }
+
+        if has_cmds {
+            pipe.query::<()>(cluster_conn)
+                .map_err(|e| format!("Redis cluster batch insert pipeline failed: {}", e))?;
+        }
+
+        Ok(())
+    }
+
+    fn add_insert_to_pipeline(
+        pipe: &mut redis::Pipeline,
+        table_type: &RedisTableType,
+        key: &str,
+        data: &[String],
+    ) -> bool {
+        match table_type {
+            RedisTableType::Hash(_) => {
+                if data.len() >= 2 {
+                    pipe.cmd("HSET").arg(key).arg(&data[0]).arg(&data[1]);
+                    return true;
+                }
+            }
+            RedisTableType::List(_) => {
+                if !data.is_empty() {
+                    pipe.cmd("RPUSH").arg(key).arg(&data[0]);
+                    return true;
+                }
+            }
+            RedisTableType::Set(_) => {
+                if !data.is_empty() {
+                    pipe.cmd("SADD").arg(key).arg(&data[0]);
+                    return true;
+                }
+            }
+            RedisTableType::ZSet(_) => {
+                if data.len() >= 2 {
+                    if data[1].parse::<f64>().is_ok() {
+                        pipe.cmd("ZADD").arg(key).arg(&data[1]).arg(&data[0]);
+                        return true;
+                    } else {
+                        pgrx::warning!(
+                            "ZSet batch insert: invalid score '{}' for member '{}', row skipped",
+                            data[1],
+                            data[0]
+                        );
+                    }
+                }
+            }
+            RedisTableType::String(_) => {
+                if !data.is_empty() {
+                    pipe.cmd("SET").arg(key).arg(&data[0]);
+                    return true;
+                }
+            }
+            RedisTableType::Stream(_) => {
+                if data.len() >= 3 {
+                    pipe.cmd("XADD")
+                        .arg(key)
+                        .arg("*")
+                        .arg(&data[1])
+                        .arg(&data[2]);
+                    return true;
+                }
+            }
+            RedisTableType::None => {}
+        }
+        false
+    }
+
+    fn add_insert_to_cluster_pipeline(
+        pipe: &mut redis::cluster::ClusterPipeline,
+        table_type: &RedisTableType,
+        key: &str,
+        data: &[String],
+    ) -> bool {
+        match table_type {
+            RedisTableType::Hash(_) => {
+                if data.len() >= 2 {
+                    pipe.cmd("HSET").arg(key).arg(&data[0]).arg(&data[1]);
+                    return true;
+                }
+            }
+            RedisTableType::List(_) => {
+                if !data.is_empty() {
+                    pipe.cmd("RPUSH").arg(key).arg(&data[0]);
+                    return true;
+                }
+            }
+            RedisTableType::Set(_) => {
+                if !data.is_empty() {
+                    pipe.cmd("SADD").arg(key).arg(&data[0]);
+                    return true;
+                }
+            }
+            RedisTableType::ZSet(_) => {
+                if data.len() >= 2 {
+                    if data[1].parse::<f64>().is_ok() {
+                        pipe.cmd("ZADD").arg(key).arg(&data[1]).arg(&data[0]);
+                        return true;
+                    } else {
+                        pgrx::warning!(
+                            "ZSet batch insert: invalid score '{}' for member '{}', row skipped",
+                            data[1],
+                            data[0]
+                        );
+                    }
+                }
+            }
+            RedisTableType::String(_) => {
+                if !data.is_empty() {
+                    pipe.cmd("SET").arg(key).arg(&data[0]);
+                    return true;
+                }
+            }
+            RedisTableType::Stream(_) => {
+                if data.len() >= 3 {
+                    pipe.cmd("XADD")
+                        .arg(key)
+                        .arg("*")
+                        .arg(&data[1])
+                        .arg(&data[2]);
+                    return true;
+                }
+            }
+            RedisTableType::None => {}
+        }
+        false
+    }
+
+    fn add_ttl_to_pipeline(
+        pipe: &mut redis::Pipeline,
+        key: &str,
+        row_ttl: Option<i64>,
+        default_ttl: Option<i64>,
+    ) -> bool {
+        let effective_ttl = match row_ttl {
+            Some(0) => return false,
+            Some(t) => t,
+            None => match default_ttl {
+                Some(t) => t,
+                None => return false,
+            },
+        };
+        if effective_ttl > 0 {
+            pipe.cmd("EXPIRE").arg(key).arg(effective_ttl);
+            true
+        } else if effective_ttl == -1 {
+            pipe.cmd("PERSIST").arg(key);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn add_ttl_to_cluster_pipeline(
+        pipe: &mut redis::cluster::ClusterPipeline,
+        key: &str,
+        row_ttl: Option<i64>,
+        default_ttl: Option<i64>,
+    ) -> bool {
+        let effective_ttl = match row_ttl {
+            Some(0) => return false,
+            Some(t) => t,
+            None => match default_ttl {
+                Some(t) => t,
+                None => return false,
+            },
+        };
+        if effective_ttl > 0 {
+            pipe.cmd("EXPIRE").arg(key).arg(effective_ttl);
+            true
+        } else if effective_ttl == -1 {
+            pipe.cmd("PERSIST").arg(key);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Delete a Redis key directly (for multi-key mode DELETE).
+    pub fn delete_key(&mut self, key: &str) -> Result<(), redis::RedisError> {
+        if let Some(conn) = self.redis_connection.as_mut() {
+            let conn_like = conn.as_connection_like_mut();
+            redis::cmd("DEL").arg(key).query::<()>(conn_like)
         } else {
             Err(redis::RedisError::from((
                 redis::ErrorKind::Io,
