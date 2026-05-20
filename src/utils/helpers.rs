@@ -130,11 +130,57 @@ pub unsafe fn serialize_ptr_to_list(ptr: *mut c_void) -> *mut pg_sys::List {
     })
 }
 
+/// Serialize two raw pointers and a join type integer to a PG List
+pub unsafe fn serialize_join_info_to_list(
+    ptr1: *mut c_void,
+    ptr2: *mut c_void,
+    jointype: i64,
+    join_col_outer: i64,
+    join_col_inner: i64,
+) -> *mut pg_sys::List {
+    memcx::current_context(|mcx| {
+        let mut ret = List::<*mut c_void>::Nil;
+        for val in [
+            ptr1 as i64,
+            ptr2 as i64,
+            jointype,
+            join_col_outer,
+            join_col_inner,
+        ] {
+            let cst: *mut pg_sys::Const = pg_sys::makeConst(
+                pg_sys::INT8OID,
+                -1,
+                pg_sys::InvalidOid,
+                8,
+                val.into_datum().unwrap(),
+                false,
+                true,
+            );
+            ret.unstable_push_in_context(cst as _, mcx);
+        }
+        ret.into_ptr()
+    })
+}
+
 /// Deserialize a raw pointer from a PG List (for retrieving state from fdw_private)
 pub unsafe fn deserialize_ptr_from_list(list: *mut pg_sys::List) -> *mut c_void {
     memcx::current_context(|mcx| {
         if let Some(list) = List::<*mut c_void>::downcast_ptr_in_memcx(list, mcx) {
             if let Some(cst) = list.get(0) {
+                let cst = *(*cst as *mut pg_sys::Const);
+                let ptr = i64::from_datum(cst.constvalue, cst.constisnull).unwrap();
+                return ptr as *mut c_void;
+            }
+        }
+        std::ptr::null_mut()
+    })
+}
+
+/// Deserialize the Nth raw pointer from a PG List
+pub unsafe fn deserialize_nth_ptr_from_list(list: *mut pg_sys::List, n: usize) -> *mut c_void {
+    memcx::current_context(|mcx| {
+        if let Some(list) = List::<*mut c_void>::downcast_ptr_in_memcx(list, mcx) {
+            if let Some(cst) = list.get(n) {
                 let cst = *(*cst as *mut pg_sys::Const);
                 let ptr = i64::from_datum(cst.constvalue, cst.constisnull).unwrap();
                 return ptr as *mut c_void;

@@ -41,11 +41,14 @@ cargo fmt
 - `src/core/` — FDW handler callbacks (`handlers.rs`), state management (`state_manager.rs`), connection pool (`pool_manager.rs`), connection factory (`connection_factory.rs`), DDL validator (`validator.rs`)
 - `src/tables/` — Trait interface (`interface.rs`), type enum + dispatch (`types.rs`, `macros.rs`), per-type implementations in `implementations/`
 - `src/query/` — WHERE pushdown (`pushdown.rs`), cost estimation (`cost_estimation.rs`), LIMIT handling (`limit.rs`), scan ops (`scan_ops.rs`)
+- `src/join/` — JOIN support: parameterized paths (`parameterized.rs`), FDW-to-FDW pushdown (`foreign_join.rs`), types (`types.rs`)
 - `src/auth/` — Redis authentication
 - `src/utils/` — Cell/Row types, memory context helpers, general utilities
 
 ### FDW Lifecycle (PostgreSQL callbacks)
 1. **Planning**: `get_foreign_rel_size` → `get_foreign_paths` → `get_foreign_plan`
+   - Planning (`get_foreign_rel_size`) connects to Redis for real statistics (DBSIZE, HLEN, etc.)
+   - `begin_foreign_scan` reuses the planning-phase connection if available
 2. **Scanning**: `begin_foreign_scan` → `iterate_foreign_scan` → `re_scan_foreign_scan` → `end_foreign_scan`
    - `recheck_foreign_scan` (returns true; no lossy filtering)
    - `shutdown_foreign_scan` (early connection release back to pool)
@@ -57,6 +60,7 @@ cargo fmt
 8. **Import Schema**: `import_foreign_schema` (SCAN → TYPE → group by prefix → generate DDL)
 9. **Analyze**: `analyze_foreign_table` → `acquire_sample_rows` (enables `ANALYZE` for query planning)
 10. **Updatability**: `is_foreign_rel_updatable` (bitmask: 28 for all types, 24 for stream)
+11. **Join Paths**: `get_foreign_join_paths` (FDW-to-FDW same-server pushdown with pipelined fetch)
 
 ### Trait Pattern
 All Redis types implement `RedisTableOperations` (in `src/tables/interface.rs`):
@@ -93,6 +97,13 @@ Stream is append-only; UPDATE returns an error at the trait level and `IsForeign
 - Data stored as flat `DataSet::Filtered(Vec<String>)` with N columns per row
 - First column is always the Redis key name
 - INSERT routes to specific key (first column); DELETE uses `DEL` on the full key
+
+### JOIN Architecture
+- **FDW-to-Local**: Standard nested-loop; PostgreSQL drives outer rows, FDW rescans inner on each iteration
+- **FDW-to-FDW**: `GetForeignJoinPaths` detects same-server tables, extracts join columns from restrictlist, creates pushdown join path
+- **Join column detection**: Walks `extra.restrictlist` → `RestrictInfo` → `OpExpr` → `Var` nodes to find equality condition columns
+- **Join execution**: Fetch both datasets → build HashMap on smaller side → probe with larger
+- **Connection lifecycle**: acquired at `get_foreign_rel_size`, reused through execution, released at `shutdown_foreign_scan`
 
 ### FDW Validator
 - `redis_fdw_validator_wrapper` — raw C function (not `#[pg_extern]`) with `pg_finfo`

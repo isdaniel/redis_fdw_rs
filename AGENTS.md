@@ -9,6 +9,8 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 **Feature-complete for all CRUD operations plus EXPLAIN, batch INSERT, TRUNCATE, IMPORT FOREIGN SCHEMA, ANALYZE, and COPY FROM.** All Redis types (String, Hash, List, Set, ZSet) support SELECT, INSERT, UPDATE, DELETE, TRUNCATE. Stream supports SELECT, INSERT, DELETE, TRUNCATE only (append-only by design).
 
 ### Recent Work
+- JOIN support: FDW-to-FDW join pushdown for same-server tables with automatic join column detection from query clauses
+- Connection pool optimization: planning phase now connects to Redis for real cardinality statistics
 - FDW lifecycle refactoring: batch insert logic moved to `state_manager.batch_insert_data()`; handlers is now a thin dispatch layer
 - ANALYZE support: `analyze_foreign_table` + `acquire_sample_rows` for query planning statistics
 - COPY FROM / INSERT SELECT: `begin_foreign_insert` / `end_foreign_insert` callbacks
@@ -53,6 +55,29 @@ cargo pgrx test pg14           # run all tests (needs Redis)
 cargo clippy --features pg14   # lint
 cargo fmt                      # format
 ```
+
+### Testing JOINs
+
+JOIN tests require both Redis and local PostgreSQL tables:
+
+```bash
+# Start Redis infrastructure
+make setup-redis
+
+# Run join-specific tests
+cargo pgrx test pg16 join_tests
+
+# Run pool performance tests
+cargo pgrx test pg16 pool_performance
+```
+
+JOIN tests create temporary local tables + Redis foreign tables and verify:
+- FDW-to-local INNER/LEFT JOINs return correct row counts
+- FDW-to-FDW same-server joins work with automatic column detection
+- Cross-type FDW-to-FDW joins (e.g., hash.field = zset.member)
+- JOIN + WHERE pushdown combinations
+- NULL padding for unmatched LEFT JOIN rows
+- Empty table edge cases
 
 ### Adding a New Feature
 

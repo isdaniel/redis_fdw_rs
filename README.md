@@ -19,6 +19,7 @@ A high-performance Redis Foreign Data Wrapper (FDW) for PostgreSQL written in Ru
 - **IMPORT FOREIGN SCHEMA**: Auto-discovers Redis keys, groups by prefix, and generates DDL
 - **ANALYZE**: Statistics gathering for query planner via type-specific cardinality commands
 - **COPY FROM**: Bulk loading via `COPY` and `INSERT INTO ... SELECT` into foreign tables
+- **JOIN support**: FDW-to-FDW join pushdown for same-server tables with automatic join column detection
 - **OOM protection**: Soft limits with warnings for large datasets and connection pool saturation
 - **Compatible with PostgreSQL 14-18**
 
@@ -427,6 +428,66 @@ redis_fdw_rs=#  SELECT * FROM user_profiles where key like '555%';
  55513 | value_55513
  55548 | value_55548
 --More--
+```
+
+## JOIN Support
+
+### FDW-to-Local Table JOINs
+
+Redis foreign tables can be joined with regular PostgreSQL tables using standard nested-loop plans:
+
+```sql
+SELECT u.name, r.value
+FROM users u
+JOIN redis_hash_table r ON u.key = r.field;
+```
+
+The FDW provides accurate cardinality estimates to PostgreSQL's planner, enabling optimal join strategy selection. Each outer row triggers a full rescan of the Redis table.
+
+### FDW-to-FDW JOINs (Same Server Pushdown)
+
+When both sides of a JOIN are Redis foreign tables on the same server, the FDW pushes the join down — fetching both datasets in a single connection and performing an in-memory hash join:
+
+```sql
+-- Both tables on same Redis server → single-connection fetch + hash join
+SELECT h.field, h.value, s.member
+FROM redis_hash h
+JOIN redis_set s ON h.field = s.member;
+```
+
+The FDW automatically detects which columns are used in the join condition from the query. Supported join types: INNER JOIN, LEFT JOIN.
+
+**Limitations:**
+- FDW-to-FDW pushdown requires both tables on the same Redis server
+- Only single-column equality joins are pushed down
+- Both datasets are loaded into memory for the hash join
+
+### Performance Tips for JOINs
+
+- Use `EXPLAIN` to verify the planner chose an efficient strategy
+- For large Redis datasets, add WHERE conditions to reduce data volume before the join
+- FDW-to-FDW same-server joins avoid redundant connection overhead
+
+## Connection Pool Configuration
+
+Configure pool behavior via server OPTIONS:
+
+| Option | Default | Range | Description |
+|--------|---------|-------|-------------|
+| `pool_max_size` | 16 | 1-512 | Maximum connections in pool |
+| `pool_min_idle` | 1 | 0-max_size | Minimum idle connections |
+| `pool_connection_timeout_ms` | 30000 | 100-60000 | Timeout to acquire connection |
+| `pool_max_lifetime_secs` | 1800 | 60-7200 | Max connection lifetime |
+| `pool_idle_timeout_secs` | 600 | 30-3600 | Idle connection timeout |
+
+Example:
+```sql
+CREATE SERVER redis_server FOREIGN DATA WRAPPER redis_fdw
+OPTIONS (
+    host_port '127.0.0.1:6379',
+    pool_max_size '32',
+    pool_min_idle '4'
+);
 ```
 
 ## Development

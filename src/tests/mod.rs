@@ -58,3 +58,9 @@ pub mod tls_tests;
 
 #[cfg(any(test, feature = "pg_test"))]
 pub mod fdw_callbacks_tests;
+
+#[cfg(any(test, feature = "pg_test"))]
+pub mod pool_performance_tests;
+
+#[cfg(any(test, feature = "pg_test"))]
+pub mod join_tests;
