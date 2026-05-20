@@ -1809,7 +1809,11 @@ unsafe fn extract_join_columns(
 
         let op_expr = &*(clause as *mut pg_sys::OpExpr);
 
-        // Must be binary operator
+        // Must be a merge-joinable (equality) operator with exactly 2 args
+        if !pg_sys::op_mergejoinable(op_expr.opno, pg_sys::InvalidOid) {
+            continue;
+        }
+
         if pg_sys::list_length(op_expr.args) != 2 {
             continue;
         }
@@ -1887,6 +1891,12 @@ unsafe extern "C-unwind" fn get_foreign_join_paths(
             outer_state.host_port,
             inner_state.host_port
         );
+        return;
+    }
+
+    // Multi-key pattern tables use SCAN-based iteration; pushdown not supported
+    if outer_state.is_multi_key || inner_state.is_multi_key {
+        log!("Multi-key pattern table detected, join pushdown not supported");
         return;
     }
 

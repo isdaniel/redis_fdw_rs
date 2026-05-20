@@ -48,7 +48,7 @@ cargo fmt
 ### FDW Lifecycle (PostgreSQL callbacks)
 1. **Planning**: `get_foreign_rel_size` → `get_foreign_paths` → `get_foreign_plan`
    - Planning (`get_foreign_rel_size`) connects to Redis for real statistics (DBSIZE, HLEN, etc.)
-   - `begin_foreign_scan` reuses the planning-phase connection if available
+   - Planning releases connection immediately; `begin_foreign_scan` re-acquires from pool (fast path: read-lock only)
 2. **Scanning**: `begin_foreign_scan` → `iterate_foreign_scan` → `re_scan_foreign_scan` → `end_foreign_scan`
    - `recheck_foreign_scan` (returns true; no lossy filtering)
    - `shutdown_foreign_scan` (early connection release back to pool)
@@ -101,9 +101,10 @@ Stream is append-only; UPDATE returns an error at the trait level and `IsForeign
 ### JOIN Architecture
 - **FDW-to-Local**: Standard nested-loop; PostgreSQL drives outer rows, FDW rescans inner on each iteration
 - **FDW-to-FDW**: `GetForeignJoinPaths` detects same-server tables, extracts join columns from restrictlist, creates pushdown join path
-- **Join column detection**: Walks `extra.restrictlist` → `RestrictInfo` → `OpExpr` → `Var` nodes to find equality condition columns
-- **Join execution**: Fetch both datasets → build HashMap on smaller side → probe with larger
-- **Connection lifecycle**: acquired at `get_foreign_rel_size` for cost estimation, released immediately; re-acquired from pool at `begin_foreign_scan`, released at `shutdown_foreign_scan`
+- **Pushdown guards**: same server (host_port match), non-multi-key tables, merge-joinable (equality) operator, INNER/LEFT only
+- **Join column detection**: Walks `extra.restrictlist` → `RestrictInfo` → `OpExpr` → validates `op_mergejoinable()` → `Var` nodes to find equality columns
+- **Join execution**: Fetch both datasets → build HashMap on smaller side → probe with larger side → LEFT JOIN NULL-pads unmatched outer rows
+- **Connection lifecycle**: acquired at `get_foreign_rel_size` for cost estimation, released immediately; re-acquired from pool at `begin_foreign_scan`, transferred to `RedisJoinState` for join execution, released at `shutdown_foreign_scan`
 
 ### FDW Validator
 - `redis_fdw_validator_wrapper` — raw C function (not `#[pg_extern]`) with `pg_finfo`

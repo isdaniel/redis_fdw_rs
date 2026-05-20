@@ -78,6 +78,15 @@ JOIN tests create temporary local tables + Redis foreign tables and verify:
 - JOIN + WHERE pushdown combinations
 - NULL padding for unmatched LEFT JOIN rows
 - Empty table edge cases
+- List type JOINs and String multi-key JOINs
+- Large dataset JOINs (100+ rows)
+- Rescan correctness (duplicate local rows trigger multiple scans)
+
+**Join pushdown eligibility requires ALL of:**
+1. Both tables on same Redis server (host_port match)
+2. Neither table in multi-key pattern mode (no glob in table_key_prefix)
+3. Equality operator in join condition (`op_mergejoinable()` check)
+4. INNER JOIN or LEFT JOIN only (RIGHT/FULL not pushed down)
 
 ### Adding a New Feature
 
@@ -129,8 +138,11 @@ FDW Callbacks (handlers.rs)
     ├── Import Schema: import_foreign_schema
     │       └── SCAN → TYPE pipeline → group by prefix → generate DDL
     │
-    └── Analyze: analyze_foreign_table → acquire_sample_rows
-            └── Enables ANALYZE for query planning (HLEN/SCARD/ZCARD/XLEN + sampling)
+    ├── Analyze: analyze_foreign_table → acquire_sample_rows
+    │       └── Enables ANALYZE for query planning (HLEN/SCARD/ZCARD/XLEN + sampling)
+    │
+    └── Join Pushdown: get_foreign_join_paths → plan_foreign_join → begin_foreign_join_scan
+            └── Same-server detection → hash-join execution (build/probe) → iterate results
                     │
                     ▼
               Redis (via R2D2 pool_manager.rs)

@@ -572,4 +572,189 @@ mod tests {
         let _ = Spi::run("DROP TABLE IF EXISTS join_nullcontent_local;");
         cleanup_join_fdw();
     }
+
+    #[pg_test]
+    fn test_join_list_with_local_table() {
+        setup_join_fdw();
+
+        Spi::run("CREATE TEMPORARY TABLE join_list_local (val text);").unwrap();
+        Spi::run("INSERT INTO join_list_local VALUES ('item1'), ('item2'), ('missing');").unwrap();
+
+        let table_name = "join_list_test";
+        let key_prefix = "join_test:list_local";
+        create_join_table(table_name, "element text", "list", key_prefix);
+
+        Spi::run(&format!(
+            "INSERT INTO {} VALUES ('item1'), ('item2'), ('item3');",
+            table_name
+        ))
+        .unwrap();
+
+        let count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM join_list_local l JOIN {} r ON l.val = r.element;",
+            table_name
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(count, 2, "List JOIN should match item1 and item2");
+
+        Spi::run(&format!(
+            "DELETE FROM {} WHERE element = 'item1';",
+            table_name
+        ))
+        .unwrap();
+        Spi::run(&format!(
+            "DELETE FROM {} WHERE element = 'item2';",
+            table_name
+        ))
+        .unwrap();
+        Spi::run(&format!(
+            "DELETE FROM {} WHERE element = 'item3';",
+            table_name
+        ))
+        .unwrap();
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", table_name));
+        let _ = Spi::run("DROP TABLE IF EXISTS join_list_local;");
+        cleanup_join_fdw();
+    }
+
+    #[pg_test]
+    fn test_join_string_with_local_table() {
+        setup_join_fdw();
+
+        // String type uses multi-key pattern (key*, with key column + value column)
+        let table_name = "join_string_test";
+        let key_prefix = "join_test:str:*";
+        create_join_table(table_name, "key text, value text", "string", key_prefix);
+
+        // Insert data directly via Redis commands using a helper hash table
+        // For string multi-key: first column is key name, second is value
+        Spi::run(&format!(
+            "INSERT INTO {} VALUES ('join_test:str:alpha', 'val_alpha'), ('join_test:str:beta', 'val_beta');",
+            table_name
+        ))
+        .unwrap();
+
+        Spi::run("CREATE TEMPORARY TABLE join_str_local (k text);").unwrap();
+        Spi::run(
+            "INSERT INTO join_str_local VALUES ('join_test:str:alpha'), ('join_test:str:gamma');",
+        )
+        .unwrap();
+
+        let count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM join_str_local l JOIN {} r ON l.k = r.key;",
+            table_name
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(count, 1, "String multi-key JOIN should match alpha only");
+
+        Spi::run(&format!(
+            "DELETE FROM {} WHERE key = 'join_test:str:alpha';",
+            table_name
+        ))
+        .unwrap();
+        Spi::run(&format!(
+            "DELETE FROM {} WHERE key = 'join_test:str:beta';",
+            table_name
+        ))
+        .unwrap();
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", table_name));
+        let _ = Spi::run("DROP TABLE IF EXISTS join_str_local;");
+        cleanup_join_fdw();
+    }
+
+    #[pg_test]
+    fn test_join_large_dataset() {
+        setup_join_fdw();
+
+        let table_name = "join_large_hash";
+        let key_prefix = "join_test:large_hash";
+        create_join_table(table_name, "field text, value text", "hash", key_prefix);
+
+        // Insert 100 rows to test moderate-scale join
+        let mut insert_sql = String::from("INSERT INTO ");
+        insert_sql.push_str(table_name);
+        insert_sql.push_str(" VALUES ");
+        for i in 0..100 {
+            if i > 0 {
+                insert_sql.push_str(", ");
+            }
+            insert_sql.push_str(&format!("('key{}', 'val{}')", i, i));
+        }
+        insert_sql.push(';');
+        Spi::run(&insert_sql).unwrap();
+
+        Spi::run("CREATE TEMPORARY TABLE join_large_local (id text);").unwrap();
+        let mut local_sql = String::from("INSERT INTO join_large_local VALUES ");
+        for i in 0..50 {
+            if i > 0 {
+                local_sql.push_str(", ");
+            }
+            local_sql.push_str(&format!("('key{}')", i * 2));
+        }
+        local_sql.push(';');
+        Spi::run(&local_sql).unwrap();
+
+        let count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM join_large_local l JOIN {} r ON l.id = r.field;",
+            table_name
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(count, 50, "Should match 50 even-numbered keys");
+
+        // Cleanup
+        for i in 0..100 {
+            Spi::run(&format!(
+                "DELETE FROM {} WHERE field = 'key{}';",
+                table_name, i
+            ))
+            .unwrap();
+        }
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", table_name));
+        let _ = Spi::run("DROP TABLE IF EXISTS join_large_local;");
+        cleanup_join_fdw();
+    }
+
+    #[pg_test]
+    fn test_join_rescan_correctness() {
+        setup_join_fdw();
+
+        let table_name = "join_rescan_hash";
+        let key_prefix = "join_test:rescan_hash";
+        create_join_table(table_name, "field text, value text", "hash", key_prefix);
+
+        Spi::run(&format!(
+            "INSERT INTO {} VALUES ('a', 'val_a'), ('b', 'val_b');",
+            table_name
+        ))
+        .unwrap();
+
+        // Subquery that forces multiple rescans of the FDW table
+        Spi::run("CREATE TEMPORARY TABLE join_rescan_local (id text, grp int);").unwrap();
+        Spi::run("INSERT INTO join_rescan_local VALUES ('a', 1), ('b', 1), ('a', 2), ('b', 2);")
+            .unwrap();
+
+        let count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM join_rescan_local l JOIN {} r ON l.id = r.field;",
+            table_name
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            count, 4,
+            "Rescan should correctly return results for duplicated local rows"
+        );
+
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'a';", table_name)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'b';", table_name)).unwrap();
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", table_name));
+        let _ = Spi::run("DROP TABLE IF EXISTS join_rescan_local;");
+        cleanup_join_fdw();
+    }
 }
