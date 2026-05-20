@@ -1326,6 +1326,8 @@ unsafe extern "C-unwind" fn analyze_foreign_table(
     let estimated_rows: u64 = if is_multi_key_pattern(&key_prefix) {
         let mut cursor = 0u64;
         let mut total_keys = 0u64;
+        let max_iterations = 100;
+        let mut iterations = 0;
         loop {
             let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
                 .arg(cursor)
@@ -1337,7 +1339,8 @@ unsafe extern "C-unwind" fn analyze_foreign_table(
                 .unwrap_or((0, Vec::new()));
             total_keys += keys.len() as u64;
             cursor = next_cursor;
-            if cursor == 0 {
+            iterations += 1;
+            if cursor == 0 || iterations >= max_iterations {
                 break;
             }
         }
@@ -1453,77 +1456,79 @@ unsafe extern "C-unwind" fn acquire_sample_rows(
         }
         keys.truncate(max_per_key);
         let mut result = Vec::new();
-        for key in &keys {
-            if result.len() >= max_per_key {
-                break;
+
+        if table_type_str == "string" {
+            let mut pipe = redis::pipe();
+            for key in &keys {
+                pipe.cmd("GET").arg(key);
             }
-            let remaining = max_per_key - result.len();
-            let type_vals: Vec<String> = match table_type_str {
-                "string" => {
-                    let val: String = redis::cmd("GET")
-                        .arg(key)
-                        .query(conn_like)
-                        .unwrap_or_default();
-                    vec![key.clone(), val]
+            let vals: Vec<String> = pipe.query(conn_like).unwrap_or_default();
+            for (key, val) in keys.iter().zip(vals.into_iter()) {
+                result.push(vec![key.clone(), val]);
+            }
+        } else {
+            for key in &keys {
+                if result.len() >= max_per_key {
+                    break;
                 }
-                "hash" => {
-                    let (_, vals): (u64, Vec<String>) = redis::cmd("HSCAN")
-                        .arg(key)
-                        .arg(0u64)
-                        .arg("COUNT")
-                        .arg(remaining)
-                        .query(conn_like)
-                        .unwrap_or((0, Vec::new()));
-                    for chunk in vals.chunks(2).take(remaining) {
-                        if chunk.len() == 2 {
-                            result.push(vec![key.clone(), chunk[0].clone(), chunk[1].clone()]);
+                let remaining = max_per_key - result.len();
+                match table_type_str {
+                    "hash" => {
+                        let (_, vals): (u64, Vec<String>) = redis::cmd("HSCAN")
+                            .arg(key)
+                            .arg(0u64)
+                            .arg("COUNT")
+                            .arg(remaining)
+                            .query(conn_like)
+                            .unwrap_or((0, Vec::new()));
+                        for chunk in vals.chunks(2).take(remaining) {
+                            if chunk.len() == 2 {
+                                result.push(vec![key.clone(), chunk[0].clone(), chunk[1].clone()]);
+                            }
                         }
                     }
-                    continue;
-                }
-                "list" => {
-                    let vals: Vec<String> = redis::cmd("LRANGE")
-                        .arg(key)
-                        .arg(0i64)
-                        .arg((remaining as i64) - 1)
-                        .query(conn_like)
-                        .unwrap_or_default();
-                    for v in vals {
-                        result.push(vec![key.clone(), v]);
-                    }
-                    continue;
-                }
-                "set" => {
-                    let (_, vals): (u64, Vec<String>) = redis::cmd("SSCAN")
-                        .arg(key)
-                        .arg(0u64)
-                        .arg("COUNT")
-                        .arg(remaining)
-                        .query(conn_like)
-                        .unwrap_or((0, Vec::new()));
-                    for v in vals.into_iter().take(remaining) {
-                        result.push(vec![key.clone(), v]);
-                    }
-                    continue;
-                }
-                "zset" => {
-                    let vals: Vec<String> = redis::cmd("ZRANGE")
-                        .arg(key)
-                        .arg(0i64)
-                        .arg((remaining as i64) - 1)
-                        .arg("WITHSCORES")
-                        .query(conn_like)
-                        .unwrap_or_default();
-                    for chunk in vals.chunks(2) {
-                        if chunk.len() == 2 {
-                            result.push(vec![key.clone(), chunk[1].clone(), chunk[0].clone()]);
+                    "list" => {
+                        let vals: Vec<String> = redis::cmd("LRANGE")
+                            .arg(key)
+                            .arg(0i64)
+                            .arg((remaining as i64) - 1)
+                            .query(conn_like)
+                            .unwrap_or_default();
+                        for v in vals {
+                            result.push(vec![key.clone(), v]);
                         }
                     }
-                    continue;
+                    "set" => {
+                        let (_, vals): (u64, Vec<String>) = redis::cmd("SSCAN")
+                            .arg(key)
+                            .arg(0u64)
+                            .arg("COUNT")
+                            .arg(remaining)
+                            .query(conn_like)
+                            .unwrap_or((0, Vec::new()));
+                        for v in vals.into_iter().take(remaining) {
+                            result.push(vec![key.clone(), v]);
+                        }
+                    }
+                    "zset" => {
+                        let vals: Vec<String> = redis::cmd("ZRANGE")
+                            .arg(key)
+                            .arg(0i64)
+                            .arg((remaining as i64) - 1)
+                            .arg("WITHSCORES")
+                            .query(conn_like)
+                            .unwrap_or_default();
+                        for chunk in vals.chunks(2) {
+                            if chunk.len() == 2 {
+                                result.push(vec![key.clone(), chunk[1].clone(), chunk[0].clone()]);
+                            }
+                        }
+                    }
+                    _ => {
+                        result.push(vec![key.clone()]);
+                    }
                 }
-                _ => vec![key.clone()],
-            };
-            result.push(type_vals);
+            }
         }
         result
     } else {

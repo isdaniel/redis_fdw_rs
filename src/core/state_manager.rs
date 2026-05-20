@@ -754,7 +754,7 @@ impl RedisFdwState {
         let mut pipe = redis::pipe();
         let mut has_cmds = false;
 
-        for (data, _) in rows {
+        for (data, row_ttl) in rows {
             let (key, row_data) = if is_multi_key {
                 if data.is_empty() {
                     continue;
@@ -764,30 +764,12 @@ impl RedisFdwState {
                 (table_key_prefix, data.as_slice())
             };
             has_cmds |= Self::add_insert_to_pipeline(&mut pipe, table_type, key, row_data);
+            has_cmds |= Self::add_ttl_to_pipeline(&mut pipe, key, *row_ttl, default_ttl);
         }
 
         if has_cmds {
             pipe.query::<()>(conn)
                 .map_err(|e| format!("Redis batch insert pipeline failed: {}", e))?;
-        }
-
-        let mut ttl_pipe = redis::pipe();
-        let mut has_ttl = false;
-        for (data, row_ttl) in rows {
-            let key = if is_multi_key {
-                if data.is_empty() {
-                    continue;
-                }
-                data[0].clone()
-            } else {
-                table_key_prefix.to_string()
-            };
-            has_ttl |= Self::add_ttl_to_pipeline(&mut ttl_pipe, &key, *row_ttl, default_ttl);
-        }
-        if has_ttl {
-            if let Err(e) = ttl_pipe.query::<()>(conn) {
-                pgrx::log!("WARNING: TTL pipeline failed: {}", e);
-            }
         }
 
         Ok(())
@@ -804,7 +786,7 @@ impl RedisFdwState {
         let mut pipe = redis::cluster::cluster_pipe();
         let mut has_cmds = false;
 
-        for (data, _) in rows {
+        for (data, row_ttl) in rows {
             let (key, row_data) = if is_multi_key {
                 if data.is_empty() {
                     continue;
@@ -814,31 +796,12 @@ impl RedisFdwState {
                 (table_key_prefix, data.as_slice())
             };
             has_cmds |= Self::add_insert_to_cluster_pipeline(&mut pipe, table_type, key, row_data);
+            has_cmds |= Self::add_ttl_to_cluster_pipeline(&mut pipe, key, *row_ttl, default_ttl);
         }
 
         if has_cmds {
             pipe.query::<()>(cluster_conn)
                 .map_err(|e| format!("Redis cluster batch insert pipeline failed: {}", e))?;
-        }
-
-        let mut ttl_pipe = redis::cluster::cluster_pipe();
-        let mut has_ttl = false;
-        for (data, row_ttl) in rows {
-            let key = if is_multi_key {
-                if data.is_empty() {
-                    continue;
-                }
-                data[0].clone()
-            } else {
-                table_key_prefix.to_string()
-            };
-            has_ttl |=
-                Self::add_ttl_to_cluster_pipeline(&mut ttl_pipe, &key, *row_ttl, default_ttl);
-        }
-        if has_ttl {
-            if let Err(e) = ttl_pipe.query::<()>(cluster_conn) {
-                pgrx::log!("WARNING: TTL cluster pipeline failed: {}", e);
-            }
         }
 
         Ok(())
