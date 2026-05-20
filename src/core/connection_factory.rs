@@ -130,6 +130,7 @@ impl RedisConnectionFactory {
                 Err(e) if attempt < retry_attempts => {
                     log!("Connection attempt {} failed, retrying: {}", attempt, e);
                     pgrx::check_for_interrupts!();
+                    std::thread::sleep(std::time::Duration::from_millis(100 * attempt as u64));
                 }
                 Err(e) => {
                     return Err(ConnectionFactoryError::ConnectionFailed(format!(

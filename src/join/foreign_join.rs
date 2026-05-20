@@ -49,7 +49,6 @@ pub fn execute_foreign_join(state: &mut RedisJoinState) -> usize {
         }
     }
 
-    let outer_cols = expected_columns_for_type(&state.outer_table_type);
     let inner_cols = expected_columns_for_type(&state.inner_table_type);
 
     let mut result: Vec<Vec<String>> = Vec::new();
@@ -57,12 +56,7 @@ pub fn execute_foreign_join(state: &mut RedisJoinState) -> usize {
 
     // Pre-allocate null padding row outside the loop for LEFT JOIN
     let null_pad_row = if state.join_type == RedisJoinType::Left && !build_is_outer {
-        let null_cols = if build_is_outer {
-            inner_cols
-        } else {
-            outer_cols
-        };
-        vec!["NULL".to_string(); null_cols]
+        vec!["NULL".to_string(); inner_cols]
     } else {
         Vec::new()
     };
@@ -108,6 +102,23 @@ fn fetch_dataset(
     table_type: &RedisTableType,
     key_prefix: &str,
 ) -> Vec<Vec<String>> {
+    // Pre-check cardinality to avoid OOM from unbounded HGETALL/SMEMBERS
+    let cardinality: u64 = match table_type {
+        RedisTableType::Hash(_) => redis::cmd("HLEN").arg(key_prefix).query(conn).unwrap_or(0),
+        RedisTableType::Set(_) => redis::cmd("SCARD").arg(key_prefix).query(conn).unwrap_or(0),
+        RedisTableType::ZSet(_) => redis::cmd("ZCARD").arg(key_prefix).query(conn).unwrap_or(0),
+        RedisTableType::List(_) => redis::cmd("LLEN").arg(key_prefix).query(conn).unwrap_or(0),
+        _ => 0,
+    };
+    if cardinality > MAX_JOIN_DATASET_ROWS as u64 {
+        pgrx::error!(
+            "Redis FDW: join dataset '{}' has {} elements, exceeding limit of {}. Use a WHERE clause to reduce data volume.",
+            key_prefix,
+            cardinality,
+            MAX_JOIN_DATASET_ROWS
+        );
+    }
+
     match table_type {
         RedisTableType::Hash(_) => {
             let pairs: Vec<(String, String)> = redis::cmd("HGETALL")

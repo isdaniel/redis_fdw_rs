@@ -168,8 +168,13 @@ pub unsafe fn deserialize_ptr_from_list(list: *mut pg_sys::List) -> *mut c_void 
         if let Some(list) = List::<*mut c_void>::downcast_ptr_in_memcx(list, mcx) {
             if let Some(cst) = list.get(0) {
                 let cst = *(*cst as *mut pg_sys::Const);
-                let ptr = i64::from_datum(cst.constvalue, cst.constisnull).unwrap();
-                return ptr as *mut c_void;
+                if cst.constisnull {
+                    return std::ptr::null_mut();
+                }
+                match i64::from_datum(cst.constvalue, false) {
+                    Some(ptr) => return ptr as *mut c_void,
+                    None => return std::ptr::null_mut(),
+                }
             }
         }
         std::ptr::null_mut()
@@ -182,8 +187,13 @@ pub unsafe fn deserialize_nth_ptr_from_list(list: *mut pg_sys::List, n: usize) -
         if let Some(list) = List::<*mut c_void>::downcast_ptr_in_memcx(list, mcx) {
             if let Some(cst) = list.get(n) {
                 let cst = *(*cst as *mut pg_sys::Const);
-                let ptr = i64::from_datum(cst.constvalue, cst.constisnull).unwrap();
-                return ptr as *mut c_void;
+                if cst.constisnull {
+                    return std::ptr::null_mut();
+                }
+                match i64::from_datum(cst.constvalue, false) {
+                    Some(ptr) => return ptr as *mut c_void,
+                    None => return std::ptr::null_mut(),
+                }
             }
         }
         std::ptr::null_mut()
