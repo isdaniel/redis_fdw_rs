@@ -1829,9 +1829,13 @@ unsafe fn extract_join_columns(
     let outer_relids = (*outerrel).relids;
     let inner_relids = (*innerrel).relids;
 
-    let list_length = pg_sys::list_length(restrictlist);
-    for i in 0..list_length {
-        let node = pg_sys::list_nth(restrictlist, i) as *mut pg_sys::Node;
+    let restrict_items: Vec<*mut pg_sys::Node> = pgrx::memcx::current_context(|mcx| {
+        let list = pg_list_to_rust_list::<*mut std::ffi::c_void>(restrictlist, mcx);
+        list.iter().map(|item| *item as *mut pg_sys::Node).collect()
+    });
+
+    for node in &restrict_items {
+        let node = *node;
         if node.is_null() {
             continue;
         }
