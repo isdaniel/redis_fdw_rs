@@ -763,8 +763,10 @@ impl RedisFdwState {
             } else {
                 (table_key_prefix, data.as_slice())
             };
-            has_cmds |= Self::add_insert_to_pipeline(&mut pipe, table_type, key, row_data);
-            has_cmds |= Self::add_ttl_to_pipeline(&mut pipe, key, *row_ttl, default_ttl);
+            if Self::add_insert_to_pipeline(&mut pipe, table_type, key, row_data) {
+                has_cmds = true;
+                has_cmds |= Self::add_ttl_to_pipeline(&mut pipe, key, *row_ttl, default_ttl);
+            }
         }
 
         if has_cmds {
@@ -795,8 +797,11 @@ impl RedisFdwState {
             } else {
                 (table_key_prefix, data.as_slice())
             };
-            has_cmds |= Self::add_insert_to_cluster_pipeline(&mut pipe, table_type, key, row_data);
-            has_cmds |= Self::add_ttl_to_cluster_pipeline(&mut pipe, key, *row_ttl, default_ttl);
+            if Self::add_insert_to_cluster_pipeline(&mut pipe, table_type, key, row_data) {
+                has_cmds = true;
+                has_cmds |=
+                    Self::add_ttl_to_cluster_pipeline(&mut pipe, key, *row_ttl, default_ttl);
+            }
         }
 
         if has_cmds {
