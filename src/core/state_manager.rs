@@ -767,7 +767,7 @@ impl RedisFdwState {
         }
 
         if has_cmds {
-            pipe.query::<Vec<redis::Value>>(conn)
+            pipe.query::<()>(conn)
                 .map_err(|e| format!("Redis batch insert pipeline failed: {}", e))?;
         }
 
@@ -785,7 +785,7 @@ impl RedisFdwState {
             has_ttl |= Self::add_ttl_to_pipeline(&mut ttl_pipe, &key, *row_ttl, default_ttl);
         }
         if has_ttl {
-            if let Err(e) = ttl_pipe.query::<Vec<redis::Value>>(conn) {
+            if let Err(e) = ttl_pipe.query::<()>(conn) {
                 pgrx::log!("WARNING: TTL pipeline failed: {}", e);
             }
         }
@@ -817,7 +817,7 @@ impl RedisFdwState {
         }
 
         if has_cmds {
-            pipe.query::<Vec<redis::Value>>(cluster_conn)
+            pipe.query::<()>(cluster_conn)
                 .map_err(|e| format!("Redis cluster batch insert pipeline failed: {}", e))?;
         }
 
@@ -836,7 +836,7 @@ impl RedisFdwState {
                 Self::add_ttl_to_cluster_pipeline(&mut ttl_pipe, &key, *row_ttl, default_ttl);
         }
         if has_ttl {
-            if let Err(e) = ttl_pipe.query::<Vec<redis::Value>>(cluster_conn) {
+            if let Err(e) = ttl_pipe.query::<()>(cluster_conn) {
                 pgrx::log!("WARNING: TTL cluster pipeline failed: {}", e);
             }
         }
@@ -882,12 +882,12 @@ impl RedisFdwState {
                 }
             }
             RedisTableType::Stream(_) => {
-                if data.len() >= 2 {
+                if data.len() >= 3 {
                     pipe.cmd("XADD")
                         .arg(key)
                         .arg("*")
-                        .arg(&data[0])
-                        .arg(&data[1]);
+                        .arg(&data[1])
+                        .arg(&data[2]);
                     return true;
                 }
             }
@@ -934,12 +934,12 @@ impl RedisFdwState {
                 }
             }
             RedisTableType::Stream(_) => {
-                if data.len() >= 2 {
+                if data.len() >= 3 {
                     pipe.cmd("XADD")
                         .arg(key)
                         .arg("*")
-                        .arg(&data[0])
-                        .arg(&data[1]);
+                        .arg(&data[1])
+                        .arg(&data[2]);
                     return true;
                 }
             }

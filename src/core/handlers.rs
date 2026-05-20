@@ -1221,9 +1221,13 @@ unsafe extern "C-unwind" fn import_foreign_schema(
         let key_pattern = format!("{}*", prefix);
         let database_str = config.database.to_string();
 
+        let quoted_table = table_name.replace('"', "\"\"");
+        let quoted_server = server_name.replace('"', "\"\"");
+        let escaped_prefix = key_pattern.replace('\'', "''");
+
         let ddl = format!(
-            "CREATE FOREIGN TABLE {} ({}) SERVER {} OPTIONS (database '{}', table_type '{}', table_key_prefix '{}')",
-            table_name, columns, server_name, database_str, redis_type, key_pattern
+            "CREATE FOREIGN TABLE \"{}\" ({}) SERVER \"{}\" OPTIONS (database '{}', table_type '{}', table_key_prefix '{}')",
+            quoted_table, columns, quoted_server, database_str, redis_type, escaped_prefix
         );
 
         let ddl_cstr = match CString::new(ddl) {
@@ -1273,12 +1277,12 @@ fn sanitize_table_name(prefix: &str) -> String {
 
 fn columns_for_type(redis_type: &str) -> &'static str {
     match redis_type {
-        "hash" => "key text, value text",
-        "list" => "element text",
-        "set" => "member text",
-        "zset" => "score text, member text",
+        "hash" => "key text, field text, value text",
+        "list" => "key text, element text",
+        "set" => "key text, member text",
+        "zset" => "key text, member text, score text",
         "string" => "key text, value text",
-        "stream" => "id text, field text, value text",
+        "stream" => "stream_id text, field text, value text",
         _ => "value text",
     }
 }

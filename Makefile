@@ -1,7 +1,7 @@
 # Redis FDW Makefile
 
 .PHONY: help build build-release install test test-all test-unit \
-        clean format lint check setup-redis setup-cluster cleanup-redis redis-status \
+        clean format lint check setup-redis cleanup-redis redis-status \
         test-pg14 test-pg15 test-pg16 test-pg17 test-pg18 stop-pg before-git-push before-git-push-all
 
 # Default PG version for single-target commands
@@ -18,7 +18,6 @@ help:
 	@echo "  make test-unit       Run cargo check + clippy (no Redis required)"
 	@echo ""
 	@echo "  make setup-redis     Start Redis single-node + cluster"
-	@echo "  make setup-cluster   Alias for setup-redis (starts both)"
 	@echo "  make cleanup-redis   Stop and remove all Redis containers"
 	@echo "  make redis-status    Show running Redis containers"
 	@echo "  make stop-pg         Stop stale pgrx test PostgreSQL instance"
