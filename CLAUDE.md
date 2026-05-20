@@ -46,9 +46,17 @@ cargo fmt
 
 ### FDW Lifecycle (PostgreSQL callbacks)
 1. **Planning**: `get_foreign_rel_size` → `get_foreign_paths` → `get_foreign_plan`
-2. **Scanning**: `begin_foreign_scan` → `iterate_foreign_scan` → `end_foreign_scan`
-3. **Modify**: `plan_foreign_modify` → `begin_foreign_modify` → `exec_foreign_insert`/`update`/`delete` → `end_foreign_modify`
-4. **Updatability**: `is_foreign_rel_updatable` (bitmask: 28 for all types, 24 for stream)
+2. **Scanning**: `begin_foreign_scan` → `iterate_foreign_scan` → `re_scan_foreign_scan` → `end_foreign_scan`
+   - `recheck_foreign_scan` (returns true; no lossy filtering)
+   - `shutdown_foreign_scan` (early connection release back to pool)
+3. **Explain**: `explain_foreign_scan`, `explain_foreign_modify` (EXPLAIN output with server, key, type, pushdown, batch info)
+4. **Modify**: `plan_foreign_modify` → `begin_foreign_modify` → `exec_foreign_insert`/`update`/`delete` → `end_foreign_modify`
+5. **Batch Insert**: `get_foreign_modify_batch_size` → `exec_foreign_batch_insert` (pipelined multi-row)
+6. **COPY FROM / INSERT SELECT**: `begin_foreign_insert` → (reuses `exec_foreign_insert`) → `end_foreign_insert`
+7. **Truncate**: `exec_foreign_truncate` (UNLINK for single-key; SCAN+UNLINK for patterns)
+8. **Import Schema**: `import_foreign_schema` (SCAN → TYPE → group by prefix → generate DDL)
+9. **Analyze**: `analyze_foreign_table` → `acquire_sample_rows` (enables `ANALYZE` for query planning)
+10. **Updatability**: `is_foreign_rel_updatable` (bitmask: 28 for all types, 24 for stream)
 
 ### Trait Pattern
 All Redis types implement `RedisTableOperations` (in `src/tables/interface.rs`):
@@ -60,14 +68,14 @@ Dispatch from `RedisTableType` enum uses macros in `src/tables/macros.rs`.
 
 ### Supported Operations
 
-| Type    | SELECT | INSERT | UPDATE | DELETE |
-|---------|--------|--------|--------|--------|
-| String  | ✅     | ✅     | ✅     | ✅     |
-| Hash    | ✅     | ✅     | ✅     | ✅     |
-| List    | ✅     | ✅     | ✅     | ✅     |
-| Set     | ✅     | ✅     | ✅     | ✅     |
-| ZSet    | ✅     | ✅     | ✅     | ✅     |
-| Stream  | ✅     | ✅     | ❌     | ✅     |
+| Type    | SELECT | INSERT | UPDATE | DELETE | TRUNCATE |
+|---------|--------|--------|--------|--------|----------|
+| String  | ✅     | ✅     | ✅     | ✅     | ✅       |
+| Hash    | ✅     | ✅     | ✅     | ✅     | ✅       |
+| List    | ✅     | ✅     | ✅     | ✅     | ✅       |
+| Set     | ✅     | ✅     | ✅     | ✅     | ✅       |
+| ZSet    | ✅     | ✅     | ✅     | ✅     | ✅       |
+| Stream  | ✅     | ✅     | ❌     | ✅     | ✅       |
 
 Stream is append-only; UPDATE returns an error at the trait level and `IsForeignRelUpdatable` omits the UPDATE bit for stream tables.
 

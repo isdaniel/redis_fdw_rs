@@ -55,3 +55,6 @@ pub mod multi_key_tests;
 
 #[cfg(any(test, feature = "pg_test"))]
 pub mod tls_tests;
+
+#[cfg(any(test, feature = "pg_test"))]
+pub mod fdw_callbacks_tests;

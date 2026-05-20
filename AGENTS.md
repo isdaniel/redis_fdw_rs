@@ -6,9 +6,19 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 
 ## Current State
 
-**Feature-complete for all CRUD operations.** All Redis types (String, Hash, List, Set, ZSet) support SELECT, INSERT, UPDATE, DELETE. Stream supports SELECT, INSERT, DELETE only (append-only by design).
+**Feature-complete for all CRUD operations plus EXPLAIN, batch INSERT, TRUNCATE, IMPORT FOREIGN SCHEMA, ANALYZE, and COPY FROM.** All Redis types (String, Hash, List, Set, ZSet) support SELECT, INSERT, UPDATE, DELETE, TRUNCATE. Stream supports SELECT, INSERT, DELETE, TRUNCATE only (append-only by design).
 
 ### Recent Work
+- FDW lifecycle refactoring: batch insert logic moved to `state_manager.batch_insert_data()`; handlers is now a thin dispatch layer
+- ANALYZE support: `analyze_foreign_table` + `acquire_sample_rows` for query planning statistics
+- COPY FROM / INSERT SELECT: `begin_foreign_insert` / `end_foreign_insert` callbacks
+- ShutdownForeignScan: early connection release back to R2D2 pool for better concurrency
+- RecheckForeignScan: correctness for join rechecks (returns true unconditionally)
+- EXPLAIN support: `explain_foreign_scan` and `explain_foreign_modify` callbacks with server, key, type, pushdown, batch info
+- Batch INSERT: `exec_foreign_batch_insert` with pipelined Redis commands and configurable `batch_size`
+- TRUNCATE: `exec_foreign_truncate` using UNLINK (single-key) or SCAN+UNLINK (multi-key patterns)
+- IMPORT FOREIGN SCHEMA: `import_foreign_schema` auto-discovers keys, groups by prefix, generates DDL
+- OOM robustness: soft limits with warnings for large datasets (100K per-key, 1M total), pool saturation cap (64 pools)
 - TTL support: table-level default + per-row override via virtual `ttl` column
 - Multi-key pattern queries: glob patterns in `table_key_prefix` for scanning multiple keys
 - DDL-time option validation via `redis_fdw_validator`
@@ -22,7 +32,7 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 
 ### Known Issues
 - Cluster integration tests (9 tests) fail without Redis Cluster infrastructure running
-- All non-cluster tests pass (187/187)
+- All non-cluster tests pass (331/331)
 
 ## How to Work on This Project
 
@@ -73,11 +83,29 @@ FDW Callbacks (handlers.rs)
     ├── Planning: get_foreign_rel_size → get_foreign_paths → get_foreign_plan
     │       └── cost_estimation.rs, pushdown.rs
     │
-    ├── Scanning: begin_foreign_scan → iterate_foreign_scan → end_foreign_scan
+    ├── Scanning: begin_foreign_scan → iterate → recheck → shutdown → end_foreign_scan
     │       └── state_manager.rs → RedisTableType dispatch → implementations/*
     │
-    └── Modify: begin_foreign_modify → exec_foreign_{insert,update,delete}
-            └── state_manager.rs → RedisTableType dispatch → implementations/*
+    ├── Explain: explain_foreign_scan, explain_foreign_modify
+    │       └── Reports server, key, type, pushdown, batch size, rows fetched
+    │
+    ├── Modify: begin_foreign_modify → exec_foreign_{insert,update,delete}
+    │       └── state_manager.rs → RedisTableType dispatch → implementations/*
+    │
+    ├── COPY FROM / INSERT SELECT: begin_foreign_insert → exec_foreign_insert → end_foreign_insert
+    │       └── Standalone state init for bulk insert paths
+    │
+    ├── Batch Insert: get_foreign_modify_batch_size → exec_foreign_batch_insert
+    │       └── state_manager.batch_insert_data() — pipelines rows into Redis
+    │
+    ├── Truncate: exec_foreign_truncate
+    │       └── UNLINK (single-key) or SCAN+UNLINK (multi-key pattern)
+    │
+    ├── Import Schema: import_foreign_schema
+    │       └── SCAN → TYPE pipeline → group by prefix → generate DDL
+    │
+    └── Analyze: analyze_foreign_table → acquire_sample_rows
+            └── Enables ANALYZE for query planning (HLEN/SCARD/ZCARD/XLEN + sampling)
                     │
                     ▼
               Redis (via R2D2 pool_manager.rs)

@@ -13,6 +13,13 @@ A high-performance Redis Foreign Data Wrapper (FDW) for PostgreSQL written in Ru
 - **Multi-key patterns**: Glob patterns (`*`, `?`, `[`) in `table_key_prefix` to query multiple keys
 - **DDL validation**: Option validator checks all options at CREATE time
 - **Stream pagination**: Configurable batch processing for large data sets
+- **EXPLAIN support**: Detailed scan/modify metadata (server, key, pushdown, batch size)
+- **Batch INSERT**: Pipelined multi-row inserts via `ExecForeignBatchInsert` (configurable `batch_size`)
+- **TRUNCATE**: Single-key `UNLINK` or pattern-based `SCAN + UNLINK` for multi-key tables
+- **IMPORT FOREIGN SCHEMA**: Auto-discovers Redis keys, groups by prefix, and generates DDL
+- **ANALYZE**: Statistics gathering for query planner via type-specific cardinality commands
+- **COPY FROM**: Bulk loading via `COPY` and `INSERT INTO ... SELECT` into foreign tables
+- **OOM protection**: Soft limits with warnings for large datasets and connection pool saturation
 - **Compatible with PostgreSQL 14-18**
 
 ## Prerequisites
@@ -114,6 +121,15 @@ SELECT * FROM task_queue;
 | `zset` | member, score | ZADD, ZRANGE, ZREM | Yes |
 | `stream` | stream_id, field1, value1, ... | XADD, XRANGE, XDEL | No (append-only) |
 
+| Type    | SELECT | INSERT | UPDATE | DELETE | TRUNCATE |
+|---------|--------|--------|--------|--------|----------|
+| String  | ✅     | ✅     | ✅     | ✅     | ✅       |
+| Hash    | ✅     | ✅     | ✅     | ✅     | ✅       |
+| List    | ✅     | ✅     | ✅     | ✅     | ✅       |
+| Set     | ✅     | ✅     | ✅     | ✅     | ✅       |
+| ZSet    | ✅     | ✅     | ✅     | ✅     | ✅       |
+| Stream  | ✅     | ✅     | ❌     | ✅     | ✅       |
+
 ### Table Definitions
 
 ```sql
@@ -188,6 +204,7 @@ OPTIONS (
 | `table_key_prefix` | Yes | Redis key or glob pattern for multi-key mode |
 | `database` | No | Redis database number (0-15, default: 0) |
 | `ttl` | No | Default key expiration in seconds |
+| `batch_size` | No | Max rows per batch INSERT pipeline (100-100000, default: 5000) |
 
 ### Redis Cluster
 
@@ -273,6 +290,66 @@ DELETE FROM all_users WHERE key = 'user:2';
 | List | key, element |
 | Set | key, member |
 | ZSet | key, score, member |
+
+## EXPLAIN Support
+
+The FDW provides detailed information in `EXPLAIN` output for both scan and modify operations:
+
+```sql
+EXPLAIN (VERBOSE) SELECT * FROM user_profiles WHERE field = 'email';
+```
+
+## Batch INSERT
+
+Multi-row INSERT statements are automatically pipelined to Redis for better throughput. Configure with the `batch_size` table option:
+
+```sql
+CREATE FOREIGN TABLE cached_items (key text, value text)
+SERVER redis_server
+OPTIONS (table_type 'hash', table_key_prefix 'cache:items', batch_size '5000');
+
+-- All rows sent in a single Redis pipeline
+INSERT INTO cached_items VALUES ('a', '1'), ('b', '2'), ('c', '3'), ...;
+```
+
+## TRUNCATE
+
+`TRUNCATE` is supported for both single-key and multi-key pattern tables:
+
+```sql
+-- Single-key: UNLINKs the Redis key
+TRUNCATE user_profiles;
+
+-- Multi-key pattern: SCANs matching keys and UNLINKs them in batches
+CREATE FOREIGN TABLE all_sessions (key text, value text)
+SERVER redis_server OPTIONS (table_type 'string', table_key_prefix 'session:*');
+
+TRUNCATE all_sessions;  -- Removes all session:* keys
+```
+
+## IMPORT FOREIGN SCHEMA
+
+Auto-discover Redis keys and generate foreign table DDL:
+
+```sql
+-- Import all discovered tables
+IMPORT FOREIGN SCHEMA "public"
+FROM SERVER redis_server INTO my_schema;
+
+-- Import only specific tables (matched by derived prefix name)
+IMPORT FOREIGN SCHEMA "public" LIMIT TO (users, sessions)
+FROM SERVER redis_server INTO my_schema;
+
+-- Import all except specific tables
+IMPORT FOREIGN SCHEMA "public" EXCEPT (temp_data)
+FROM SERVER redis_server INTO my_schema;
+```
+
+The import process:
+1. SCANs Redis keys (up to 10,000 samples)
+2. TYPE-checks each key via pipeline
+3. Groups keys by prefix (splits on `:` delimiter)
+4. Generates `CREATE FOREIGN TABLE` DDL with appropriate columns per type
 
 ## Performance
 
