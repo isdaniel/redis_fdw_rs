@@ -24,6 +24,22 @@ pub enum ComparisonOperator {
     LessThanOrEqual,    // <=
 }
 
+impl std::fmt::Display for ComparisonOperator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ComparisonOperator::Equal => write!(f, "="),
+            ComparisonOperator::NotEqual => write!(f, "<>"),
+            ComparisonOperator::Like => write!(f, "LIKE"),
+            ComparisonOperator::In => write!(f, "IN"),
+            ComparisonOperator::NotIn => write!(f, "NOT IN"),
+            ComparisonOperator::GreaterThan => write!(f, ">"),
+            ComparisonOperator::GreaterThanOrEqual => write!(f, ">="),
+            ComparisonOperator::LessThan => write!(f, "<"),
+            ComparisonOperator::LessThanOrEqual => write!(f, "<="),
+        }
+    }
+}
+
 /// Result of WHERE clause analysis with LIMIT/OFFSET pushdown support
 #[derive(Debug, Clone)]
 pub struct PushdownAnalysis {
