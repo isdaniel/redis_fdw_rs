@@ -16,7 +16,7 @@ pub struct RedisJoinState {
     pub join_type: RedisJoinType,
     pub join_column_outer: usize,
     pub join_column_inner: usize,
-    pub result_data: Vec<Vec<String>>,
+    pub result_data: Vec<Vec<Option<String>>>,
     pub current_row: usize,
     pub result_columns: usize,
 }

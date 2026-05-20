@@ -85,9 +85,10 @@ JOIN tests create temporary local tables + Redis foreign tables and verify:
 **Join pushdown eligibility requires ALL of:**
 1. Both tables on same Redis server (host_port match)
 2. Neither table in multi-key pattern mode (no glob in table_key_prefix)
-3. Equality operator in join condition (`op_mergejoinable()` check)
-4. INNER JOIN or LEFT JOIN only (RIGHT/FULL not pushed down)
-5. Neither relation has base WHERE restrictions (`baserestrictinfo` must be empty)
+3. Neither table is a Stream type (variable-width rows not supported)
+4. Equality operator in join condition (`op_mergejoinable()` check)
+5. INNER JOIN or LEFT JOIN only (RIGHT/FULL not pushed down)
+6. Neither relation has base WHERE restrictions (`baserestrictinfo` must be empty)
 
 ### Adding a New Feature
 

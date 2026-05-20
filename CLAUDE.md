@@ -101,7 +101,7 @@ Stream is append-only; UPDATE returns an error at the trait level and `IsForeign
 ### JOIN Architecture
 - **FDW-to-Local**: Standard nested-loop; PostgreSQL drives outer rows, FDW rescans inner on each iteration
 - **FDW-to-FDW**: `GetForeignJoinPaths` detects same-server tables, extracts join columns from restrictlist, creates pushdown join path
-- **Pushdown guards**: same server (host_port match), non-multi-key tables, merge-joinable (equality) operator, INNER/LEFT only, no base restrictions on either relation
+- **Pushdown guards**: same server (host_port match), non-multi-key tables, non-Stream tables, merge-joinable (equality) operator, INNER/LEFT only, no base restrictions on either relation
 - **Base restriction guard**: If either relation has `baserestrictinfo` (WHERE clauses on individual tables), pushdown is skipped and PostgreSQL falls back to nested-loop which handles base quals correctly
 - **Join column detection**: Walks `extra.restrictlist` → `RestrictInfo` → `OpExpr` → validates `op_mergejoinable()` → `Var` nodes to find equality columns
 - **Join execution**: Fetch both datasets → build HashMap on smaller side → probe with larger side → LEFT JOIN NULL-pads unmatched outer rows

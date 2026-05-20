@@ -51,15 +51,15 @@ pub fn execute_foreign_join(state: &mut RedisJoinState) -> usize {
 
     let inner_cols = expected_columns_for_type(&state.inner_table_type);
 
-    let mut result: Vec<Vec<String>> = Vec::new();
+    let mut result: Vec<Vec<Option<String>>> = Vec::new();
     let mut matched_build: Vec<bool> = vec![false; build_data.len()];
 
-    // Pre-allocate null padding row outside the loop for LEFT JOIN
-    let null_pad_row = if state.join_type == RedisJoinType::Left && !build_is_outer {
-        vec!["NULL".to_string(); inner_cols]
-    } else {
-        Vec::new()
-    };
+    let null_pad_row: Vec<Option<String>> =
+        if state.join_type == RedisJoinType::Left && !build_is_outer {
+            vec![None; inner_cols]
+        } else {
+            Vec::new()
+        };
 
     for probe_row in probe_data {
         if let Some(probe_key) = probe_row.get(probe_col) {
@@ -67,27 +67,30 @@ pub fn execute_foreign_join(state: &mut RedisJoinState) -> usize {
                 for &build_idx in build_indices {
                     matched_build[build_idx] = true;
                     let combined = if build_is_outer {
-                        combine_rows(&build_data[build_idx], probe_row)
+                        to_option_row(&build_data[build_idx], probe_row)
                     } else {
-                        combine_rows(probe_row, &build_data[build_idx])
+                        to_option_row(probe_row, &build_data[build_idx])
                     };
                     result.push(combined);
                 }
             } else if state.join_type == RedisJoinType::Left && !build_is_outer {
-                let combined = combine_rows(probe_row, &null_pad_row);
+                let mut combined = to_some_vec(probe_row);
+                combined.extend_from_slice(&null_pad_row);
                 result.push(combined);
             }
         } else if state.join_type == RedisJoinType::Left && !build_is_outer {
-            let combined = combine_rows(probe_row, &null_pad_row);
+            let mut combined = to_some_vec(probe_row);
+            combined.extend_from_slice(&null_pad_row);
             result.push(combined);
         }
     }
 
     if state.join_type == RedisJoinType::Left && build_is_outer {
-        let null_inner = vec!["NULL".to_string(); inner_cols];
+        let null_inner: Vec<Option<String>> = vec![None; inner_cols];
         for (idx, matched) in matched_build.iter().enumerate() {
             if !matched {
-                let combined = combine_rows(&build_data[idx], &null_inner);
+                let mut combined = to_some_vec(&build_data[idx]);
+                combined.extend_from_slice(&null_inner);
                 result.push(combined);
             }
         }
@@ -203,9 +206,17 @@ pub fn expected_columns_for_type(table_type: &RedisTableType) -> usize {
     }
 }
 
-fn combine_rows(outer: &[String], inner: &[String]) -> Vec<String> {
+fn to_option_row(outer: &[String], inner: &[String]) -> Vec<Option<String>> {
     let mut combined = Vec::with_capacity(outer.len() + inner.len());
-    combined.extend_from_slice(outer);
-    combined.extend_from_slice(inner);
+    for s in outer {
+        combined.push(Some(s.clone()));
+    }
+    for s in inner {
+        combined.push(Some(s.clone()));
+    }
     combined
+}
+
+fn to_some_vec(data: &[String]) -> Vec<Option<String>> {
+    data.iter().map(|s| Some(s.clone())).collect()
 }

@@ -493,10 +493,13 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
                 let row = &join_state.result_data[join_state.current_row];
                 let natts = (*tupdesc).natts as usize;
                 for (col_idx, value) in row.iter().enumerate().take(natts) {
-                    if value == "NULL" {
-                        (*slot).tts_isnull.add(col_idx).write(true);
-                    } else {
-                        write_datum_to_slot(slot, tupdesc, col_idx, value);
+                    match value {
+                        None => {
+                            (*slot).tts_isnull.add(col_idx).write(true);
+                        }
+                        Some(v) => {
+                            write_datum_to_slot(slot, tupdesc, col_idx, v);
+                        }
                     }
                 }
                 join_state.current_row += 1;
