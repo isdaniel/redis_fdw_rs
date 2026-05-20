@@ -130,23 +130,11 @@ pub unsafe fn serialize_ptr_to_list(ptr: *mut c_void) -> *mut pg_sys::List {
     })
 }
 
-/// Serialize two raw pointers and a join type integer to a PG List
-pub unsafe fn serialize_join_info_to_list(
-    ptr1: *mut c_void,
-    ptr2: *mut c_void,
-    jointype: i64,
-    join_col_outer: i64,
-    join_col_inner: i64,
-) -> *mut pg_sys::List {
+/// Serialize multiple i64 values to a PG List (for passing join info through fdw_private)
+pub unsafe fn serialize_join_info_to_list(values: &[i64]) -> *mut pg_sys::List {
     memcx::current_context(|mcx| {
         let mut ret = List::<*mut c_void>::Nil;
-        for val in [
-            ptr1 as i64,
-            ptr2 as i64,
-            jointype,
-            join_col_outer,
-            join_col_inner,
-        ] {
+        for &val in values {
             let cst: *mut pg_sys::Const = pg_sys::makeConst(
                 pg_sys::INT8OID,
                 -1,

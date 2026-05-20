@@ -104,6 +104,9 @@ Stream is append-only; UPDATE returns an error at the trait level and `IsForeign
 - **Pushdown guards**: same server (host_port match), non-multi-key tables, merge-joinable (equality) operator, INNER/LEFT only
 - **Join column detection**: Walks `extra.restrictlist` → `RestrictInfo` → `OpExpr` → validates `op_mergejoinable()` → `Var` nodes to find equality columns
 - **Join execution**: Fetch both datasets → build HashMap on smaller side → probe with larger side → LEFT JOIN NULL-pads unmatched outer rows
+- **NULL handling**: Unmatched LEFT JOIN columns produce `"NULL"` marker strings in result_data; `iterate_foreign_scan` translates these to SQL NULL (`tts_isnull = true`) before returning tuples
+- **OOM protection**: Pre-checks cardinality with O(1) commands (HLEN/SCARD/ZCARD/LLEN) before fetch; hard limit at 500K rows per dataset
+- **Memory lifecycle**: `result_data` freed early in `shutdown_foreign_scan` (before `end_foreign_scan` destroys the memory context)
 - **Connection lifecycle**: acquired at `get_foreign_rel_size` for cost estimation, released immediately; re-acquired from pool at `begin_foreign_scan`, transferred to `RedisJoinState` for join execution, released at `shutdown_foreign_scan`
 
 ### FDW Validator

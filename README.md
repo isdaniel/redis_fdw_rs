@@ -462,6 +462,7 @@ The FDW automatically detects which columns are used in the join condition from 
 - Only single-column equality joins are pushed down
 - Both datasets are loaded into memory for the hash join (warning emitted if >500K rows)
 - Redis command errors during join fetch are raised as SQL errors (no silent data loss)
+- LEFT JOIN unmatched rows produce proper SQL NULLs (not string literals)
 
 ### Performance Tips for JOINs
 

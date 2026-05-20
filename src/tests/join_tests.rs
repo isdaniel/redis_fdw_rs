@@ -757,4 +757,86 @@ mod tests {
         let _ = Spi::run("DROP TABLE IF EXISTS join_rescan_local;");
         cleanup_join_fdw();
     }
+
+    #[pg_test]
+    fn test_join_fdw_to_fdw_left_join_null_handling() {
+        setup_join_fdw();
+
+        let hash_table = "join_fdw_null_hash";
+        let set_table = "join_fdw_null_set";
+        let hash_key = "join_test:fdw_null_hash";
+        let set_key = "join_test:fdw_null_set";
+
+        create_join_table(hash_table, "field text, value text", "hash", hash_key);
+        create_join_table(set_table, "member text", "set", set_key);
+
+        Spi::run(&format!(
+            "INSERT INTO {} VALUES ('match', 'found'), ('only_hash', 'orphan');",
+            hash_table
+        ))
+        .unwrap();
+        Spi::run(&format!(
+            "INSERT INTO {} VALUES ('match'), ('only_set');",
+            set_table
+        ))
+        .unwrap();
+
+        // FDW-to-FDW LEFT JOIN: hash LEFT JOIN set ON hash.field = set.member
+        // 'match' should produce a row; 'only_hash' should produce NULL for set.member
+        let total = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM {} h LEFT JOIN {} s ON h.field = s.member;",
+            hash_table, set_table
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(total, 2, "LEFT JOIN should return both hash rows");
+
+        // Verify the unmatched row produces actual SQL NULL (not literal 'NULL')
+        let null_member = Spi::get_one::<String>(&format!(
+            "SELECT s.member FROM {} h LEFT JOIN {} s ON h.field = s.member WHERE h.field = 'only_hash';",
+            hash_table, set_table
+        ))
+        .unwrap();
+
+        assert!(
+            null_member.is_none(),
+            "Unmatched LEFT JOIN row should produce SQL NULL, got: {:?}",
+            null_member
+        );
+
+        // Verify matched row returns correct value
+        let matched = Spi::get_one::<String>(&format!(
+            "SELECT s.member FROM {} h LEFT JOIN {} s ON h.field = s.member WHERE h.field = 'match';",
+            hash_table, set_table
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(matched, "match", "Matched row should return correct member");
+
+        Spi::run(&format!(
+            "DELETE FROM {} WHERE field = 'match';",
+            hash_table
+        ))
+        .unwrap();
+        Spi::run(&format!(
+            "DELETE FROM {} WHERE field = 'only_hash';",
+            hash_table
+        ))
+        .unwrap();
+        Spi::run(&format!(
+            "DELETE FROM {} WHERE member = 'match';",
+            set_table
+        ))
+        .unwrap();
+        Spi::run(&format!(
+            "DELETE FROM {} WHERE member = 'only_set';",
+            set_table
+        ))
+        .unwrap();
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", hash_table));
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", set_table));
+        cleanup_join_fdw();
+    }
 }

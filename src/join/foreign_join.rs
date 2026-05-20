@@ -77,6 +77,9 @@ pub fn execute_foreign_join(state: &mut RedisJoinState) -> usize {
                 let combined = combine_rows(probe_row, &null_pad_row);
                 result.push(combined);
             }
+        } else if state.join_type == RedisJoinType::Left && !build_is_outer {
+            let combined = combine_rows(probe_row, &null_pad_row);
+            result.push(combined);
         }
     }
 
@@ -187,7 +190,7 @@ fn fetch_dataset(
     }
 }
 
-fn expected_columns_for_type(table_type: &RedisTableType) -> usize {
+pub fn expected_columns_for_type(table_type: &RedisTableType) -> usize {
     match table_type {
         RedisTableType::Hash(_) => 2,
         RedisTableType::Set(_) => 1,

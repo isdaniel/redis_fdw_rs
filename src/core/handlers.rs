@@ -220,7 +220,7 @@ unsafe extern "C-unwind" fn get_foreign_plan(
 
     // Join relation: scanrelid=0, build join plan
     if (*baserel).reloptkind == pg_sys::RelOptKind::RELOPT_JOINREL {
-        return plan_foreign_join(root, baserel, best_path, tlist, outer_plan);
+        return plan_foreign_join(root, baserel, best_path, tlist, scan_clauses, outer_plan);
     }
 
     // Base relation: normal scan plan
@@ -282,6 +282,7 @@ unsafe fn plan_foreign_join(
     joinrel: *mut pgrx::pg_sys::RelOptInfo,
     best_path: *mut pgrx::pg_sys::ForeignPath,
     tlist: *mut pgrx::pg_sys::List,
+    scan_clauses: *mut pgrx::pg_sys::List,
     outer_plan: *mut pgrx::pg_sys::Plan,
 ) -> *mut pgrx::pg_sys::ForeignScan {
     log!("---> plan_foreign_join");
@@ -310,6 +311,10 @@ unsafe fn plan_foreign_join(
     let join_col_outer = deserialize_nth_ptr_from_list(path_private, 3) as usize;
     let join_col_inner = deserialize_nth_ptr_from_list(path_private, 4) as usize;
 
+    // Read relation IDs from 6th and 7th list elements
+    let outer_relid = deserialize_nth_ptr_from_list(path_private, 5) as pg_sys::Index;
+    let inner_relid = deserialize_nth_ptr_from_list(path_private, 6) as pg_sys::Index;
+
     // Build the RedisJoinState with table info from both sides
     let join_state = RedisJoinState::new(
         outer_state.table_type.clone(),
@@ -336,19 +341,51 @@ unsafe fn plan_foreign_join(
     let state_ptr = PgMemoryContexts::For(ctx).leak_and_drop_on_delete(state);
     (*joinrel).fdw_private = state_ptr as *mut std::os::raw::c_void;
 
-    // Build fdw_scan_tlist from the joinrel's reltarget for proper output mapping
-    let reltarget = (*joinrel).reltarget;
-    let fdw_scan_tlist = if !reltarget.is_null() && !(*reltarget).exprs.is_null() {
-        pg_sys::add_to_flat_tlist(ptr::null_mut(), (*reltarget).exprs)
-    } else {
-        ptr::null_mut()
-    };
+    let outer_ncols = crate::join::foreign_join::expected_columns_for_type(&outer_state.table_type);
+    let inner_ncols = crate::join::foreign_join::expected_columns_for_type(&inner_state.table_type);
+
+    // Build fdw_scan_tlist: declare our scan produces [outer_col1..N, inner_col1..M]
+    // This matches the combined row layout from execute_foreign_join.
+    // Since we skip pushdown when base restrictions exist (checked in
+    // get_foreign_join_paths), all quals here only reference join columns
+    // that are already in the tlist.
+    let mut fdw_scan_tlist: *mut pg_sys::List = ptr::null_mut();
+    let mut resno: i16 = 1;
+
+    for attno in 1..=(outer_ncols as i16) {
+        let var = pg_sys::makeVar(
+            outer_relid as _,
+            attno,
+            pg_sys::TEXTOID,
+            -1,
+            pg_sys::DEFAULT_COLLATION_OID,
+            0,
+        );
+        let tle = pg_sys::makeTargetEntry(var as *mut pg_sys::Expr, resno, ptr::null_mut(), false);
+        fdw_scan_tlist = pg_sys::lappend(fdw_scan_tlist, tle as *mut std::ffi::c_void);
+        resno += 1;
+    }
+    for attno in 1..=(inner_ncols as i16) {
+        let var = pg_sys::makeVar(
+            inner_relid as _,
+            attno,
+            pg_sys::TEXTOID,
+            -1,
+            pg_sys::DEFAULT_COLLATION_OID,
+            0,
+        );
+        let tle = pg_sys::makeTargetEntry(var as *mut pg_sys::Expr, resno, ptr::null_mut(), false);
+        fdw_scan_tlist = pg_sys::lappend(fdw_scan_tlist, tle as *mut std::ffi::c_void);
+        resno += 1;
+    }
 
     let fdw_private = serialize_ptr_to_list(state_ptr as *mut std::os::raw::c_void);
+    let local_quals = pg_sys::extract_actual_clauses(scan_clauses, false);
+
     pgrx::pg_sys::make_foreignscan(
         tlist,
-        ptr::null_mut(), // no qual for join scan
-        0,               // scanrelid=0 for join
+        local_quals, // apply any joinrel-level quals locally after scan
+        0,           // scanrelid=0 for join
         ptr::null_mut(),
         fdw_private as _,
         fdw_scan_tlist,
@@ -456,7 +493,11 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
                 let row = &join_state.result_data[join_state.current_row];
                 let natts = (*tupdesc).natts as usize;
                 for (col_idx, value) in row.iter().enumerate().take(natts) {
-                    write_datum_to_slot(slot, tupdesc, col_idx, value);
+                    if value == "NULL" {
+                        (*slot).tts_isnull.add(col_idx).write(true);
+                    } else {
+                        write_datum_to_slot(slot, tupdesc, col_idx, value);
+                    }
                 }
                 join_state.current_row += 1;
                 pgrx::pg_sys::ExecStoreVirtualTuple(slot);
@@ -615,6 +656,7 @@ extern "C-unwind" fn shutdown_foreign_scan(node: *mut pgrx::pg_sys::ForeignScanS
         state.redis_connection = None;
         if let Some(ref mut join_state) = state.join_state {
             join_state.connection = None;
+            join_state.result_data = Vec::new();
         }
     }
 }
@@ -1899,6 +1941,23 @@ unsafe extern "C-unwind" fn get_foreign_join_paths(
         return;
     }
 
+    // Skip pushdown when either base relation has WHERE restrictions.
+    // Our pushdown fetches all data from both sides; PG's base restrictions
+    // assume the base scan already filtered rows. Without a way to re-evaluate
+    // base quals in the join scan, fall back to nested-loop which handles them.
+    if !(*outerrel).baserestrictinfo.is_null()
+        && pg_sys::list_length((*outerrel).baserestrictinfo) > 0
+    {
+        log!("Outer relation has base restrictions, skipping join pushdown");
+        return;
+    }
+    if !(*innerrel).baserestrictinfo.is_null()
+        && pg_sys::list_length((*innerrel).baserestrictinfo) > 0
+    {
+        log!("Inner relation has base restrictions, skipping join pushdown");
+        return;
+    }
+
     // Extract join columns from the restrictlist in JoinPathExtraData
     let (join_col_outer, join_col_inner) = match extract_join_columns(_extra, outerrel, innerrel) {
         Some(cols) => cols,
@@ -1916,20 +1975,21 @@ unsafe extern "C-unwind" fn get_foreign_join_paths(
 
     let outer_rows = (*outerrel).rows;
     let inner_rows = (*innerrel).rows;
-    let startup_cost = 11.0;
-    let total_cost =
-        startup_cost + (outer_rows.min(inner_rows) * 0.01) + (outer_rows.max(inner_rows) * 0.0025);
+    let startup_cost = 15.0;
+    let total_cost = startup_cost + outer_rows + inner_rows + (outer_rows.min(inner_rows) * 0.02);
 
     let joinrel_rows = outer_rows.min(inner_rows);
 
-    // Store outer+inner state pointers, jointype, and join columns
-    let fdw_private = serialize_join_info_to_list(
-        outer_state_ptr as *mut std::os::raw::c_void,
-        inner_state_ptr as *mut std::os::raw::c_void,
+    // Store outer+inner state pointers, jointype, join columns, and relids
+    let fdw_private = serialize_join_info_to_list(&[
+        outer_state_ptr as i64,
+        inner_state_ptr as i64,
         jointype as i64,
         join_col_outer as i64,
         join_col_inner as i64,
-    );
+        (*outerrel).relid as i64,
+        (*innerrel).relid as i64,
+    ]);
 
     let path = pgrx::pg_sys::create_foreign_join_path(
         root,
