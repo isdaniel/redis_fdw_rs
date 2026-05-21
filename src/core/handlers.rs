@@ -1990,8 +1990,14 @@ unsafe extern "C-unwind" fn get_foreign_join_paths(
 
     let outer_rows = (*outerrel).rows;
     let inner_rows = (*innerrel).rows;
-    let startup_cost = 15.0;
-    let total_cost = startup_cost + outer_rows + inner_rows + (outer_rows.min(inner_rows) * 0.02);
+
+    use crate::query::cost_estimation::costs;
+    let network_cost = costs::NETWORK_ROUND_TRIP * 4.0
+        + (outer_rows + inner_rows) * costs::NETWORK_TRANSFER_PER_ROW;
+    let build_cost = inner_rows.min(outer_rows) * costs::CPU_TUPLE_COST;
+    let probe_cost = inner_rows.max(outer_rows) * costs::CPU_TUPLE_COST;
+    let startup_cost = network_cost + build_cost;
+    let total_cost = startup_cost + probe_cost;
 
     let joinrel_rows = outer_rows.min(inner_rows);
 
