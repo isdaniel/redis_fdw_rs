@@ -21,6 +21,9 @@ pub mod costs {
     /// Cost per network round-trip to Redis
     pub const NETWORK_ROUND_TRIP: f64 = 10.0;
 
+    /// Cost per row transferred over the network from Redis
+    pub const NETWORK_TRANSFER_PER_ROW: f64 = 0.005;
+
     /// Cost to process one row/tuple
     pub const CPU_TUPLE_COST: f64 = 0.01;
 
