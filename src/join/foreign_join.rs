@@ -33,7 +33,8 @@ pub fn execute_foreign_join(state: &mut RedisJoinState) -> usize {
     );
 
     let count = result.len();
-    state.result_columns = result.first().map_or(0, |r| r.len());
+    state.result_columns = expected_columns_for_type(&state.outer_table_type)
+        + expected_columns_for_type(&state.inner_table_type);
     state.result_data = result;
     state.current_row = 0;
     count
