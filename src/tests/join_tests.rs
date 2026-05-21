@@ -946,4 +946,332 @@ mod tests {
         let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", set_table));
         cleanup_join_fdw();
     }
+
+    #[pg_test]
+    fn test_join_list_duplicate_elements() {
+        setup_join_fdw();
+
+        let table_name = "join_list_dup";
+        let key_prefix = "join_test:list_dup";
+        create_join_table(table_name, "element text", "list", key_prefix);
+
+        // List allows duplicate elements
+        Spi::run(&format!(
+            "INSERT INTO {} VALUES ('dup'), ('dup'), ('unique'), ('dup');",
+            table_name
+        ))
+        .unwrap();
+
+        Spi::run("CREATE TEMPORARY TABLE join_dup_local (val text);").unwrap();
+        Spi::run("INSERT INTO join_dup_local VALUES ('dup'), ('unique'), ('missing');").unwrap();
+
+        // INNER JOIN: 'dup' in local matches 3 list elements, 'unique' matches 1 = total 4
+        let count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM join_dup_local l JOIN {} r ON l.val = r.element;",
+            table_name
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            count, 4,
+            "Duplicate list elements should produce cross-product: 3 + 1 = 4 rows"
+        );
+
+        // LEFT JOIN: all 3 local rows, 'missing' gets NULL
+        let left_count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM join_dup_local l LEFT JOIN {} r ON l.val = r.element;",
+            table_name
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            left_count, 5,
+            "LEFT JOIN with duplicates: 3 (dup) + 1 (unique) + 1 (missing/NULL) = 5"
+        );
+
+        Spi::run(&format!(
+            "DELETE FROM {} WHERE element = 'dup';",
+            table_name
+        ))
+        .unwrap();
+        Spi::run(&format!(
+            "DELETE FROM {} WHERE element = 'unique';",
+            table_name
+        ))
+        .unwrap();
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", table_name));
+        let _ = Spi::run("DROP TABLE IF EXISTS join_dup_local;");
+        cleanup_join_fdw();
+    }
+
+    #[pg_test]
+    fn test_join_fdw_left_join_inner_larger_than_outer() {
+        setup_join_fdw();
+
+        // Outer (left) table: small (3 rows)
+        let small_table = "join_fdw_small_hash";
+        let small_key = "join_test:small_hash";
+        create_join_table(small_table, "field text, value text", "hash", small_key);
+
+        // Inner (right) table: large (10 rows)
+        let large_table = "join_fdw_large_hash";
+        let large_key = "join_test:large_hash2";
+        create_join_table(large_table, "field text, value text", "hash", large_key);
+
+        Spi::run(&format!(
+            "INSERT INTO {} VALUES ('a', 'small_a'), ('b', 'small_b'), ('c', 'small_c');",
+            small_table
+        ))
+        .unwrap();
+
+        let mut insert = format!("INSERT INTO {} VALUES ", large_table);
+        for i in 0..10 {
+            if i > 0 {
+                insert.push_str(", ");
+            }
+            let key = (b'a' + (i as u8)) as char;
+            insert.push_str(&format!("('{}', 'large_{}')", key, key));
+        }
+        insert.push(';');
+        Spi::run(&insert).unwrap();
+
+        // LEFT JOIN: outer=small(3), inner=large(10)
+        // Build side should be small (3 rows), probe side should be large (10 rows)
+        // All 3 small rows should appear; a, b, c all match in large
+        let count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM {} s LEFT JOIN {} l ON s.field = l.field;",
+            small_table, large_table
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            count, 3,
+            "LEFT JOIN: all 3 outer rows should be present (all match)"
+        );
+
+        // Verify data correctness
+        let val = Spi::get_one::<String>(&format!(
+            "SELECT l.value FROM {} s LEFT JOIN {} l ON s.field = l.field WHERE s.field = 'a';",
+            small_table, large_table
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(val, "large_a", "Should get the matching inner value");
+
+        // Now test with a key that only exists in small (add one)
+        Spi::run(&format!(
+            "INSERT INTO {} VALUES ('zzz', 'only_small');",
+            small_table
+        ))
+        .unwrap();
+
+        let left_null = Spi::get_one::<String>(&format!(
+            "SELECT l.value FROM {} s LEFT JOIN {} l ON s.field = l.field WHERE s.field = 'zzz';",
+            small_table, large_table
+        ))
+        .unwrap();
+
+        assert!(
+            left_null.is_none(),
+            "LEFT JOIN unmatched outer row should produce NULL inner, got: {:?}",
+            left_null
+        );
+
+        // Cleanup
+        for c in 'a'..='c' {
+            Spi::run(&format!(
+                "DELETE FROM {} WHERE field = '{}';",
+                small_table, c
+            ))
+            .unwrap();
+        }
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'zzz';", small_table)).unwrap();
+        for i in 0..10 {
+            let key = (b'a' + (i as u8)) as char;
+            Spi::run(&format!(
+                "DELETE FROM {} WHERE field = '{}';",
+                large_table, key
+            ))
+            .unwrap();
+        }
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", small_table));
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", large_table));
+        cleanup_join_fdw();
+    }
+
+    #[pg_test]
+    fn test_join_self_join_same_table() {
+        setup_join_fdw();
+
+        let table_name = "join_self_hash";
+        let key_prefix = "join_test:self_hash";
+        create_join_table(table_name, "field text, value text", "hash", key_prefix);
+
+        Spi::run(&format!(
+            "INSERT INTO {} VALUES ('a', 'a'), ('b', 'c'), ('c', 'x');",
+            table_name
+        ))
+        .unwrap();
+
+        // Self-join: field of one alias matches value of another
+        // t1.field = t2.value: 'a'='a' (t1.a matches t2 where value='a' → t2.field='a')
+        //                      'c'='c' (t1.c doesn't exist as field... wait)
+        // Let's do simpler: join on same column (field = field)
+        let count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM {} t1 JOIN {} t2 ON t1.field = t2.field;",
+            table_name, table_name
+        ))
+        .unwrap()
+        .unwrap();
+
+        // Self-join on field=field should match all 3 rows (each matches itself)
+        assert_eq!(count, 3, "Self-join on same column should match all rows");
+
+        // Self-join on t1.field = t2.value
+        // t2 has values: 'a', 'c', 'x'
+        // t1 fields: 'a', 'b', 'c'
+        // Matches: t1.field='a' = t2.value='a' (from t2 row ('a','a'))
+        //          t1.field='c' = t2.value='c' (from t2 row ('b','c'))
+        let cross_count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM {} t1 JOIN {} t2 ON t1.field = t2.value;",
+            table_name, table_name
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            cross_count, 2,
+            "Self-join field=value should match 'a' and 'c'"
+        );
+
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'a';", table_name)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'b';", table_name)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'c';", table_name)).unwrap();
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", table_name));
+        cleanup_join_fdw();
+    }
+
+    #[pg_test]
+    fn test_join_fdw_inner_join_no_matches() {
+        setup_join_fdw();
+
+        let table1 = "join_nomatch_hash1";
+        let table2 = "join_nomatch_hash2";
+        let key1 = "join_test:nomatch_h1";
+        let key2 = "join_test:nomatch_h2";
+
+        create_join_table(table1, "field text, value text", "hash", key1);
+        create_join_table(table2, "field text, value text", "hash", key2);
+
+        Spi::run(&format!(
+            "INSERT INTO {} VALUES ('a', 'val_a'), ('b', 'val_b');",
+            table1
+        ))
+        .unwrap();
+        Spi::run(&format!(
+            "INSERT INTO {} VALUES ('x', 'val_x'), ('y', 'val_y');",
+            table2
+        ))
+        .unwrap();
+
+        // INNER JOIN with no matching keys should return 0 rows
+        let count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM {} t1 JOIN {} t2 ON t1.field = t2.field;",
+            table1, table2
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            count, 0,
+            "INNER JOIN with no matching keys should return 0 rows"
+        );
+
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'a';", table1)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'b';", table1)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'x';", table2)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'y';", table2)).unwrap();
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", table1));
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", table2));
+        cleanup_join_fdw();
+    }
+
+    #[pg_test]
+    fn test_join_fdw_to_fdw_build_probe_strategy() {
+        setup_join_fdw();
+
+        // Create a small (2 rows) and large (20 rows) table
+        // The optimizer should build on the smaller side regardless of SQL order
+        let small_table = "join_bp_small";
+        let large_table = "join_bp_large";
+        let small_key = "join_test:bp_small";
+        let large_key = "join_test:bp_large";
+
+        create_join_table(small_table, "field text, value text", "hash", small_key);
+        create_join_table(large_table, "field text, value text", "hash", large_key);
+
+        Spi::run(&format!(
+            "INSERT INTO {} VALUES ('k1', 'small1'), ('k2', 'small2');",
+            small_table
+        ))
+        .unwrap();
+
+        let mut insert = format!("INSERT INTO {} VALUES ", large_table);
+        for i in 1..=20 {
+            if i > 1 {
+                insert.push_str(", ");
+            }
+            insert.push_str(&format!("('k{}', 'large{}')", i, i));
+        }
+        insert.push(';');
+        Spi::run(&insert).unwrap();
+
+        // Join with large first in FROM — should still get correct results
+        let count1 = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM {} l JOIN {} s ON l.field = s.field;",
+            large_table, small_table
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(count1, 2, "Large JOIN Small should find 2 matches (k1, k2)");
+
+        // Join with small first in FROM — same result
+        let count2 = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM {} s JOIN {} l ON s.field = l.field;",
+            small_table, large_table
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(count2, 2, "Small JOIN Large should find 2 matches (k1, k2)");
+
+        // Verify content regardless of build/probe side
+        let val = Spi::get_one::<String>(&format!(
+            "SELECT s.value FROM {} l JOIN {} s ON l.field = s.field WHERE l.field = 'k1';",
+            large_table, small_table
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(val, "small1", "Should get correct value from small table");
+
+        // Cleanup
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'k1';", small_table)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'k2';", small_table)).unwrap();
+        for i in 1..=20 {
+            Spi::run(&format!(
+                "DELETE FROM {} WHERE field = 'k{}';",
+                large_table, i
+            ))
+            .unwrap();
+        }
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", small_table));
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", large_table));
+        cleanup_join_fdw();
+    }
 }
