@@ -23,21 +23,45 @@ pub fn execute_foreign_join(state: &mut RedisJoinState) -> usize {
         );
     }
 
+    let result = perform_hash_join(
+        &outer_data,
+        &inner_data,
+        state.join_column_outer,
+        state.join_column_inner,
+        &state.join_type,
+        &state.inner_table_type,
+    );
+
+    let count = result.len();
+    state.result_columns = result.first().map_or(0, |r| r.len());
+    state.result_data = result;
+    state.current_row = 0;
+    count
+}
+
+pub(crate) fn perform_hash_join(
+    outer_data: &[Vec<String>],
+    inner_data: &[Vec<String>],
+    join_column_outer: usize,
+    join_column_inner: usize,
+    join_type: &RedisJoinType,
+    inner_table_type: &RedisTableType,
+) -> Vec<Vec<Option<String>>> {
     let (build_data, probe_data, build_col, probe_col, build_is_outer) =
         if outer_data.len() <= inner_data.len() {
             (
-                &outer_data,
-                &inner_data,
-                state.join_column_outer,
-                state.join_column_inner,
+                outer_data,
+                inner_data,
+                join_column_outer,
+                join_column_inner,
                 true,
             )
         } else {
             (
-                &inner_data,
-                &outer_data,
-                state.join_column_inner,
-                state.join_column_outer,
+                inner_data,
+                outer_data,
+                join_column_inner,
+                join_column_outer,
                 false,
             )
         };
@@ -49,22 +73,22 @@ pub fn execute_foreign_join(state: &mut RedisJoinState) -> usize {
         }
     }
 
-    let inner_cols = expected_columns_for_type(&state.inner_table_type);
+    let inner_cols = expected_columns_for_type(inner_table_type);
 
     let mut result: Vec<Vec<Option<String>>> = Vec::new();
-    let needs_build_tracking = state.join_type == RedisJoinType::Left && build_is_outer;
+    let needs_build_tracking = *join_type == RedisJoinType::Left && build_is_outer;
     let mut matched_build: Vec<bool> = if needs_build_tracking {
         vec![false; build_data.len()]
     } else {
         Vec::new()
     };
 
-    let null_pad_row: Vec<Option<String>> =
-        if state.join_type == RedisJoinType::Left && !build_is_outer {
-            vec![None; inner_cols]
-        } else {
-            Vec::new()
-        };
+    let null_pad_row: Vec<Option<String>> = if *join_type == RedisJoinType::Left && !build_is_outer
+    {
+        vec![None; inner_cols]
+    } else {
+        Vec::new()
+    };
 
     for probe_row in probe_data {
         if let Some(probe_key) = probe_row.get(probe_col) {
@@ -80,12 +104,12 @@ pub fn execute_foreign_join(state: &mut RedisJoinState) -> usize {
                     };
                     result.push(combined);
                 }
-            } else if state.join_type == RedisJoinType::Left && !build_is_outer {
+            } else if *join_type == RedisJoinType::Left && !build_is_outer {
                 let mut combined = to_some_vec(probe_row);
                 combined.extend_from_slice(&null_pad_row);
                 result.push(combined);
             }
-        } else if state.join_type == RedisJoinType::Left && !build_is_outer {
+        } else if *join_type == RedisJoinType::Left && !build_is_outer {
             let mut combined = to_some_vec(probe_row);
             combined.extend_from_slice(&null_pad_row);
             result.push(combined);
@@ -103,11 +127,7 @@ pub fn execute_foreign_join(state: &mut RedisJoinState) -> usize {
         }
     }
 
-    let count = result.len();
-    state.result_columns = result.first().map_or(0, |r| r.len());
-    state.result_data = result;
-    state.current_row = 0;
-    count
+    result
 }
 
 fn fetch_dataset(
@@ -115,7 +135,6 @@ fn fetch_dataset(
     table_type: &RedisTableType,
     key_prefix: &str,
 ) -> Vec<Vec<String>> {
-    // Pre-check cardinality to avoid OOM from unbounded HGETALL/SMEMBERS
     let cardinality: u64 = match table_type {
         RedisTableType::Hash(_) => redis::cmd("HLEN").arg(key_prefix).query(conn),
         RedisTableType::Set(_) => redis::cmd("SCARD").arg(key_prefix).query(conn),
@@ -300,18 +319,6 @@ mod tests {
 
     #[test]
     fn test_execute_inner_join_basic() {
-        let mut state = RedisJoinState::new(
-            make_hash_type(),
-            make_hash_type(),
-            "outer_key".to_string(),
-            "inner_key".to_string(),
-            RedisJoinType::Inner,
-            0,
-            0,
-        );
-
-        // Simulate pre-loaded data by directly testing the hash-join logic
-        // (without Redis connection, we test the algorithm in isolation)
         let outer_data = vec![
             vec!["a".to_string(), "val_a".to_string()],
             vec!["b".to_string(), "val_b".to_string()],
@@ -323,11 +330,16 @@ mod tests {
             vec!["d".to_string(), "inner_d".to_string()],
         ];
 
-        let result = execute_hash_join(&mut state, &outer_data, &inner_data);
-        // INNER JOIN: only 'a' and 'b' match
+        let result = perform_hash_join(
+            &outer_data,
+            &inner_data,
+            0,
+            0,
+            &RedisJoinType::Inner,
+            &make_hash_type(),
+        );
         assert_eq!(result.len(), 2);
 
-        // Verify content
         let has_a = result
             .iter()
             .any(|r| r[0] == Some("a".to_string()) && r[2] == Some("a".to_string()));
@@ -340,16 +352,6 @@ mod tests {
 
     #[test]
     fn test_execute_left_join_with_nulls() {
-        let mut state = RedisJoinState::new(
-            make_hash_type(),
-            make_hash_type(),
-            "outer_key".to_string(),
-            "inner_key".to_string(),
-            RedisJoinType::Left,
-            0,
-            0,
-        );
-
         let outer_data = vec![
             vec!["a".to_string(), "val_a".to_string()],
             vec!["b".to_string(), "val_b".to_string()],
@@ -360,8 +362,14 @@ mod tests {
             vec!["b".to_string(), "inner_b".to_string()],
         ];
 
-        let result = execute_hash_join(&mut state, &outer_data, &inner_data);
-        // LEFT JOIN: 'a' and 'b' match, 'missing' gets NULL inner cols
+        let result = perform_hash_join(
+            &outer_data,
+            &inner_data,
+            0,
+            0,
+            &RedisJoinType::Left,
+            &make_hash_type(),
+        );
         assert_eq!(result.len(), 3);
 
         let null_row = result.iter().find(|r| r[0] == Some("missing".to_string()));
@@ -373,39 +381,33 @@ mod tests {
 
     #[test]
     fn test_execute_inner_join_empty_outer() {
-        let mut state = RedisJoinState::new(
-            make_hash_type(),
-            make_hash_type(),
-            "outer_key".to_string(),
-            "inner_key".to_string(),
-            RedisJoinType::Inner,
-            0,
-            0,
-        );
-
         let outer_data: Vec<Vec<String>> = vec![];
         let inner_data = vec![vec!["a".to_string(), "val".to_string()]];
 
-        let result = execute_hash_join(&mut state, &outer_data, &inner_data);
+        let result = perform_hash_join(
+            &outer_data,
+            &inner_data,
+            0,
+            0,
+            &RedisJoinType::Inner,
+            &make_hash_type(),
+        );
         assert_eq!(result.len(), 0, "Empty outer should produce 0 results");
     }
 
     #[test]
     fn test_execute_inner_join_empty_inner() {
-        let mut state = RedisJoinState::new(
-            make_hash_type(),
-            make_hash_type(),
-            "outer_key".to_string(),
-            "inner_key".to_string(),
-            RedisJoinType::Inner,
-            0,
-            0,
-        );
-
         let outer_data = vec![vec!["a".to_string(), "val".to_string()]];
         let inner_data: Vec<Vec<String>> = vec![];
 
-        let result = execute_hash_join(&mut state, &outer_data, &inner_data);
+        let result = perform_hash_join(
+            &outer_data,
+            &inner_data,
+            0,
+            0,
+            &RedisJoinType::Inner,
+            &make_hash_type(),
+        );
         assert_eq!(
             result.len(),
             0,
@@ -415,23 +417,20 @@ mod tests {
 
     #[test]
     fn test_execute_left_join_empty_inner() {
-        let mut state = RedisJoinState::new(
-            make_hash_type(),
-            make_hash_type(),
-            "outer_key".to_string(),
-            "inner_key".to_string(),
-            RedisJoinType::Left,
-            0,
-            0,
-        );
-
         let outer_data = vec![
             vec!["a".to_string(), "val_a".to_string()],
             vec!["b".to_string(), "val_b".to_string()],
         ];
         let inner_data: Vec<Vec<String>> = vec![];
 
-        let result = execute_hash_join(&mut state, &outer_data, &inner_data);
+        let result = perform_hash_join(
+            &outer_data,
+            &inner_data,
+            0,
+            0,
+            &RedisJoinType::Left,
+            &make_hash_type(),
+        );
         assert_eq!(
             result.len(),
             2,
@@ -443,23 +442,10 @@ mod tests {
 
     #[test]
     fn test_execute_join_build_probe_strategy() {
-        // When outer is smaller, it becomes build side
-        let mut state = RedisJoinState::new(
-            make_hash_type(),
-            make_hash_type(),
-            "outer_key".to_string(),
-            "inner_key".to_string(),
-            RedisJoinType::Inner,
-            0,
-            0,
-        );
-
-        // Outer: 2 rows (smaller → build side)
         let outer_data = vec![
             vec!["a".to_string(), "o_a".to_string()],
             vec!["b".to_string(), "o_b".to_string()],
         ];
-        // Inner: 5 rows (larger → probe side)
         let inner_data = vec![
             vec!["a".to_string(), "i_a".to_string()],
             vec!["b".to_string(), "i_b".to_string()],
@@ -468,10 +454,16 @@ mod tests {
             vec!["e".to_string(), "i_e".to_string()],
         ];
 
-        let result = execute_hash_join(&mut state, &outer_data, &inner_data);
+        let result = perform_hash_join(
+            &outer_data,
+            &inner_data,
+            0,
+            0,
+            &RedisJoinType::Inner,
+            &make_hash_type(),
+        );
         assert_eq!(result.len(), 2, "Should match 'a' and 'b'");
 
-        // Verify outer columns come first in result
         let row_a = result
             .iter()
             .find(|r| r[0] == Some("a".to_string()))
@@ -495,32 +487,24 @@ mod tests {
 
     #[test]
     fn test_execute_join_duplicate_keys_in_build() {
-        // List type can have duplicate elements
-        let mut state = RedisJoinState::new(
-            make_list_type(),
-            make_hash_type(),
-            "outer_key".to_string(),
-            "inner_key".to_string(),
-            RedisJoinType::Inner,
-            0,
-            0,
-        );
-
-        // Outer (list): has duplicates
         let outer_data = vec![
             vec!["dup".to_string()],
             vec!["dup".to_string()],
             vec!["unique".to_string()],
         ];
-        // Inner (hash): unique keys
         let inner_data = vec![
             vec!["dup".to_string(), "val_dup".to_string()],
             vec!["unique".to_string(), "val_unique".to_string()],
         ];
 
-        let result = execute_hash_join(&mut state, &outer_data, &inner_data);
-        // 'dup' appears twice in outer, matches once in inner → 2 result rows
-        // 'unique' appears once in outer, matches once → 1 result row
+        let result = perform_hash_join(
+            &outer_data,
+            &inner_data,
+            0,
+            0,
+            &RedisJoinType::Inner,
+            &make_hash_type(),
+        );
         assert_eq!(
             result.len(),
             3,
@@ -530,19 +514,6 @@ mod tests {
 
     #[test]
     fn test_execute_left_join_outer_larger_than_inner() {
-        // When outer is larger, inner becomes build side
-        // LEFT JOIN must still preserve all outer rows
-        let mut state = RedisJoinState::new(
-            make_hash_type(),
-            make_set_type(),
-            "outer_key".to_string(),
-            "inner_key".to_string(),
-            RedisJoinType::Left,
-            0,
-            0,
-        );
-
-        // Outer: 5 rows (larger → probe side)
         let outer_data = vec![
             vec!["a".to_string(), "val_a".to_string()],
             vec!["b".to_string(), "val_b".to_string()],
@@ -550,14 +521,18 @@ mod tests {
             vec!["d".to_string(), "val_d".to_string()],
             vec!["e".to_string(), "val_e".to_string()],
         ];
-        // Inner (set): 2 rows (smaller → build side)
         let inner_data = vec![vec!["a".to_string()], vec!["c".to_string()]];
 
-        let result = execute_hash_join(&mut state, &outer_data, &inner_data);
-        // LEFT JOIN: all 5 outer rows preserved, only 'a' and 'c' match
+        let result = perform_hash_join(
+            &outer_data,
+            &inner_data,
+            0,
+            0,
+            &RedisJoinType::Left,
+            &make_set_type(),
+        );
         assert_eq!(result.len(), 5, "LEFT JOIN should preserve all outer rows");
 
-        // Matched rows should have inner value
         let row_a = result
             .iter()
             .find(|r| r[0] == Some("a".to_string()))
@@ -568,101 +543,10 @@ mod tests {
             "Matched row should have inner value"
         );
 
-        // Unmatched rows should have NULL
         let row_b = result
             .iter()
             .find(|r| r[0] == Some("b".to_string()))
             .unwrap();
         assert_eq!(row_b[2], None, "Unmatched row should have NULL inner");
-    }
-
-    /// Helper function to test the hash-join algorithm without Redis connection.
-    /// Mirrors execute_foreign_join logic but takes pre-loaded data.
-    fn execute_hash_join(
-        state: &mut RedisJoinState,
-        outer_data: &[Vec<String>],
-        inner_data: &[Vec<String>],
-    ) -> Vec<Vec<Option<String>>> {
-        let (build_data, probe_data, build_col, probe_col, build_is_outer) =
-            if outer_data.len() <= inner_data.len() {
-                (
-                    outer_data,
-                    inner_data,
-                    state.join_column_outer,
-                    state.join_column_inner,
-                    true,
-                )
-            } else {
-                (
-                    inner_data,
-                    outer_data,
-                    state.join_column_inner,
-                    state.join_column_outer,
-                    false,
-                )
-            };
-
-        let mut hash_table: HashMap<&str, Vec<usize>> = HashMap::new();
-        for (idx, row) in build_data.iter().enumerate() {
-            if let Some(key) = row.get(build_col) {
-                hash_table.entry(key.as_str()).or_default().push(idx);
-            }
-        }
-
-        let inner_cols = expected_columns_for_type(&state.inner_table_type);
-        let mut result: Vec<Vec<Option<String>>> = Vec::new();
-        let needs_build_tracking = state.join_type == RedisJoinType::Left && build_is_outer;
-        let mut matched_build: Vec<bool> = if needs_build_tracking {
-            vec![false; build_data.len()]
-        } else {
-            Vec::new()
-        };
-
-        let null_pad_row: Vec<Option<String>> =
-            if state.join_type == RedisJoinType::Left && !build_is_outer {
-                vec![None; inner_cols]
-            } else {
-                Vec::new()
-            };
-
-        for probe_row in probe_data {
-            if let Some(probe_key) = probe_row.get(probe_col) {
-                if let Some(build_indices) = hash_table.get(probe_key.as_str()) {
-                    for &build_idx in build_indices {
-                        if needs_build_tracking {
-                            matched_build[build_idx] = true;
-                        }
-                        let combined = if build_is_outer {
-                            to_option_row(&build_data[build_idx], probe_row)
-                        } else {
-                            to_option_row(probe_row, &build_data[build_idx])
-                        };
-                        result.push(combined);
-                    }
-                } else if state.join_type == RedisJoinType::Left && !build_is_outer {
-                    let mut combined = to_some_vec(probe_row);
-                    combined.extend_from_slice(&null_pad_row);
-                    result.push(combined);
-                }
-            } else if state.join_type == RedisJoinType::Left && !build_is_outer {
-                let mut combined = to_some_vec(probe_row);
-                combined.extend_from_slice(&null_pad_row);
-                result.push(combined);
-            }
-        }
-
-        if needs_build_tracking {
-            let null_inner: Vec<Option<String>> = vec![None; inner_cols];
-            for (idx, matched) in matched_build.iter().enumerate() {
-                if !matched {
-                    let mut combined = to_some_vec(&build_data[idx]);
-                    combined.extend_from_slice(&null_inner);
-                    result.push(combined);
-                }
-            }
-        }
-
-        state.result_columns = result.first().map_or(0, |r| r.len());
-        result
     }
 }

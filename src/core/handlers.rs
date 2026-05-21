@@ -1991,10 +1991,10 @@ unsafe extern "C-unwind" fn get_foreign_join_paths(
     let outer_rows = (*outerrel).rows;
     let inner_rows = (*innerrel).rows;
 
-    // Cost model aligned with PostgreSQL cost units (cpu_tuple_cost=0.01). Pushdown fetches both datasets in two pipelined Redis commands, then performs an in-memory hash join: O(N+M) build+probe.
-    let network_cost = 20.0; // two Redis round-trips (HGETALL/SMEMBERS/etc.)
-    let build_cost = inner_rows.min(outer_rows) * 0.01; // hash table construction
-    let probe_cost = inner_rows.max(outer_rows) * 0.01; // probe phase
+    use crate::query::cost_estimation::costs;
+    let network_cost = costs::NETWORK_ROUND_TRIP * 2.0;
+    let build_cost = inner_rows.min(outer_rows) * costs::CPU_TUPLE_COST;
+    let probe_cost = inner_rows.max(outer_rows) * costs::CPU_TUPLE_COST;
     let startup_cost = network_cost + build_cost;
     let total_cost = startup_cost + probe_cost;
 
