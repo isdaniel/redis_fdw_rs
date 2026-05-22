@@ -453,6 +453,15 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
         let param_value = datum_to_text_string(datum, state.param_type_oid);
 
         if state.parameterized_lookup(&param_value) {
+            if state.ttl_column_index.is_some() {
+                let ttl_key = if state.is_multi_key {
+                    param_value.as_str()
+                } else {
+                    state.table_key_prefix.as_str()
+                };
+                let ttl_key_owned = ttl_key.to_string();
+                state.cached_ttl = Some(state.read_ttl(&ttl_key_owned));
+            }
             let natts_param = (*tupdesc).natts as usize;
             if let Some(row_data) = state.get_row(0) {
                 let mut data_idx = 0;

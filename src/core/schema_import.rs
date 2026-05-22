@@ -127,8 +127,18 @@ pub(crate) unsafe extern "C-unwind" fn import_foreign_schema(
 
     let server_name = string_from_cstr((*stmt).server_name);
     let mut result_list: *mut pg_sys::List = ptr::null_mut();
+    let mut table_count = 0usize;
+    const MAX_IMPORT_TABLES: usize = 1000;
 
     for (prefix, redis_type) in &groups {
+        if table_count >= MAX_IMPORT_TABLES {
+            pgrx::warning!(
+                "redis_fdw: import_foreign_schema stopped at {} tables (limit reached)",
+                MAX_IMPORT_TABLES
+            );
+            break;
+        }
+
         let table_name = sanitize_table_name(prefix);
 
         match list_type {
@@ -166,6 +176,7 @@ pub(crate) unsafe extern "C-unwind" fn import_foreign_schema(
         };
         let pg_str = pg_sys::pstrdup(ddl_cstr.as_ptr());
         result_list = pg_sys::lappend(result_list, pg_str as *mut std::ffi::c_void);
+        table_count += 1;
     }
 
     result_list

@@ -42,20 +42,7 @@ pub(crate) unsafe fn extract_column_names(tupdesc: pg_sys::TupleDesc) -> Vec<Str
 
 pub(crate) unsafe fn datum_to_text_string(datum: pg_sys::Datum, typoid: pg_sys::Oid) -> String {
     if typoid == pg_sys::TEXTOID || typoid == pg_sys::VARCHAROID || typoid == pg_sys::BPCHAROID {
-        let text_ptr = datum.cast_mut_ptr::<pg_sys::varlena>();
-        if text_ptr.is_null() {
-            return String::new();
-        }
-        let detoasted = pg_sys::pg_detoast_datum_packed(text_ptr);
-        let cstr = pg_sys::text_to_cstring(detoasted);
-        let result = std::ffi::CStr::from_ptr(cstr)
-            .to_string_lossy()
-            .into_owned();
-        pg_sys::pfree(cstr as *mut std::ffi::c_void);
-        if detoasted != text_ptr {
-            pg_sys::pfree(detoasted as *mut std::ffi::c_void);
-        }
-        result
+        String::from_datum(datum, false).unwrap_or_default()
     } else {
         let mut out_func_oid: pg_sys::Oid = pg_sys::InvalidOid;
         let mut is_varlena = false;
