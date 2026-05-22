@@ -1,9 +1,19 @@
 use crate::{
-    core::state_manager::RedisFdwState,
-    join::{
-        foreign_join::execute_foreign_join,
-        types::{RedisJoinState, RedisJoinType},
+    core::{
+        column_utils::{
+            datum_to_text_string, detect_ttl_column, extract_column_names, extract_delete_key,
+            state_from_ptr, transform_insert_data, validate_column_count,
+        },
+        explain::{explain_foreign_modify, explain_foreign_scan},
+        join::{
+            add_parameterized_paths, begin_foreign_join_scan, get_foreign_join_paths,
+            plan_foreign_join,
+        },
+        schema_import::{analyze_foreign_table, import_foreign_schema},
+        state_manager::RedisFdwState,
+        truncate::exec_foreign_truncate,
     },
+    join::foreign_join::execute_foreign_join,
     query::{limit::extract_limit_offset_info, pushdown::WhereClausePushdown},
     tables::types::RedisTableType,
     utils::{helpers::*, memory::create_wrappers_memctx, row::Row},
@@ -13,73 +23,7 @@ use pgrx::{
     prelude::*,
     PgMemoryContexts, PgRelation,
 };
-use std::ffi::CString;
 use std::ptr;
-
-#[inline]
-unsafe fn state_from_ptr<'a>(ptr: *mut std::os::raw::c_void) -> &'a mut RedisFdwState {
-    if ptr.is_null() {
-        pgrx::error!("Redis FDW state pointer is null");
-    }
-    &mut *(ptr as *mut RedisFdwState)
-}
-
-unsafe fn detect_ttl_column(tupdesc: pg_sys::TupleDesc) -> Option<usize> {
-    let natts = (*tupdesc).natts as usize;
-    for i in 0..natts {
-        let attr = tuple_desc_attr(tupdesc, i);
-        if (*attr).attisdropped {
-            continue;
-        }
-        let name = pgrx::name_data_to_str(&(*attr).attname);
-        if name.eq_ignore_ascii_case("ttl") {
-            return Some(i);
-        }
-    }
-    None
-}
-
-unsafe fn extract_column_names(tupdesc: pg_sys::TupleDesc) -> Vec<String> {
-    let natts = (*tupdesc).natts as usize;
-    let mut names = Vec::with_capacity(natts);
-    for i in 0..natts {
-        let attr = tuple_desc_attr(tupdesc, i);
-        if (*attr).attisdropped {
-            continue;
-        }
-        let name = pgrx::name_data_to_str(&(*attr).attname);
-        names.push(name.to_string());
-    }
-    names
-}
-
-fn transform_insert_data(
-    table_type: &RedisTableType,
-    column_names: &[String],
-    data: Vec<String>,
-) -> Vec<String> {
-    match table_type {
-        RedisTableType::List(_) if column_names.len() >= 2 => {
-            // List with index column: strip the index (first element)
-            data.into_iter().skip(1).collect()
-        }
-        RedisTableType::Stream(_) if column_names.len() > 1 => {
-            // Stream: interleave column names with values
-            // Input: [id, val1, val2, val3]
-            // Output: [id, col_name_1, val1, col_name_2, val2, ...]
-            let mut stream_data = Vec::with_capacity(1 + (data.len() - 1) * 2);
-            stream_data.push(data[0].clone());
-            for (i, val) in data[1..].iter().enumerate() {
-                if let Some(col_name) = column_names.get(i + 1) {
-                    stream_data.push(col_name.clone());
-                    stream_data.push(val.clone());
-                }
-            }
-            stream_data
-        }
-        _ => data,
-    }
-}
 
 const REDISMODY: &str = "__redis_UD_key_name";
 
@@ -156,17 +100,14 @@ extern "C-unwind" fn get_foreign_rel_size(
         let ctx = create_wrappers_memctx(&ctx_name);
         let mut state = RedisFdwState::new(ctx);
 
-        // Initialize the state with table options for pushdown analysis
         let options = get_foreign_table_options(foreigntableid);
         log!("Foreign table options: {:?}", options);
         state.update_from_options(options);
 
-        // Set table type so pushdown analysis knows what optimizations are possible
         if let Some(table_type_str) = state.opts.get("table_type") {
             state.table_type = RedisTableType::from_str(table_type_str);
         }
 
-        // Connect to Redis for real statistics gathering
         if let Err(e) = state.init_redis_connection_from_options() {
             log!(
                 "Could not connect to Redis for cost estimation, using defaults: {}",
@@ -174,7 +115,6 @@ extern "C-unwind" fn get_foreign_rel_size(
             );
         }
 
-        // Calculate cost estimate using actual Redis statistics
         let cost_estimate = state.estimate_costs();
         log!(
             "Cost estimation: rows={}, startup_cost={}, total_cost={}, width={}",
@@ -184,14 +124,11 @@ extern "C-unwind" fn get_foreign_rel_size(
             cost_estimate.width
         );
 
-        // Release planning-phase connection back to pool immediately, begin_foreign_scan will re-acquire from pool (fast path: read-lock only).
         state.redis_connection = None;
 
-        // Store the estimate for use in get_foreign_paths
         let estimated_rows = cost_estimate.rows;
         state.cost_estimate = Some(cost_estimate);
 
-        // Allocate state in PG memory context — Drop fires on context destruction (longjmp-safe)
         let state_ptr = PgMemoryContexts::For(ctx).leak_and_drop_on_delete(state);
         (*baserel).fdw_private = state_ptr as *mut std::os::raw::c_void;
         (*baserel).rows = estimated_rows;
@@ -206,7 +143,6 @@ extern "C-unwind" fn get_foreign_paths(
 ) {
     log!("---> get_foreign_paths");
     unsafe {
-        // Retrieve cost estimate from state (calculated in get_foreign_rel_size)
         let state_ptr = (*baserel).fdw_private as *mut RedisFdwState;
         let (startup_cost, total_cost) = if !state_ptr.is_null() {
             let state = &*state_ptr;
@@ -218,12 +154,10 @@ extern "C-unwind" fn get_foreign_paths(
                 );
                 (estimate.startup_cost, estimate.total_cost)
             } else {
-                // Fallback to quick estimate if no cached estimate
                 log!("No cached estimate, using fallback costs");
                 (10.0, (*baserel).rows * 0.1 + 10.0)
             }
         } else {
-            // Default fallback costs
             log!("State not available, using default costs");
             (10.0, 100.0)
         };
@@ -234,7 +168,7 @@ extern "C-unwind" fn get_foreign_paths(
             ptr::null_mut(),
             (*baserel).rows,
             #[cfg(feature = "pg18")]
-            0, // disabled_nodes
+            0,
             startup_cost,
             total_cost,
             ptr::null_mut(),
@@ -245,6 +179,20 @@ extern "C-unwind" fn get_foreign_paths(
             ptr::null_mut(),
         );
         pgrx::pg_sys::add_path(baserel, path as *mut pgrx::pg_sys::Path);
+
+        if !state_ptr.is_null() {
+            let state = &*state_ptr;
+            let supports_param = match &state.table_type {
+                RedisTableType::Hash(_) | RedisTableType::Set(_) | RedisTableType::ZSet(_) => {
+                    !state.is_multi_key
+                }
+                RedisTableType::String(_) => state.is_multi_key,
+                _ => false,
+            };
+            if supports_param {
+                add_parameterized_paths(_root, baserel, state);
+            }
+        }
     }
 }
 
@@ -260,18 +208,69 @@ unsafe extern "C-unwind" fn get_foreign_plan(
 ) -> *mut pgrx::pg_sys::ForeignScan {
     log!("---> get_foreign_plan");
 
-    // Join relation: scanrelid=0, build join plan
     if (*baserel).reloptkind == pg_sys::RelOptKind::RELOPT_JOINREL {
         return plan_foreign_join(root, baserel, best_path, tlist, scan_clauses, outer_plan);
     }
 
-    // Base relation: normal scan plan
     let state = state_from_ptr((*baserel).fdw_private);
+
+    let is_parameterized = !(*best_path).path.param_info.is_null();
+    let mut fdw_exprs: *mut pg_sys::List = ptr::null_mut();
+    let mut param_col_idx: usize = 0;
+
+    if is_parameterized {
+        let my_relids = (*baserel).relids;
+        let clause_list = pg_sys::extract_actual_clauses(scan_clauses, false);
+        let clause_len = pg_sys::list_length(clause_list);
+        for i in 0..clause_len {
+            let clause_node = pg_sys::list_nth(clause_list, i) as *mut pg_sys::Node;
+            if clause_node.is_null() || (*clause_node).type_ != pg_sys::NodeTag::T_OpExpr {
+                continue;
+            }
+            let op_expr = &*(clause_node as *mut pg_sys::OpExpr);
+            if pg_sys::list_length(op_expr.args) != 2 {
+                continue;
+            }
+            let left_arg = pg_sys::list_nth(op_expr.args, 0) as *mut pg_sys::Node;
+            let right_arg = pg_sys::list_nth(op_expr.args, 1) as *mut pg_sys::Node;
+            if left_arg.is_null() || right_arg.is_null() {
+                continue;
+            }
+            if (*left_arg).type_ != pg_sys::NodeTag::T_Var
+                || (*right_arg).type_ != pg_sys::NodeTag::T_Var
+            {
+                continue;
+            }
+            let left_var = &*(left_arg as *mut pg_sys::Var);
+            let right_var = &*(right_arg as *mut pg_sys::Var);
+
+            let left_is_mine = pg_sys::bms_is_member(left_var.varno as i32, my_relids);
+            let right_is_mine = pg_sys::bms_is_member(right_var.varno as i32, my_relids);
+
+            if left_is_mine && !right_is_mine && left_var.varattno > 0 {
+                param_col_idx = (left_var.varattno - 1) as usize;
+                fdw_exprs = pg_sys::lappend(fdw_exprs, right_arg as *mut std::ffi::c_void);
+                break;
+            } else if right_is_mine && !left_is_mine && right_var.varattno > 0 {
+                param_col_idx = (right_var.varattno - 1) as usize;
+                fdw_exprs = pg_sys::lappend(fdw_exprs, left_arg as *mut std::ffi::c_void);
+                break;
+            }
+        }
+
+        if !fdw_exprs.is_null() {
+            state.is_parameterized = true;
+            state.param_column = param_col_idx;
+            log!(
+                "Parameterized scan: column {} will receive join key from outer",
+                param_col_idx
+            );
+        }
+    }
 
     PgMemoryContexts::For(state.tmp_ctx).switch_to(|_| {
         let relation = pg_sys::relation_open(foreigntableid, pg_sys::AccessShareLock as _);
 
-        // Analyze WHERE clauses for pushdown opportunities
         let mut pushdown_analysis = WhereClausePushdown::analyze_scan_clauses(
             scan_clauses,
             &state.table_type,
@@ -299,138 +298,19 @@ unsafe extern "C-unwind" fn get_foreign_plan(
             log!("No pushdown optimizations possible");
         }
 
-        // Store the analysis in the state
         state.set_pushdown_analysis(pushdown_analysis);
 
         pg_sys::relation_close(relation, pg_sys::AccessShareLock as _);
     });
 
-    // Serialize state pointer to a proper PG List for safe plan copying
     let fdw_private = serialize_ptr_to_list((*baserel).fdw_private);
     pgrx::pg_sys::make_foreignscan(
         tlist,
         pg_sys::extract_actual_clauses(scan_clauses, false),
         (*baserel).relid,
-        ptr::null_mut(),
+        fdw_exprs,
         fdw_private as _,
         ptr::null_mut(),
-        ptr::null_mut(),
-        outer_plan,
-    )
-}
-
-unsafe fn plan_foreign_join(
-    _root: *mut pgrx::pg_sys::PlannerInfo,
-    joinrel: *mut pgrx::pg_sys::RelOptInfo,
-    best_path: *mut pgrx::pg_sys::ForeignPath,
-    tlist: *mut pgrx::pg_sys::List,
-    scan_clauses: *mut pgrx::pg_sys::List,
-    outer_plan: *mut pgrx::pg_sys::Plan,
-) -> *mut pgrx::pg_sys::ForeignScan {
-    log!("---> plan_foreign_join");
-
-    // Extract outer/inner state from the ForeignPath's fdw_private
-    let path_private = (*best_path).fdw_private;
-    let outer_state_ptr = deserialize_nth_ptr_from_list(path_private, 0) as *mut RedisFdwState;
-    let inner_state_ptr = deserialize_nth_ptr_from_list(path_private, 1) as *mut RedisFdwState;
-
-    if outer_state_ptr.is_null() || inner_state_ptr.is_null() {
-        pgrx::error!("Join plan: missing outer/inner state in fdw_private");
-    }
-
-    let outer_state = &*outer_state_ptr;
-    let inner_state = &*inner_state_ptr;
-
-    // Read the join type from the third list element
-    let jointype_val = deserialize_nth_ptr_from_list(path_private, 2) as i64;
-    let join_type = if jointype_val == pgrx::pg_sys::JoinType::JOIN_LEFT as i64 {
-        RedisJoinType::Left
-    } else {
-        RedisJoinType::Inner
-    };
-
-    // Read join columns from 4th and 5th list elements
-    let join_col_outer = deserialize_nth_ptr_from_list(path_private, 3) as usize;
-    let join_col_inner = deserialize_nth_ptr_from_list(path_private, 4) as usize;
-
-    // Read relation IDs from 6th and 7th list elements
-    let outer_relid = deserialize_nth_ptr_from_list(path_private, 5) as pg_sys::Index;
-    let inner_relid = deserialize_nth_ptr_from_list(path_private, 6) as pg_sys::Index;
-
-    // Build the RedisJoinState with table info from both sides
-    let join_state = RedisJoinState::new(
-        outer_state.table_type.clone(),
-        inner_state.table_type.clone(),
-        outer_state.table_key_prefix.clone(),
-        inner_state.table_key_prefix.clone(),
-        join_type,
-        join_col_outer,
-        join_col_inner,
-    );
-
-    // Create a new RedisFdwState for the join scan
-    let ctx_name = "Wrappers_join_scan";
-    let ctx = create_wrappers_memctx(ctx_name);
-    let mut state = RedisFdwState::new(ctx);
-
-    // Copy connection info from outer (same server guaranteed by get_foreign_join_paths)
-    state.host_port = outer_state.host_port.clone();
-    state.database = outer_state.database;
-    state.opts = outer_state.opts.clone();
-    state.is_join_scan = true;
-    state.join_state = Some(join_state);
-
-    let state_ptr = PgMemoryContexts::For(ctx).leak_and_drop_on_delete(state);
-    (*joinrel).fdw_private = state_ptr as *mut std::os::raw::c_void;
-
-    let outer_ncols = crate::join::foreign_join::expected_columns_for_type(&outer_state.table_type);
-    let inner_ncols = crate::join::foreign_join::expected_columns_for_type(&inner_state.table_type);
-
-    // Build fdw_scan_tlist: declare our scan produces [outer_col1..N, inner_col1..M]
-    // This matches the combined row layout from execute_foreign_join.
-    // Since we skip pushdown when base restrictions exist (checked in
-    // get_foreign_join_paths), all quals here only reference join columns
-    // that are already in the tlist.
-    let mut fdw_scan_tlist: *mut pg_sys::List = ptr::null_mut();
-    let mut resno: i16 = 1;
-
-    for attno in 1..=(outer_ncols as i16) {
-        let var = pg_sys::makeVar(
-            outer_relid as _,
-            attno,
-            pg_sys::TEXTOID,
-            -1,
-            pg_sys::DEFAULT_COLLATION_OID,
-            0,
-        );
-        let tle = pg_sys::makeTargetEntry(var as *mut pg_sys::Expr, resno, ptr::null_mut(), false);
-        fdw_scan_tlist = pg_sys::lappend(fdw_scan_tlist, tle as *mut std::ffi::c_void);
-        resno += 1;
-    }
-    for attno in 1..=(inner_ncols as i16) {
-        let var = pg_sys::makeVar(
-            inner_relid as _,
-            attno,
-            pg_sys::TEXTOID,
-            -1,
-            pg_sys::DEFAULT_COLLATION_OID,
-            0,
-        );
-        let tle = pg_sys::makeTargetEntry(var as *mut pg_sys::Expr, resno, ptr::null_mut(), false);
-        fdw_scan_tlist = pg_sys::lappend(fdw_scan_tlist, tle as *mut std::ffi::c_void);
-        resno += 1;
-    }
-
-    let fdw_private = serialize_ptr_to_list(state_ptr as *mut std::os::raw::c_void);
-    let local_quals = pg_sys::extract_actual_clauses(scan_clauses, false);
-
-    pgrx::pg_sys::make_foreignscan(
-        tlist,
-        local_quals, // apply any joinrel-level quals locally after scan
-        0,           // scanrelid=0 for join
-        ptr::null_mut(),
-        fdw_private as _,
-        fdw_scan_tlist,
         ptr::null_mut(),
         outer_plan,
     )
@@ -447,13 +327,11 @@ extern "C-unwind" fn begin_foreign_scan(
         let plan: *mut pg_sys::ForeignScan = scan_state.ps.plan as *mut pg_sys::ForeignScan;
         let scanrelid = (*plan).scan.scanrelid;
 
-        // Join scan: scanrelid == 0 means this is a pushed-down join
         if scanrelid == 0 {
             begin_foreign_join_scan(node, plan);
             return;
         }
 
-        // Normal base relation scan
         let relation = (*node).ss.ss_currentRelation;
         let relid = (*relation).rd_id;
         let state_ptr = deserialize_ptr_from_list((*plan).fdw_private as _);
@@ -463,7 +341,6 @@ extern "C-unwind" fn begin_foreign_scan(
             log!("Foreign table options: {:?}", options);
             state.update_from_options(options);
 
-            // Acquire connection from pool (fast path: read-lock on existing pool)
             if state.redis_connection.is_none() {
                 if let Err(e) = state.init_redis_connection_from_options() {
                     pgrx::error!("Failed to connect to Redis: {}", e);
@@ -473,7 +350,6 @@ extern "C-unwind" fn begin_foreign_scan(
             state.set_table_type();
         });
 
-        // Detect TTL column
         let relation = (*node).ss.ss_currentRelation;
         let tupdesc = (*relation).rd_att;
         state.ttl_column_index = detect_ttl_column(tupdesc);
@@ -485,7 +361,12 @@ extern "C-unwind" fn begin_foreign_scan(
         }
         state.column_names = col_names;
 
-        // Configure table types that need column info
+        validate_column_count(
+            &state.table_type,
+            state.column_names.len(),
+            state.is_multi_key,
+        );
+
         if let RedisTableType::List(ref mut list) = state.table_type {
             list.include_index = state.column_names.len() >= 2;
         }
@@ -493,38 +374,25 @@ extern "C-unwind" fn begin_foreign_scan(
             stream.column_names = state.column_names.clone();
         }
 
-        // Pre-fetch TTL for single-key mode to avoid per-row Redis calls during iteration
         if state.ttl_column_index.is_some() && !state.is_multi_key {
             let key = state.table_key_prefix.clone();
             state.read_ttl(&key);
         }
 
+        if state.is_parameterized && !(*plan).fdw_exprs.is_null() {
+            let expr_list = (*plan).fdw_exprs;
+            if pg_sys::list_length(expr_list) > 0 {
+                let first_expr = pg_sys::list_nth(expr_list, 0) as *mut pg_sys::Expr;
+                let plan_state = &mut (*node).ss.ps as *mut pg_sys::PlanState;
+                state.param_expr_state = pg_sys::ExecInitExpr(first_expr, plan_state);
+                state.param_plan_state = plan_state;
+                log!("Parameterized scan: ExprState initialized for join key evaluation");
+            }
+        }
+
         log!("Connected to Redis");
         (*node).fdw_state = state_ptr;
     }
-}
-
-unsafe fn begin_foreign_join_scan(
-    node: *mut pgrx::pg_sys::ForeignScanState,
-    plan: *mut pg_sys::ForeignScan,
-) {
-    log!("---> begin_foreign_join_scan");
-    let state_ptr = deserialize_ptr_from_list((*plan).fdw_private as _);
-    let state = state_from_ptr(state_ptr);
-
-    // Connect to Redis for the join execution
-    if state.redis_connection.is_none() {
-        if let Err(e) = state.init_redis_connection_from_options() {
-            pgrx::error!("Failed to connect to Redis for join scan: {}", e);
-        }
-    }
-
-    // Transfer connection to the join_state so execute_foreign_join can use it
-    if let Some(ref mut join_state) = state.join_state {
-        join_state.connection = state.redis_connection.take();
-    }
-
-    (*node).fdw_state = state_ptr;
 }
 
 #[pg_guard]
@@ -539,7 +407,7 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
 
     exec_clear_tuple(slot);
 
-    // Join pushdown mode: execute join on first call, then iterate results
+    // Join pushdown mode
     if state.is_join_scan {
         if let Some(ref mut join_state) = state.join_state {
             if !state.join_executed {
@@ -567,7 +435,47 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
         return slot;
     }
 
-    // Streaming iteration: if current batch is exhausted, fetch more
+    // Parameterized scan: point-lookup
+    if state.is_parameterized && !state.param_expr_state.is_null() {
+        if state.row_count > 0 {
+            return slot;
+        }
+
+        let econtext = (*node).ss.ps.ps_ExprContext;
+        let mut is_null: bool = false;
+        let datum = pg_sys::ExecEvalExpr(state.param_expr_state, econtext, &mut is_null);
+        if is_null {
+            return slot;
+        }
+
+        let param_value = datum_to_text_string(
+            datum,
+            state.param_column,
+            (*(*node).ss.ss_currentRelation).rd_att,
+        );
+
+        if state.parameterized_lookup(&param_value) {
+            let natts_param = (*tupdesc).natts as usize;
+            if let Some(row_data) = state.get_row(0) {
+                let mut data_idx = 0;
+                for col_idx in 0..natts_param {
+                    if state.ttl_column_index == Some(col_idx) {
+                        let val = state.cached_ttl.unwrap_or(-2);
+                        write_datum_to_slot(slot, tupdesc, col_idx, &val.to_string());
+                    } else if data_idx < row_data.len() {
+                        write_datum_to_slot(slot, tupdesc, col_idx, row_data[data_idx].as_ref());
+                        data_idx += 1;
+                    }
+                }
+            }
+            state.row_count = 1;
+            pg_sys::ExecStoreVirtualTuple(slot);
+            return slot;
+        }
+        return slot;
+    }
+
+    // Streaming iteration
     if state.is_read_end() {
         if state.scan_complete {
             return slot;
@@ -660,8 +568,6 @@ extern "C-unwind" fn end_foreign_scan(node: *mut pgrx::pg_sys::ForeignScanState)
             return;
         }
         let state = &mut *fdw_state;
-        // Destroy the memory context — this triggers the registered Drop callback
-        // which properly frees the RedisFdwState and all its owned Rust resources
         let ctx = state.tmp_ctx;
         if !ctx.is_null() {
             delete_wrappers_memctx(ctx);
@@ -680,7 +586,6 @@ extern "C-unwind" fn re_scan_foreign_scan(node: *mut pgrx::pg_sys::ForeignScanSt
         let state = &mut *fdw_state;
 
         if state.is_join_scan {
-            // Reset iterator to re-read materialized results without re-fetching from Redis
             if let Some(ref mut join_state) = state.join_state {
                 join_state.current_row = 0;
             }
@@ -733,14 +638,13 @@ unsafe extern "C-unwind" fn add_foreign_update_targets(
 
     let var = pg_sys::makeVar(
         rtindex as _,
-        1, //attr.attnum,
+        1,
         attr.atttypid,
         attr.atttypmod,
-        pg_sys::InvalidOid, //attr.attlen,
+        pg_sys::InvalidOid,
         0,
     );
 
-    // register it as a row-identity column needed by this target rel
     pg_sys::add_row_identity_var(root, var, rtindex, REDISMODY.as_ptr() as _);
 }
 
@@ -763,14 +667,12 @@ unsafe extern "C-unwind" fn plan_foreign_modify(
         log!("Foreign table options for modify: {:?}", opts);
         state.update_from_options(opts);
 
-        // Initialize Redis connection and handle potential errors
         if let Err(e) = state.init_redis_connection_from_options() {
             pgrx::error!("Failed to connect to Redis: {}", e);
         }
 
         state.set_table_type();
     });
-    // Allocate state in PG memory context — Drop fires on context destruction (longjmp-safe)
     let state_ptr = PgMemoryContexts::For(ctx).leak_and_drop_on_delete(state);
     serialize_ptr_to_list(state_ptr as *mut std::os::raw::c_void)
 }
@@ -791,7 +693,6 @@ unsafe extern "C-unwind" fn begin_foreign_modify(
         pg_sys::ExecFindJunkAttributeInTlist((*subplan).targetlist, REDISMODY.as_ptr() as _);
     log!("Key attribute number: {}", state.key_attno);
 
-    // Detect TTL column in the target relation
     let relation = (*rinfo).ri_RelationDesc;
     let tupdesc = (*relation).rd_att;
     state.ttl_column_index = detect_ttl_column(tupdesc);
@@ -803,7 +704,12 @@ unsafe extern "C-unwind" fn begin_foreign_modify(
     }
     state.column_names = col_names;
 
-    // Configure table types that need column info
+    validate_column_count(
+        &state.table_type,
+        state.column_names.len(),
+        state.is_multi_key,
+    );
+
     if let RedisTableType::List(ref mut list) = state.table_type {
         list.include_index = state.column_names.len() >= 2;
     }
@@ -836,7 +742,6 @@ unsafe extern "C-unwind" fn exec_foreign_insert(
         .map(|cell| cell_to_string(cell.as_ref()))
         .collect();
 
-    // Extract and strip TTL column value
     let (data, row_ttl) = if let Some(ttl_idx) = state.ttl_column_index {
         let ttl_val = all_data.get(ttl_idx).and_then(|s| {
             if s == "NULL" {
@@ -855,7 +760,6 @@ unsafe extern "C-unwind" fn exec_foreign_insert(
     };
 
     if state.is_multi_key {
-        // Multi-key mode: first column is the Redis key, remaining columns are data
         if data.is_empty() {
             error!("Multi-key INSERT requires at least a key column");
         }
@@ -874,7 +778,6 @@ unsafe extern "C-unwind" fn exec_foreign_insert(
         }
         state.apply_ttl(&key, row_ttl);
     } else {
-        // Transform data for specific table types
         let data = transform_insert_data(&state.table_type, &state.column_names, data);
         if let Err(e) = state.insert_data(&data) {
             error!("Failed to insert data: {:?}", e);
@@ -897,7 +800,6 @@ unsafe extern "C-unwind" fn exec_foreign_update(
     log!("---> exec_foreign_update");
     let state = state_from_ptr((*rinfo).ri_FdwState);
 
-    // Extract old key from plan_slot (junk attribute set by add_foreign_update_targets)
     let old_key = match extract_delete_key(state, plan_slot) {
         Ok(key) => key,
         Err(err_msg) => {
@@ -905,7 +807,6 @@ unsafe extern "C-unwind" fn exec_foreign_update(
         }
     };
 
-    // Extract new row from the slot
     let new_row: Row = tuple_table_slot_to_row(slot);
     let all_new_data: Vec<String> = new_row
         .cells
@@ -913,7 +814,6 @@ unsafe extern "C-unwind" fn exec_foreign_update(
         .map(|cell| cell_to_string(cell.as_ref()))
         .collect();
 
-    // Extract and strip TTL column value
     let (new_data, row_ttl) = if let Some(ttl_idx) = state.ttl_column_index {
         let ttl_val = all_new_data.get(ttl_idx).and_then(|s| {
             if s == "NULL" {
@@ -972,10 +872,8 @@ unsafe extern "C-unwind" fn exec_foreign_delete(
 ) -> *mut pgrx::pg_sys::TupleTableSlot {
     log!("---> exec_foreign_delete");
 
-    // Extract state and validate it's not null
     let state = state_from_ptr((*rinfo).ri_FdwState);
 
-    // Extract the key attribute for deletion
     match extract_delete_key(state, plan_slot) {
         Ok(key) => {
             log!("Attempting to delete key: '{}'", key);
@@ -994,7 +892,6 @@ unsafe extern "C-unwind" fn exec_foreign_delete(
         }
     }
 
-    // Mark slot as having an invalid table OID since this is a delete operation
     (*slot).tts_tableOid = pgrx::pg_sys::InvalidOid;
 
     slot
@@ -1013,7 +910,6 @@ unsafe extern "C-unwind" fn end_foreign_modify(
         }
 
         let state = &*fdw_state;
-        // Destroy the memory context — this triggers the registered Drop callback
         let ctx = state.tmp_ctx;
         if !ctx.is_null() {
             delete_wrappers_memctx(ctx);
@@ -1054,7 +950,6 @@ unsafe extern "C-unwind" fn begin_foreign_insert(
     }
     state.column_names = col_names;
 
-    // Configure table types that need column info
     if let RedisTableType::List(ref mut list) = state.table_type {
         list.include_index = state.column_names.len() >= 2;
     }
@@ -1089,165 +984,16 @@ extern "C-unwind" fn is_foreign_rel_updatable(
     rel: pgrx::pg_sys::Relation,
 ) -> ::std::os::raw::c_int {
     log!("---> is_foreign_rel_updatable");
-    // CmdType: CMD_UPDATE=2, CMD_INSERT=3, CMD_DELETE=4
-    // Return bitmask: (1 << CMD_INSERT) | (1 << CMD_UPDATE) | (1 << CMD_DELETE)
-    // = 8 | 4 | 16 = 28 for updatable types
-    // = 8 | 16 = 24 for stream (no UPDATE)
     unsafe {
         let relid = (*rel).rd_id;
         let options = get_foreign_table_options(relid);
         let table_type = options.get("table_type").map(|s| s.as_str()).unwrap_or("");
 
         match table_type.to_lowercase().as_str() {
-            "stream" => (1 << 3) | (1 << 4),     // INSERT | DELETE = 24
-            _ => (1 << 2) | (1 << 3) | (1 << 4), // UPDATE | INSERT | DELETE = 28
+            "stream" => (1 << 3) | (1 << 4),
+            _ => (1 << 2) | (1 << 3) | (1 << 4),
         }
     }
-}
-
-unsafe fn extract_delete_key(
-    state: &RedisFdwState,
-    plan_slot: *mut pgrx::pg_sys::TupleTableSlot,
-) -> Result<String, &'static str> {
-    // Validate key attribute number
-    if state.key_attno <= 0 {
-        return Err("Invalid key attribute number");
-    }
-
-    // Extract the junk attribute (row identifier)
-    let mut is_null = false;
-    let datum = exec_get_junk_attribute(plan_slot, state.key_attno, &mut is_null);
-
-    // Convert datum to string safely
-    match String::from_datum(datum, is_null) {
-        Some(key_string) => {
-            if key_string.is_empty() {
-                Err("Delete key is empty")
-            } else {
-                Ok(key_string)
-            }
-        }
-        None => Err("Failed to convert datum to string"),
-    }
-}
-
-#[pg_guard]
-unsafe extern "C-unwind" fn explain_foreign_scan(
-    node: *mut pg_sys::ForeignScanState,
-    es: *mut pg_sys::ExplainState,
-) {
-    log!("---> explain_foreign_scan");
-    let fdw_state = (*node).fdw_state as *mut RedisFdwState;
-    if fdw_state.is_null() {
-        return;
-    }
-    let state = &*fdw_state;
-
-    if state.is_join_scan {
-        let label_join = c"Redis Join";
-        let join_desc = if let Some(ref js) = state.join_state {
-            format!(
-                "{}({}) x {}({})",
-                js.outer_table_type.redis_type_name(),
-                js.outer_key_prefix,
-                js.inner_table_type.redis_type_name(),
-                js.inner_key_prefix
-            )
-        } else {
-            "FDW-to-FDW pushdown".to_string()
-        };
-        let join_cstr = CString::new(join_desc).unwrap_or_default();
-        pg_sys::ExplainPropertyText(label_join.as_ptr(), join_cstr.as_ptr(), es);
-
-        let server_cstr = CString::new(state.host_port.as_str()).unwrap_or_default();
-        let label_server = c"Redis Server";
-        pg_sys::ExplainPropertyText(label_server.as_ptr(), server_cstr.as_ptr(), es);
-        return;
-    }
-
-    let server_cstr = CString::new(state.host_port.as_str()).unwrap_or_default();
-    let key_cstr = CString::new(state.table_key_prefix.as_str()).unwrap_or_default();
-    let type_name = state.table_type.redis_type_name();
-    let type_cstr = CString::new(type_name).unwrap_or_default();
-    let multi_key_cstr =
-        CString::new(if state.is_multi_key { "true" } else { "false" }).unwrap_or_default();
-
-    let label_server = c"Redis Server";
-    let label_key = c"Redis Key";
-    let label_type = c"Table Type";
-    let label_multi = c"Multi-Key Mode";
-    let label_pushdown = c"Pushdown";
-    let label_batch = c"Batch Size";
-
-    pg_sys::ExplainPropertyText(label_server.as_ptr(), server_cstr.as_ptr(), es);
-    pg_sys::ExplainPropertyText(label_key.as_ptr(), key_cstr.as_ptr(), es);
-    pg_sys::ExplainPropertyText(label_type.as_ptr(), type_cstr.as_ptr(), es);
-    pg_sys::ExplainPropertyText(label_multi.as_ptr(), multi_key_cstr.as_ptr(), es);
-
-    let pushdown_desc = if let Some(ref analysis) = state.pushdown_analysis {
-        if analysis.has_optimizations() {
-            analysis
-                .pushable_conditions
-                .iter()
-                .map(|c| format!("{} {} '{}'", c.column_name, c.operator, c.value))
-                .collect::<Vec<_>>()
-                .join(", ")
-        } else {
-            "none".to_string()
-        }
-    } else {
-        "none".to_string()
-    };
-    let pushdown_cstr = CString::new(pushdown_desc).unwrap_or_default();
-    pg_sys::ExplainPropertyText(label_pushdown.as_ptr(), pushdown_cstr.as_ptr(), es);
-
-    let label_batch_unit = c"rows";
-    pg_sys::ExplainPropertyInteger(
-        label_batch.as_ptr(),
-        label_batch_unit.as_ptr(),
-        state.batch_size as i64,
-        es,
-    );
-
-    if (*es).analyze {
-        let label_rows = c"Rows Fetched";
-        let label_rows_unit = c"rows";
-        pg_sys::ExplainPropertyInteger(
-            label_rows.as_ptr(),
-            label_rows_unit.as_ptr(),
-            state.row_count as i64,
-            es,
-        );
-    }
-}
-
-#[pg_guard]
-unsafe extern "C-unwind" fn explain_foreign_modify(
-    _mtstate: *mut pg_sys::ModifyTableState,
-    rinfo: *mut pg_sys::ResultRelInfo,
-    _fdw_private: *mut pg_sys::List,
-    _subplan_index: ::core::ffi::c_int,
-    es: *mut pg_sys::ExplainState,
-) {
-    log!("---> explain_foreign_modify");
-    let fdw_state = (*rinfo).ri_FdwState as *mut RedisFdwState;
-    if fdw_state.is_null() {
-        return;
-    }
-    let state = &*fdw_state;
-
-    let server_cstr = CString::new(state.host_port.as_str()).unwrap_or_default();
-    let key_cstr = CString::new(state.table_key_prefix.as_str()).unwrap_or_default();
-    let type_name = state.table_type.redis_type_name();
-    let type_cstr = CString::new(type_name).unwrap_or_default();
-
-    let label_server = c"Redis Server";
-    let label_key = c"Redis Key";
-    let label_type = c"Table Type";
-
-    pg_sys::ExplainPropertyText(label_server.as_ptr(), server_cstr.as_ptr(), es);
-    pg_sys::ExplainPropertyText(label_key.as_ptr(), key_cstr.as_ptr(), es);
-    pg_sys::ExplainPropertyText(label_type.as_ptr(), type_cstr.as_ptr(), es);
 }
 
 #[pg_guard]
@@ -1315,808 +1061,4 @@ unsafe extern "C-unwind" fn exec_foreign_batch_insert(
     }
 
     slots
-}
-
-#[pg_guard]
-unsafe extern "C-unwind" fn exec_foreign_truncate(
-    rels: *mut pg_sys::List,
-    _behavior: pg_sys::DropBehavior::Type,
-    _restart_seqs: bool,
-) {
-    log!("---> exec_foreign_truncate");
-    use crate::core::connection_factory::{RedisConnectionConfig, RedisConnectionFactory};
-    use crate::core::state_manager::is_multi_key_pattern;
-
-    if rels.is_null() {
-        return;
-    }
-
-    pgrx::memcx::current_context(|mcx| {
-        let rel_list = pgrx::list::List::<*mut std::ffi::c_void>::downcast_ptr_in_memcx(rels, mcx)
-            .expect("Failed to downcast rels list");
-
-        for rel_ptr in rel_list.iter() {
-            let relation = *rel_ptr as pg_sys::Relation;
-            if relation.is_null() {
-                continue;
-            }
-            let relid = (*relation).rd_id;
-            let options = get_foreign_table_options(relid);
-
-            let config = match RedisConnectionConfig::from_options(&options) {
-                Ok(c) => c,
-                Err(e) => {
-                    error!("Failed to create Redis config for truncate: {}", e);
-                }
-            };
-
-            let mut conn = match RedisConnectionFactory::create_connection_with_retry(&config) {
-                Ok(c) => c,
-                Err(e) => {
-                    error!("Failed to connect to Redis for truncate: {}", e);
-                }
-            };
-
-            let conn_like = conn.as_connection_like_mut();
-            let key_prefix = options.get("table_key_prefix").cloned().unwrap_or_default();
-
-            if is_multi_key_pattern(&key_prefix) {
-                let mut cursor: u64 = 0;
-                loop {
-                    pgrx::check_for_interrupts!();
-                    let (new_cursor, keys): (u64, Vec<String>) = match redis::cmd("SCAN")
-                        .arg(cursor)
-                        .arg("MATCH")
-                        .arg(&key_prefix)
-                        .arg("COUNT")
-                        .arg(1000u32)
-                        .query(conn_like)
-                    {
-                        Ok(r) => r,
-                        Err(e) => {
-                            error!("Redis SCAN error during truncate: {}", e);
-                        }
-                    };
-
-                    if !keys.is_empty() {
-                        let mut pipe = redis::pipe();
-                        for key in &keys {
-                            pipe.cmd("UNLINK").arg(key);
-                        }
-                        if let Err(e) = pipe.query::<Vec<redis::Value>>(conn_like) {
-                            error!("Redis UNLINK pipeline failed during truncate: {}", e);
-                        }
-                    }
-
-                    cursor = new_cursor;
-                    if cursor == 0 {
-                        break;
-                    }
-                }
-            } else if let Err(e) = redis::cmd("UNLINK")
-                .arg(&key_prefix)
-                .query::<i64>(conn_like)
-            {
-                error!("Redis UNLINK failed for key '{}': {}", key_prefix, e);
-            }
-        }
-    });
-}
-
-#[pg_guard]
-unsafe extern "C-unwind" fn import_foreign_schema(
-    stmt: *mut pg_sys::ImportForeignSchemaStmt,
-    server_oid: pg_sys::Oid,
-) -> *mut pg_sys::List {
-    log!("---> import_foreign_schema");
-    use crate::core::connection_factory::{RedisConnectionConfig, RedisConnectionFactory};
-    use std::collections::HashMap as StdHashMap;
-
-    let server = pg_sys::GetForeignServer(server_oid);
-    let mut options: StdHashMap<String, String> = StdHashMap::new();
-
-    pgrx::memcx::current_context(|mcx| {
-        if !(*server).options.is_null() {
-            let opts_list = pg_list_to_rust_list::<*mut std::ffi::c_void>((*server).options, mcx);
-            for option in opts_list.iter() {
-                let def_elem = (*option).cast::<pg_sys::DefElem>();
-                if !def_elem.is_null() {
-                    options.insert(
-                        string_from_cstr((*def_elem).defname),
-                        string_from_cstr(pg_sys::defGetString(def_elem)),
-                    );
-                }
-            }
-        }
-    });
-
-    let config = match RedisConnectionConfig::from_options(&options) {
-        Ok(c) => c,
-        Err(e) => {
-            error!("Failed to create Redis config for import: {}", e);
-        }
-    };
-
-    let mut conn = match RedisConnectionFactory::create_connection_with_retry(&config) {
-        Ok(c) => c,
-        Err(e) => {
-            error!("Failed to connect to Redis for import: {}", e);
-        }
-    };
-
-    let conn_like = conn.as_connection_like_mut();
-
-    // SCAN to sample keys
-    let mut all_keys: Vec<String> = Vec::new();
-    let mut cursor: u64 = 0;
-    let max_keys: usize = 10_000;
-    loop {
-        pgrx::check_for_interrupts!();
-        let (new_cursor, keys): (u64, Vec<String>) = match redis::cmd("SCAN")
-            .arg(cursor)
-            .arg("COUNT")
-            .arg(1000u32)
-            .query(conn_like)
-        {
-            Ok(r) => r,
-            Err(e) => {
-                error!("Redis SCAN error during import: {}", e);
-            }
-        };
-
-        all_keys.extend(keys);
-        cursor = new_cursor;
-        if cursor == 0 || all_keys.len() >= max_keys {
-            break;
-        }
-    }
-
-    if all_keys.len() > max_keys {
-        all_keys.truncate(max_keys);
-    }
-
-    if all_keys.is_empty() {
-        return ptr::null_mut();
-    }
-
-    // TYPE each key using pipeline
-    let mut pipe = redis::pipe();
-    for key in &all_keys {
-        pipe.cmd("TYPE").arg(key);
-    }
-    let types: Vec<String> = match pipe.query(conn_like) {
-        Ok(t) => t,
-        Err(e) => {
-            error!("Redis TYPE pipeline error during import: {}", e);
-        }
-    };
-
-    // Group keys by prefix and type
-    let mut groups: StdHashMap<String, String> = StdHashMap::new();
-    for (key, redis_type) in all_keys.iter().zip(types.iter()) {
-        if redis_type == "none" {
-            continue;
-        }
-        let prefix = derive_key_prefix(key);
-        groups.entry(prefix).or_insert_with(|| redis_type.clone());
-    }
-
-    // Build LIMIT TO / EXCEPT filter
-    let list_type = (*stmt).list_type;
-    let mut filter_names: Vec<String> = Vec::new();
-    if !(*stmt).table_list.is_null() {
-        pgrx::memcx::current_context(|mcx| {
-            let table_list = pgrx::list::List::<*mut std::ffi::c_void>::downcast_ptr_in_memcx(
-                (*stmt).table_list,
-                mcx,
-            )
-            .expect("Failed to downcast table_list");
-            for item in table_list.iter() {
-                let rv = *item as *mut pg_sys::RangeVar;
-                if !rv.is_null() && !(*rv).relname.is_null() {
-                    filter_names.push(string_from_cstr((*rv).relname));
-                }
-            }
-        });
-    }
-
-    // Generate DDL statements
-    let server_name = string_from_cstr((*stmt).server_name);
-    let mut result_list: *mut pg_sys::List = ptr::null_mut();
-
-    for (prefix, redis_type) in &groups {
-        let table_name = sanitize_table_name(prefix);
-
-        match list_type {
-            pg_sys::ImportForeignSchemaType::FDW_IMPORT_SCHEMA_LIMIT_TO
-                if !filter_names.contains(&table_name) =>
-            {
-                continue;
-            }
-            pg_sys::ImportForeignSchemaType::FDW_IMPORT_SCHEMA_EXCEPT
-                if filter_names.contains(&table_name) =>
-            {
-                continue;
-            }
-            _ => {}
-        }
-
-        let columns = columns_for_type(redis_type);
-        let key_pattern = format!("{}*", prefix);
-        let database_str = config.database.to_string();
-
-        let quoted_table = table_name.replace('"', "\"\"");
-        let quoted_server = server_name.replace('"', "\"\"");
-        let escaped_prefix = key_pattern.replace('\'', "''");
-
-        let ddl = format!(
-            "CREATE FOREIGN TABLE \"{}\" ({}) SERVER \"{}\" OPTIONS (database '{}', table_type '{}', table_key_prefix '{}')",
-            quoted_table, columns, quoted_server, database_str, redis_type, escaped_prefix
-        );
-
-        let ddl_cstr = match CString::new(ddl) {
-            Ok(c) => c,
-            Err(_) => {
-                error!("import_foreign_schema: table name contains null byte");
-            }
-        };
-        let pg_str = pg_sys::pstrdup(ddl_cstr.as_ptr());
-        result_list = pg_sys::lappend(result_list, pg_str as *mut std::ffi::c_void);
-    }
-
-    result_list
-}
-
-fn derive_key_prefix(key: &str) -> String {
-    if let Some(pos) = key.rfind(':') {
-        key[..=pos].to_string()
-    } else {
-        format!("{}_", key)
-    }
-}
-
-fn sanitize_table_name(prefix: &str) -> String {
-    let mut name: String = prefix
-        .trim_end_matches(':')
-        .trim_end_matches('_')
-        .replace([':', '-', '.'], "_")
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '_')
-        .collect();
-
-    if name.starts_with(|c: char| c.is_ascii_digit()) {
-        name = format!("t_{}", name);
-    }
-
-    if name.is_empty() {
-        name = "redis_table".to_string();
-    }
-
-    if name.len() > 63 {
-        name.truncate(63);
-    }
-
-    name
-}
-
-fn columns_for_type(redis_type: &str) -> &'static str {
-    match redis_type {
-        "hash" => "key text, field text, value text",
-        "list" => "key text, element text",
-        "set" => "key text, member text",
-        "zset" => "key text, member text, score text",
-        "string" => "key text, value text",
-        "stream" => "stream_id text, field text, value text",
-        _ => "value text",
-    }
-}
-
-#[pg_guard]
-unsafe extern "C-unwind" fn analyze_foreign_table(
-    relation: pg_sys::Relation,
-    func: *mut pg_sys::AcquireSampleRowsFunc,
-    totalpages: *mut pg_sys::BlockNumber,
-) -> bool {
-    log!("---> analyze_foreign_table");
-    use crate::core::connection_factory::{RedisConnectionConfig, RedisConnectionFactory};
-    use crate::core::state_manager::is_multi_key_pattern;
-
-    let relid = (*relation).rd_id;
-    let options = get_foreign_table_options(relid);
-
-    let config = match RedisConnectionConfig::from_options(&options) {
-        Ok(c) => c,
-        Err(e) => {
-            log!("analyze_foreign_table: cannot create config: {}", e);
-            return false;
-        }
-    };
-
-    let mut conn = match RedisConnectionFactory::create_connection_with_retry(&config) {
-        Ok(c) => c,
-        Err(e) => {
-            log!("analyze_foreign_table: cannot connect: {}", e);
-            return false;
-        }
-    };
-
-    let conn_like = conn.as_connection_like_mut();
-    let key_prefix = options.get("table_key_prefix").cloned().unwrap_or_default();
-    let table_type = options
-        .get("table_type")
-        .map(|s| s.as_str())
-        .unwrap_or("string");
-
-    let estimated_rows: u64 = if is_multi_key_pattern(&key_prefix) {
-        let mut cursor = 0u64;
-        let mut total_keys = 0u64;
-        let max_iterations = 100;
-        let mut iterations = 0;
-        loop {
-            let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
-                .arg(cursor)
-                .arg("MATCH")
-                .arg(&key_prefix)
-                .arg("COUNT")
-                .arg(10000u32)
-                .query(conn_like)
-                .unwrap_or((0, Vec::new()));
-            total_keys += keys.len() as u64;
-            cursor = next_cursor;
-            iterations += 1;
-            if cursor == 0 || iterations >= max_iterations {
-                break;
-            }
-        }
-        total_keys
-    } else {
-        match table_type {
-            "hash" => redis::cmd("HLEN")
-                .arg(&key_prefix)
-                .query::<u64>(conn_like)
-                .unwrap_or(0),
-            "list" => redis::cmd("LLEN")
-                .arg(&key_prefix)
-                .query::<u64>(conn_like)
-                .unwrap_or(0),
-            "set" => redis::cmd("SCARD")
-                .arg(&key_prefix)
-                .query::<u64>(conn_like)
-                .unwrap_or(0),
-            "zset" => redis::cmd("ZCARD")
-                .arg(&key_prefix)
-                .query::<u64>(conn_like)
-                .unwrap_or(0),
-            "stream" => redis::cmd("XLEN")
-                .arg(&key_prefix)
-                .query::<u64>(conn_like)
-                .unwrap_or(0),
-            "string" => {
-                let exists: u64 = redis::cmd("EXISTS")
-                    .arg(&key_prefix)
-                    .query(conn_like)
-                    .unwrap_or(0);
-                exists
-            }
-            _ => 0,
-        }
-    };
-
-    let avg_row_width: u64 = 100;
-    let pages =
-        ((estimated_rows * avg_row_width) / pg_sys::BLCKSZ as u64).max(1) as pg_sys::BlockNumber;
-    *totalpages = pages;
-    *func = Some(acquire_sample_rows);
-    true
-}
-
-#[pg_guard]
-unsafe extern "C-unwind" fn acquire_sample_rows(
-    relation: pg_sys::Relation,
-    _elevel: ::core::ffi::c_int,
-    rows: *mut pg_sys::HeapTuple,
-    targrows: ::core::ffi::c_int,
-    totalrows: *mut f64,
-    totaldeadrows: *mut f64,
-) -> ::core::ffi::c_int {
-    log!("---> acquire_sample_rows (targrows={})", targrows);
-    use crate::core::connection_factory::{RedisConnectionConfig, RedisConnectionFactory};
-    use crate::core::state_manager::is_multi_key_pattern;
-    use crate::query::limit::LimitOffsetInfo;
-
-    let relid = (*relation).rd_id;
-    let options = get_foreign_table_options(relid);
-    let tupdesc = (*relation).rd_att;
-    let natts = (*tupdesc).natts as usize;
-
-    let config = match RedisConnectionConfig::from_options(&options) {
-        Ok(c) => c,
-        Err(e) => {
-            log!("acquire_sample_rows: cannot create config: {}", e);
-            *totalrows = 0.0;
-            *totaldeadrows = 0.0;
-            return 0;
-        }
-    };
-
-    let mut conn = match RedisConnectionFactory::create_connection_with_retry(&config) {
-        Ok(c) => c,
-        Err(e) => {
-            log!("acquire_sample_rows: cannot connect: {}", e);
-            *totalrows = 0.0;
-            *totaldeadrows = 0.0;
-            return 0;
-        }
-    };
-
-    let conn_like = conn.as_connection_like_mut();
-    let key_prefix = options.get("table_key_prefix").cloned().unwrap_or_default();
-    let table_type_str = options
-        .get("table_type")
-        .map(|s| s.as_str())
-        .unwrap_or("string");
-
-    let mut table_type = RedisTableType::from_str(table_type_str);
-    let is_multi_key = is_multi_key_pattern(&key_prefix);
-
-    let max_per_key = targrows as usize;
-    let sample_data: Vec<Vec<String>> = if is_multi_key {
-        let mut keys = Vec::new();
-        let mut cursor = 0u64;
-        loop {
-            let (next_cursor, batch): (u64, Vec<String>) = redis::cmd("SCAN")
-                .arg(cursor)
-                .arg("MATCH")
-                .arg(&key_prefix)
-                .arg("COUNT")
-                .arg(targrows as u32)
-                .query(conn_like)
-                .unwrap_or((0, Vec::new()));
-            keys.extend(batch);
-            cursor = next_cursor;
-            if cursor == 0 || keys.len() >= max_per_key {
-                break;
-            }
-        }
-        keys.truncate(max_per_key);
-        let mut result = Vec::new();
-
-        if table_type_str == "string" {
-            let mut pipe = redis::pipe();
-            for key in &keys {
-                pipe.cmd("GET").arg(key);
-            }
-            let vals: Vec<String> = pipe.query(conn_like).unwrap_or_default();
-            for (key, val) in keys.iter().zip(vals.into_iter()) {
-                result.push(vec![key.clone(), val]);
-            }
-        } else {
-            for key in &keys {
-                if result.len() >= max_per_key {
-                    break;
-                }
-                let remaining = max_per_key - result.len();
-                match table_type_str {
-                    "hash" => {
-                        let (_, vals): (u64, Vec<String>) = redis::cmd("HSCAN")
-                            .arg(key)
-                            .arg(0u64)
-                            .arg("COUNT")
-                            .arg(remaining)
-                            .query(conn_like)
-                            .unwrap_or((0, Vec::new()));
-                        for chunk in vals.chunks(2).take(remaining) {
-                            if chunk.len() == 2 {
-                                result.push(vec![key.clone(), chunk[0].clone(), chunk[1].clone()]);
-                            }
-                        }
-                    }
-                    "list" => {
-                        let vals: Vec<String> = redis::cmd("LRANGE")
-                            .arg(key)
-                            .arg(0i64)
-                            .arg((remaining as i64) - 1)
-                            .query(conn_like)
-                            .unwrap_or_default();
-                        for v in vals {
-                            result.push(vec![key.clone(), v]);
-                        }
-                    }
-                    "set" => {
-                        let (_, vals): (u64, Vec<String>) = redis::cmd("SSCAN")
-                            .arg(key)
-                            .arg(0u64)
-                            .arg("COUNT")
-                            .arg(remaining)
-                            .query(conn_like)
-                            .unwrap_or((0, Vec::new()));
-                        for v in vals.into_iter().take(remaining) {
-                            result.push(vec![key.clone(), v]);
-                        }
-                    }
-                    "zset" => {
-                        let vals: Vec<String> = redis::cmd("ZRANGE")
-                            .arg(key)
-                            .arg(0i64)
-                            .arg((remaining as i64) - 1)
-                            .arg("WITHSCORES")
-                            .query(conn_like)
-                            .unwrap_or_default();
-                        for chunk in vals.chunks(2) {
-                            if chunk.len() == 2 {
-                                result.push(vec![key.clone(), chunk[1].clone(), chunk[0].clone()]);
-                            }
-                        }
-                    }
-                    _ => {
-                        result.push(vec![key.clone()]);
-                    }
-                }
-            }
-        }
-        result
-    } else {
-        let limit_info = LimitOffsetInfo {
-            limit: Some(targrows as usize),
-            offset: None,
-        };
-        let _ = table_type.load_data(conn_like, &key_prefix, None, &limit_info);
-
-        let mut result = Vec::new();
-        let len = table_type.data_len();
-        for i in 0..len {
-            if let Some(row_data) = table_type.get_row(i) {
-                result.push(row_data.into_iter().map(|c| c.into_owned()).collect());
-            }
-        }
-        result
-    };
-
-    let num_rows = sample_data.len().min(targrows as usize);
-    *totalrows = num_rows as f64;
-    *totaldeadrows = 0.0;
-
-    let mut actual = 0i32;
-    for (idx, row_data) in sample_data.iter().take(num_rows).enumerate() {
-        let mut values: Vec<pg_sys::Datum> = Vec::with_capacity(natts);
-        let mut nulls: Vec<bool> = Vec::with_capacity(natts);
-
-        for col_idx in 0..natts {
-            if col_idx < row_data.len() {
-                let attr = tuple_desc_attr(tupdesc, col_idx);
-                let typid = (*attr).atttypid;
-                let datum = get_datum(&row_data[col_idx], typid);
-                values.push(datum);
-                nulls.push(false);
-            } else {
-                values.push(pg_sys::Datum::from(0));
-                nulls.push(true);
-            }
-        }
-
-        let tuple = pg_sys::heap_form_tuple(tupdesc, values.as_mut_ptr(), nulls.as_mut_ptr());
-        *rows.add(idx) = tuple;
-        actual += 1;
-    }
-
-    actual
-}
-
-/// Extract join column indices from the join restrictlist.
-/// Returns (outer_col_0based, inner_col_0based) if an equality condition is found
-/// between a Var on the outer rel and a Var on the inner rel.
-unsafe fn extract_join_columns(
-    extra: *mut pgrx::pg_sys::JoinPathExtraData,
-    outerrel: *mut pgrx::pg_sys::RelOptInfo,
-    innerrel: *mut pgrx::pg_sys::RelOptInfo,
-) -> Option<(usize, usize)> {
-    if extra.is_null() {
-        return None;
-    }
-
-    let restrictlist = (*extra).restrictlist;
-    if restrictlist.is_null() {
-        return None;
-    }
-
-    let outer_relids = (*outerrel).relids;
-    let inner_relids = (*innerrel).relids;
-
-    let restrict_items: Vec<*mut pg_sys::Node> = pgrx::memcx::current_context(|mcx| {
-        let list = pg_list_to_rust_list::<*mut std::ffi::c_void>(restrictlist, mcx);
-        list.iter().map(|item| *item as *mut pg_sys::Node).collect()
-    });
-
-    for node in &restrict_items {
-        let node = *node;
-        if node.is_null() {
-            continue;
-        }
-
-        // Unwrap RestrictInfo wrapper
-        let clause = if (*node).type_ == pg_sys::NodeTag::T_RestrictInfo {
-            let ri = node as *mut pg_sys::RestrictInfo;
-            (*ri).clause as *mut pg_sys::Node
-        } else {
-            node
-        };
-
-        if clause.is_null() || (*clause).type_ != pg_sys::NodeTag::T_OpExpr {
-            continue;
-        }
-
-        let op_expr = &*(clause as *mut pg_sys::OpExpr);
-
-        // Must be a merge-joinable (equality) operator with exactly 2 args
-        if !pg_sys::op_mergejoinable(op_expr.opno, pg_sys::InvalidOid) {
-            continue;
-        }
-
-        if pg_sys::list_length(op_expr.args) != 2 {
-            continue;
-        }
-
-        let left_arg = pg_sys::list_nth(op_expr.args, 0) as *mut pg_sys::Node;
-        let right_arg = pg_sys::list_nth(op_expr.args, 1) as *mut pg_sys::Node;
-
-        if left_arg.is_null() || right_arg.is_null() {
-            continue;
-        }
-
-        // Both args must be Var nodes
-        if (*left_arg).type_ != pg_sys::NodeTag::T_Var
-            || (*right_arg).type_ != pg_sys::NodeTag::T_Var
-        {
-            continue;
-        }
-
-        let left_var = &*(left_arg as *mut pg_sys::Var);
-        let right_var = &*(right_arg as *mut pg_sys::Var);
-
-        // Check which var belongs to outer/inner
-        let left_in_outer = pg_sys::bms_is_member(left_var.varno as i32, outer_relids);
-        let left_in_inner = pg_sys::bms_is_member(left_var.varno as i32, inner_relids);
-        let right_in_outer = pg_sys::bms_is_member(right_var.varno as i32, outer_relids);
-        let right_in_inner = pg_sys::bms_is_member(right_var.varno as i32, inner_relids);
-
-        if left_in_outer && right_in_inner && left_var.varattno > 0 && right_var.varattno > 0 {
-            let outer_col = (left_var.varattno - 1) as usize;
-            let inner_col = (right_var.varattno - 1) as usize;
-            return Some((outer_col, inner_col));
-        } else if right_in_outer && left_in_inner && right_var.varattno > 0 && left_var.varattno > 0
-        {
-            let outer_col = (right_var.varattno - 1) as usize;
-            let inner_col = (left_var.varattno - 1) as usize;
-            return Some((outer_col, inner_col));
-        }
-    }
-
-    None
-}
-
-#[pg_guard]
-unsafe extern "C-unwind" fn get_foreign_join_paths(
-    root: *mut pgrx::pg_sys::PlannerInfo,
-    joinrel: *mut pgrx::pg_sys::RelOptInfo,
-    outerrel: *mut pgrx::pg_sys::RelOptInfo,
-    innerrel: *mut pgrx::pg_sys::RelOptInfo,
-    jointype: pgrx::pg_sys::JoinType::Type,
-    _extra: *mut pgrx::pg_sys::JoinPathExtraData,
-) {
-    log!("---> get_foreign_join_paths");
-
-    if jointype != pgrx::pg_sys::JoinType::JOIN_INNER
-        && jointype != pgrx::pg_sys::JoinType::JOIN_LEFT
-    {
-        log!("Unsupported join type for pushdown");
-        return;
-    }
-
-    let outer_state_ptr = (*outerrel).fdw_private as *mut RedisFdwState;
-    let inner_state_ptr = (*innerrel).fdw_private as *mut RedisFdwState;
-
-    if outer_state_ptr.is_null() || inner_state_ptr.is_null() {
-        log!("One or both relations lack FDW state, cannot push down join");
-        return;
-    }
-
-    let outer_state = &*outer_state_ptr;
-    let inner_state = &*inner_state_ptr;
-
-    if outer_state.host_port != inner_state.host_port {
-        log!(
-            "Relations on different servers ({} vs {}), cannot push down",
-            outer_state.host_port,
-            inner_state.host_port
-        );
-        return;
-    }
-
-    // Multi-key pattern tables use SCAN-based iteration; pushdown not supported
-    if outer_state.is_multi_key || inner_state.is_multi_key {
-        log!("Multi-key pattern table detected, join pushdown not supported");
-        return;
-    }
-
-    // Stream tables have variable-width rows; pushdown not supported
-    if matches!(outer_state.table_type, RedisTableType::Stream(_))
-        || matches!(inner_state.table_type, RedisTableType::Stream(_))
-    {
-        log!("Stream table detected, join pushdown not supported");
-        return;
-    }
-
-    // Skip pushdown when either base relation has WHERE restrictions.
-    // Our pushdown fetches all data from both sides; PG's base restrictions
-    // assume the base scan already filtered rows. Without a way to re-evaluate
-    // base quals in the join scan, fall back to nested-loop which handles them.
-    if !(*outerrel).baserestrictinfo.is_null()
-        && pg_sys::list_length((*outerrel).baserestrictinfo) > 0
-    {
-        log!("Outer relation has base restrictions, skipping join pushdown");
-        return;
-    }
-    if !(*innerrel).baserestrictinfo.is_null()
-        && pg_sys::list_length((*innerrel).baserestrictinfo) > 0
-    {
-        log!("Inner relation has base restrictions, skipping join pushdown");
-        return;
-    }
-
-    // Extract join columns from the restrictlist in JoinPathExtraData
-    let (join_col_outer, join_col_inner) = match extract_join_columns(_extra, outerrel, innerrel) {
-        Some(cols) => cols,
-        None => {
-            log!("No equality join clause found between FDW rels, cannot push down");
-            return;
-        }
-    };
-
-    log!(
-        "Detected join columns: outer={}, inner={}",
-        join_col_outer,
-        join_col_inner
-    );
-
-    let outer_rows = (*outerrel).rows;
-    let inner_rows = (*innerrel).rows;
-
-    use crate::query::cost_estimation::costs;
-    let network_cost = costs::NETWORK_ROUND_TRIP * 4.0
-        + (outer_rows + inner_rows) * costs::NETWORK_TRANSFER_PER_ROW;
-    let build_cost = inner_rows.min(outer_rows) * costs::CPU_TUPLE_COST;
-    let probe_cost = inner_rows.max(outer_rows) * costs::CPU_TUPLE_COST;
-    let startup_cost = network_cost + build_cost;
-    let total_cost = startup_cost + probe_cost;
-
-    let joinrel_rows = outer_rows.min(inner_rows);
-
-    // Store outer+inner state pointers, jointype, join columns, and relids
-    let fdw_private = serialize_join_info_to_list(&[
-        outer_state_ptr as i64,
-        inner_state_ptr as i64,
-        jointype as i64,
-        join_col_outer as i64,
-        join_col_inner as i64,
-        (*outerrel).relid as i64,
-        (*innerrel).relid as i64,
-    ]);
-
-    let path = pgrx::pg_sys::create_foreign_join_path(
-        root,
-        joinrel,
-        ptr::null_mut(),
-        joinrel_rows,
-        #[cfg(feature = "pg18")]
-        0,
-        startup_cost,
-        total_cost,
-        ptr::null_mut(),
-        (*joinrel).lateral_relids,
-        ptr::null_mut(),
-        #[cfg(any(feature = "pg17", feature = "pg18"))]
-        ptr::null_mut(),
-        fdw_private,
-    );
-    pgrx::pg_sys::add_path(joinrel, path as *mut pgrx::pg_sys::Path);
 }

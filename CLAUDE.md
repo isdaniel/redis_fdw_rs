@@ -38,7 +38,7 @@ cargo fmt
 ## Key Architecture
 
 ### Module Structure
-- `src/core/` — FDW handler callbacks (`handlers.rs`), state management (`state_manager.rs`), connection pool (`pool_manager.rs`), connection factory (`connection_factory.rs`), DDL validator (`validator.rs`)
+- `src/core/` — FDW handler callbacks (`handlers.rs`), join pushdown logic (`join_handlers.rs`), EXPLAIN output (`explain.rs`), schema import & analyze (`schema_import.rs`), truncate (`truncate.rs`), shared column/TTL utilities (`column_utils.rs`), state management (`state_manager.rs`), connection pool (`pool_manager.rs`), connection factory (`connection_factory.rs`), DDL validator (`validator.rs`)
 - `src/tables/` — Trait interface (`interface.rs`), type enum + dispatch (`types.rs`, `macros.rs`), per-type implementations in `implementations/`
 - `src/query/` — WHERE pushdown (`pushdown.rs`), cost estimation (`cost_estimation.rs`), LIMIT handling (`limit.rs`), scan ops (`scan_ops.rs`)
 - `src/join/` — JOIN support: FDW-to-FDW pushdown (`foreign_join.rs`), types (`types.rs`)
@@ -98,8 +98,17 @@ Stream is append-only; UPDATE returns an error at the trait level and `IsForeign
 - First column is always the Redis key name
 - INSERT routes to specific key (first column); DELETE uses `DEL` on the full key
 
+### Column Validation
+- `validate_column_count()` in handlers.rs enforces per-type column constraints at first query time
+- Called from both `begin_foreign_scan` and `begin_foreign_modify`
+- Column count excludes the TTL column (detected by name "ttl")
+- Multi-key mode adds +1 expected column for the key prefix
+- Constraints: string=1, hash=2, list=1-2, set=1, zset=2, stream=2+
+- Error format: `redis_fdw: table type '{type}' requires {N} data column(s), got {M}`
+
 ### JOIN Architecture
-- **FDW-to-Local**: Standard nested-loop; PostgreSQL drives outer rows, FDW rescans inner on each iteration
+- **FDW-to-Local (parameterized)**: `get_foreign_paths` advertises cheap parameterized paths for point-lookup columns (hash/field→HGET, set/member→SISMEMBER, zset/member→ZSCORE). PostgreSQL's planner picks these for NestLoop joins, passing the outer row's value as a parameter. `iterate_foreign_scan` evaluates the expression and does a single-key Redis lookup per outer row.
+- **FDW-to-Local (fallback)**: If no parameterized path applies, standard nested-loop with full rescan on each iteration
 - **FDW-to-FDW**: `GetForeignJoinPaths` detects same-server tables, extracts join columns from restrictlist, creates pushdown join path
 - **Pushdown guards**: same server (host_port match), non-multi-key tables, non-Stream tables, merge-joinable (equality) operator, INNER/LEFT only, no base restrictions on either relation
 - **Base restriction guard**: If either relation has `baserestrictinfo` (WHERE clauses on individual tables), pushdown is skipped and PostgreSQL falls back to nested-loop which handles base quals correctly
