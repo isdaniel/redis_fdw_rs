@@ -67,3 +67,6 @@ pub mod join_tests;
 
 #[cfg(any(test, feature = "pg_test"))]
 pub mod column_mapping_tests;
+
+#[cfg(any(test, feature = "pg_test"))]
+pub mod column_validation_tests;
