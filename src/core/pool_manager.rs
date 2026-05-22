@@ -451,21 +451,27 @@ impl PooledConnection {
 
 /// High-level helper to get a connection from the global pool
 ///
-/// Automatically detects single vs cluster mode based on the host_port format:
-/// - Single node: "host:port" (e.g., "127.0.0.1:6379")
-/// - Cluster: "host1:port1,host2:port2,..." (comma-separated)
+/// Detects single vs cluster mode based on:
+/// 1. Explicit `cluster_mode` flag (from server option)
+/// 2. host_port format: comma-separated = cluster, single value = standalone
 pub fn get_pooled_connection(
     host_port: &str,
     database: i64,
     auth_config: &RedisAuthConfig,
     pool_config: &PoolConfig,
+    cluster_mode: bool,
 ) -> Result<PooledConnection, PoolError> {
     let manager = PoolManager::global();
+
+    let conn_type = if cluster_mode {
+        RedisConnectionType::Cluster
+    } else {
+        RedisConnectionType::from_host_port(host_port)
+    };
 
     // Try read-lock first (fast path — pool already exists)
     {
         let reader = manager.read().map_err(|_| PoolError::LockPoisoned)?;
-        let conn_type = RedisConnectionType::from_host_port(host_port);
         match conn_type {
             RedisConnectionType::Single => {
                 let key = Client::cache_key(host_port, database, auth_config);
@@ -491,7 +497,16 @@ pub fn get_pooled_connection(
 
     // Pool doesn't exist — acquire write lock to create it
     let mut writer = manager.write().map_err(|_| PoolError::LockPoisoned)?;
-    let pool = writer.get_or_create_pool(host_port, database, auth_config, pool_config)?;
+    let pool = match conn_type {
+        RedisConnectionType::Single => {
+            let p = writer.get_or_create_single_pool(host_port, database, auth_config, pool_config)?;
+            RedisPool::Single(p)
+        }
+        RedisConnectionType::Cluster => {
+            let p = writer.get_or_create_cluster_pool(host_port, database, auth_config, pool_config)?;
+            RedisPool::Cluster(p)
+        }
+    };
     pool.get_connection()
 }
 

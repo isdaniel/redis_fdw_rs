@@ -276,6 +276,8 @@ mod tests {
         // Cleanup any existing test data
         cleanup_test_stream(&mut conn, test_key);
 
+        table.column_names = vec!["id".to_string(), "event".to_string()];
+
         // Add entries with specific IDs for range testing
         let _: String = redis::cmd("XADD")
             .arg(test_key)
@@ -301,10 +303,10 @@ mod tests {
             .query(&mut conn)
             .expect("Failed to add third entry");
 
-        // Test range query using pushdown conditions
+        // Test range query using pushdown conditions (must use "id" column for XRANGE optimization)
         use crate::query::pushdown_types::{ComparisonOperator, PushableCondition};
         let condition = PushableCondition {
-            column_name: "stream_id".to_string(),
+            column_name: "id".to_string(),
             operator: ComparisonOperator::Equal,
             value: "2000000000000-0".to_string(),
         };
@@ -392,6 +394,85 @@ mod tests {
     }
 
     #[test]
+    fn test_stream_where_clause_with_custom_id_column_name() {
+        let mut conn = setup_redis_connection();
+        let mut table = RedisStreamTable::new(1000);
+        let test_key = "test:stream:where_custom_id_col";
+
+        cleanup_test_stream(&mut conn, test_key);
+
+        // Use "stream_id" as the first column name (not "id")
+        table.column_names = vec![
+            "stream_id".to_string(),
+            "user_id".to_string(),
+            "action".to_string(),
+        ];
+
+        let id1: String = redis::cmd("XADD")
+            .arg(test_key)
+            .arg("*")
+            .arg("user_id")
+            .arg("user:alice")
+            .arg("action")
+            .arg("CREATE")
+            .query(&mut conn)
+            .unwrap();
+
+        let _id2: String = redis::cmd("XADD")
+            .arg(test_key)
+            .arg("*")
+            .arg("user_id")
+            .arg("user:bob")
+            .arg("action")
+            .arg("UPDATE")
+            .query(&mut conn)
+            .unwrap();
+
+        // WHERE stream_id = '<specific_id>' should use XRANGE optimization
+        use crate::query::pushdown_types::PushableCondition;
+        let condition = PushableCondition {
+            column_name: "stream_id".to_string(),
+            operator: ComparisonOperator::Equal,
+            value: id1.clone(),
+        };
+
+        let mut table2 = RedisStreamTable::new(1000);
+        table2.column_names = table.column_names.clone();
+        let result = table2.load_data(
+            &mut conn,
+            test_key,
+            Some(&[condition]),
+            &LimitOffsetInfo::default(),
+        );
+        assert!(result.is_ok());
+        assert_eq!(table2.data_len(), 1, "XRANGE by stream_id should return 1 row");
+        let row = table2.get_row(0).unwrap();
+        assert_eq!(row[0].as_ref(), id1.as_str());
+
+        // WHERE user_id = 'user:alice' should NOT be treated as stream ID
+        let condition2 = PushableCondition {
+            column_name: "user_id".to_string(),
+            operator: ComparisonOperator::Equal,
+            value: "user:alice".to_string(),
+        };
+
+        let mut table3 = RedisStreamTable::new(1000);
+        table3.column_names = table.column_names.clone();
+        let result2 = table3.load_data(
+            &mut conn,
+            test_key,
+            Some(&[condition2]),
+            &LimitOffsetInfo::default(),
+        );
+        assert!(result2.is_ok(), "WHERE on non-ID column must not error");
+        assert_eq!(table3.data_len(), 1, "Expected 1 row for user:alice");
+        let row = table3.get_row(0).unwrap();
+        assert_eq!(row[1].as_ref(), "user:alice");
+
+        cleanup_test_stream(&mut conn, test_key);
+    }
+
+    #[test]
     fn test_stream_column_names_mapping_via_load_data() {
         let mut conn = setup_redis_connection();
         let mut table = RedisStreamTable::new(1000);
@@ -440,6 +521,229 @@ mod tests {
             "project:alpha",
             "resource column mismatch"
         );
+
+        cleanup_test_stream(&mut conn, test_key);
+    }
+
+    #[test]
+    fn test_stream_where_clause_on_non_id_column_load_data() {
+        let mut conn = setup_redis_connection();
+        let mut table = RedisStreamTable::new(1000);
+        let test_key = "test:stream:where_non_id_load_data";
+
+        cleanup_test_stream(&mut conn, test_key);
+
+        table.column_names = vec![
+            "id".to_string(),
+            "user_id".to_string(),
+            "action".to_string(),
+            "resource".to_string(),
+        ];
+
+        // Insert multiple entries
+        for (user, action, resource) in [
+            ("user:alice", "CREATE", "project:alpha"),
+            ("user:bob", "UPDATE", "project:alpha"),
+            ("user:alice", "DELETE", "file:readme.md"),
+            ("user:charlie", "CREATE", "project:beta"),
+        ] {
+            let data = vec![
+                "*".to_string(),
+                "user_id".to_string(),
+                user.to_string(),
+                "action".to_string(),
+                action.to_string(),
+                "resource".to_string(),
+                resource.to_string(),
+            ];
+            table.insert(&mut conn, test_key, &data).unwrap();
+        }
+
+        // Test WHERE user_id = 'user:alice' via load_data (optimized path)
+        use crate::query::pushdown_types::PushableCondition;
+        let condition = PushableCondition {
+            column_name: "user_id".to_string(),
+            operator: ComparisonOperator::Equal,
+            value: "user:alice".to_string(),
+        };
+
+        let mut table2 = RedisStreamTable::new(1000);
+        table2.column_names = table.column_names.clone();
+        let result = table2.load_data(
+            &mut conn,
+            test_key,
+            Some(&[condition]),
+            &LimitOffsetInfo::default(),
+        );
+        assert!(result.is_ok(), "load_data with non-ID WHERE should not error");
+        assert_eq!(table2.data_len(), 2, "Expected 2 rows for user:alice");
+
+        // Verify filtered rows
+        let row0 = table2.get_row(0).unwrap();
+        assert_eq!(row0[1].as_ref(), "user:alice");
+        let row1 = table2.get_row(1).unwrap();
+        assert_eq!(row1[1].as_ref(), "user:alice");
+
+        // Test WHERE action = 'CREATE'
+        let condition2 = PushableCondition {
+            column_name: "action".to_string(),
+            operator: ComparisonOperator::Equal,
+            value: "CREATE".to_string(),
+        };
+
+        let mut table3 = RedisStreamTable::new(1000);
+        table3.column_names = table.column_names.clone();
+        let result2 = table3.load_data(
+            &mut conn,
+            test_key,
+            Some(&[condition2]),
+            &LimitOffsetInfo::default(),
+        );
+        assert!(result2.is_ok(), "load_data with action WHERE should not error");
+        assert_eq!(table3.data_len(), 2, "Expected 2 rows for action=CREATE");
+
+        let row0 = table3.get_row(0).unwrap();
+        assert_eq!(row0[2].as_ref(), "CREATE");
+        let row1 = table3.get_row(1).unwrap();
+        assert_eq!(row1[2].as_ref(), "CREATE");
+
+        cleanup_test_stream(&mut conn, test_key);
+    }
+
+    #[test]
+    fn test_stream_where_clause_on_non_id_column_load_batch() {
+        let mut conn = setup_redis_connection();
+        let mut table = RedisStreamTable::new(1000);
+        let test_key = "test:stream:where_non_id_batch";
+
+        cleanup_test_stream(&mut conn, test_key);
+
+        table.column_names = vec![
+            "id".to_string(),
+            "user_id".to_string(),
+            "action".to_string(),
+            "resource".to_string(),
+        ];
+
+        // Insert multiple entries
+        for (user, action, resource) in [
+            ("user:alice", "CREATE", "project:alpha"),
+            ("user:bob", "UPDATE", "project:alpha"),
+            ("user:alice", "DELETE", "file:readme.md"),
+            ("user:charlie", "CREATE", "project:beta"),
+        ] {
+            let data = vec![
+                "*".to_string(),
+                "user_id".to_string(),
+                user.to_string(),
+                "action".to_string(),
+                action.to_string(),
+                "resource".to_string(),
+                resource.to_string(),
+            ];
+            table.insert(&mut conn, test_key, &data).unwrap();
+        }
+
+        // Test WHERE user_id = 'user:alice' via load_batch (streaming path)
+        use crate::query::pushdown_types::PushableCondition;
+        let condition = PushableCondition {
+            column_name: "user_id".to_string(),
+            operator: ComparisonOperator::Equal,
+            value: "user:alice".to_string(),
+        };
+
+        let mut table2 = RedisStreamTable::new(1000);
+        table2.column_names = table.column_names.clone();
+        let (cursor, rows) = table2
+            .load_batch(&mut conn, test_key, 0, 1000, Some(&[condition]))
+            .expect("load_batch with non-ID WHERE should not error");
+        assert_eq!(cursor, 0, "Should complete in one batch");
+        assert_eq!(rows, 2, "Expected 2 rows for user:alice");
+
+        let row0 = table2.get_row(0).unwrap();
+        assert_eq!(row0[1].as_ref(), "user:alice");
+        let row1 = table2.get_row(1).unwrap();
+        assert_eq!(row1[1].as_ref(), "user:alice");
+
+        // Test WHERE action = 'CREATE' via load_batch
+        let condition2 = PushableCondition {
+            column_name: "action".to_string(),
+            operator: ComparisonOperator::Equal,
+            value: "CREATE".to_string(),
+        };
+
+        let mut table3 = RedisStreamTable::new(1000);
+        table3.column_names = table.column_names.clone();
+        let (cursor2, rows2) = table3
+            .load_batch(&mut conn, test_key, 0, 1000, Some(&[condition2]))
+            .expect("load_batch with action WHERE should not error");
+        assert_eq!(cursor2, 0);
+        assert_eq!(rows2, 2, "Expected 2 rows for action=CREATE");
+
+        let row0 = table3.get_row(0).unwrap();
+        assert_eq!(row0[2].as_ref(), "CREATE");
+        let row1 = table3.get_row(1).unwrap();
+        assert_eq!(row1[2].as_ref(), "CREATE");
+
+        cleanup_test_stream(&mut conn, test_key);
+    }
+
+    #[test]
+    fn test_stream_where_clause_combined_id_and_non_id() {
+        let mut conn = setup_redis_connection();
+        let mut table = RedisStreamTable::new(1000);
+        let test_key = "test:stream:where_combined";
+
+        cleanup_test_stream(&mut conn, test_key);
+
+        table.column_names = vec![
+            "id".to_string(),
+            "user_id".to_string(),
+            "action".to_string(),
+        ];
+
+        // Insert entries with known IDs
+        let id1: String = redis::cmd("XADD")
+            .arg(test_key)
+            .arg("*")
+            .arg("user_id")
+            .arg("user:alice")
+            .arg("action")
+            .arg("CREATE")
+            .query(&mut conn)
+            .unwrap();
+
+        let _id2: String = redis::cmd("XADD")
+            .arg(test_key)
+            .arg("*")
+            .arg("user_id")
+            .arg("user:bob")
+            .arg("action")
+            .arg("UPDATE")
+            .query(&mut conn)
+            .unwrap();
+
+        // Test WHERE id = '<specific_id>' (should use XRANGE optimization)
+        use crate::query::pushdown_types::PushableCondition;
+        let condition = PushableCondition {
+            column_name: "id".to_string(),
+            operator: ComparisonOperator::Equal,
+            value: id1.clone(),
+        };
+
+        let mut table2 = RedisStreamTable::new(1000);
+        table2.column_names = table.column_names.clone();
+        let result = table2.load_data(
+            &mut conn,
+            test_key,
+            Some(&[condition]),
+            &LimitOffsetInfo::default(),
+        );
+        assert!(result.is_ok());
+        assert_eq!(table2.data_len(), 1);
+        let row = table2.get_row(0).unwrap();
+        assert_eq!(row[0].as_ref(), id1.as_str());
+        assert_eq!(row[1].as_ref(), "user:alice");
 
         cleanup_test_stream(&mut conn, test_key);
     }

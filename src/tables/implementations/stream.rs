@@ -44,6 +44,14 @@ impl RedisStreamTable {
         }
     }
 
+    fn id_column_name(&self) -> &str {
+        self.column_names.first().map(|s| s.as_str()).unwrap_or("id")
+    }
+
+    fn is_id_column(&self, column_name: &str) -> bool {
+        column_name == self.id_column_name()
+    }
+
     fn next_start_id(&self) -> String {
         match &self.last_id {
             Some(id) => {
@@ -123,30 +131,83 @@ impl RedisStreamTable {
         key_prefix: &str,
         scan_conditions: &crate::query::scan_ops::ScanConditions,
     ) -> Result<LoadDataResult, redis::RedisError> {
-        // Extract time-based conditions for ID range queries
-        let mut start_id = "-".to_string(); // Start from beginning
-        let mut end_id = "+".to_string(); // Go to end
+        let mut start_id = "-".to_string();
+        let mut end_id = "+".to_string();
         let mut count = Some(self.batch_size);
+        let mut non_id_conditions: Vec<&PushableCondition> = Vec::new();
 
-        // Check for time-based or ID-based conditions
         for condition in &scan_conditions.exact_conditions {
-            match condition.operator {
-                ComparisonOperator::Equal => {
-                    // Exact ID match - use as both start and end
-                    start_id = condition.value.clone();
-                    end_id = condition.value.clone();
-                    count = Some(1); // Only need one entry
+            if self.is_id_column(&condition.column_name) {
+                match condition.operator {
+                    ComparisonOperator::Equal => {
+                        start_id = condition.value.clone();
+                        end_id = condition.value.clone();
+                        count = Some(1);
+                    }
+                    _ => {}
                 }
-                ComparisonOperator::NotEqual => {
-                    // For streams, not equal is less useful but we can handle it
-                    // by loading all data except this specific ID
-                    continue;
-                }
-                _ => {} // Other operators not directly applicable to stream IDs
+            } else {
+                non_id_conditions.push(condition);
             }
         }
 
-        self.load_with_xrange(conn, key_prefix, &start_id, &end_id, count)
+        for condition in &scan_conditions.pattern_conditions {
+            if !self.is_id_column(&condition.column_name) {
+                non_id_conditions.push(condition);
+            }
+        }
+
+        // If we only have non-ID conditions, load all entries then filter client-side
+        if start_id == "-" && end_id == "+" && !non_id_conditions.is_empty() {
+            count = Some(self.batch_size);
+        }
+
+        let result = self.load_with_xrange(conn, key_prefix, &start_id, &end_id, count)?;
+
+        // Apply client-side filtering for non-ID column conditions
+        if !non_id_conditions.is_empty() && !self.entries.is_empty() {
+            let like_matchers: Vec<(&PushableCondition, crate::query::scan_ops::PatternMatcher)> =
+                non_id_conditions
+                    .iter()
+                    .filter(|c| c.operator == ComparisonOperator::Like)
+                    .map(|c| (*c, crate::query::scan_ops::PatternMatcher::from_like_pattern(&c.value)))
+                    .collect();
+
+            let mut filtered_entries = Vec::new();
+            let mut filtered_flat = Vec::new();
+
+            for entry in &self.entries {
+                // entry = [stream_id, field1, val1, field2, val2, ...]
+                let matches = non_id_conditions.iter().all(|cond| {
+                    // Find matching field-value pair by column name
+                    entry[1..].chunks(2).any(|chunk| {
+                        if chunk.len() != 2 || chunk[0] != cond.column_name {
+                            return false;
+                        }
+                        let val = &chunk[1];
+                        match cond.operator {
+                            ComparisonOperator::Equal => val == &cond.value,
+                            ComparisonOperator::NotEqual => val != &cond.value,
+                            ComparisonOperator::Like => like_matchers
+                                .iter()
+                                .find(|(c, _)| std::ptr::eq(*c, *cond))
+                                .is_some_and(|(_, m)| m.matches(val)),
+                            _ => true,
+                        }
+                    })
+                });
+
+                if matches {
+                    filtered_flat.push(entry[0].clone());
+                    filtered_entries.push(entry.clone());
+                }
+            }
+
+            self.entries = filtered_entries;
+            self.dataset = DataSet::Filtered(filtered_flat);
+        }
+
+        Ok(result)
     }
 
     /// Add a new entry to the stream
@@ -346,7 +407,7 @@ impl RedisTableOperations for RedisStreamTable {
             let mut start = None;
             let mut end = None;
             for c in conds {
-                if c.operator == ComparisonOperator::Equal && c.column_name == "id" {
+                if c.operator == ComparisonOperator::Equal && self.is_id_column(&c.column_name) {
                     start = Some(c.value.clone());
                     end = Some(c.value.clone());
                     break;
@@ -381,7 +442,7 @@ impl RedisTableOperations for RedisStreamTable {
 
         // Collect non-ID conditions for client-side filtering
         let non_id_conds: Vec<&PushableCondition> = conditions
-            .map(|conds| conds.iter().filter(|c| c.column_name != "id").collect())
+            .map(|conds| conds.iter().filter(|c| !self.is_id_column(&c.column_name)).collect())
             .unwrap_or_default();
 
         // Pre-calculate PatternMatchers for LIKE conditions (index-based)
@@ -404,14 +465,16 @@ impl RedisTableOperations for RedisStreamTable {
             if !non_id_conds.is_empty() {
                 let matches = non_id_conds.iter().enumerate().all(|(i, c)| {
                     fields.iter().any(|(f, v)| {
-                        let target = if c.column_name == "field" { f } else { v };
+                        if f != &c.column_name {
+                            return false;
+                        }
                         match c.operator {
-                            ComparisonOperator::Equal => target == &c.value,
-                            ComparisonOperator::NotEqual => target != &c.value,
+                            ComparisonOperator::Equal => v == &c.value,
+                            ComparisonOperator::NotEqual => v != &c.value,
                             ComparisonOperator::Like => like_matchers
                                 .iter()
                                 .find(|(idx, _)| *idx == i)
-                                .is_some_and(|(_, m)| m.matches(target)),
+                                .is_some_and(|(_, m)| m.matches(v)),
                             _ => true,
                         }
                     })
