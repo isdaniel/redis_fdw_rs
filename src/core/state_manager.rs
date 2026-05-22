@@ -53,6 +53,8 @@ pub struct RedisFdwState {
     pub join_state: Option<crate::join::types::RedisJoinState>,
     /// Whether the join has been executed (lazy: execute on first iterate call)
     pub join_executed: bool,
+    /// Column names from the foreign table's tuple descriptor
+    pub column_names: Vec<String>,
 }
 
 impl RedisFdwState {
@@ -80,6 +82,7 @@ impl RedisFdwState {
             is_join_scan: false,
             join_state: None,
             join_executed: false,
+            column_names: Vec::new(),
         }
     }
 
@@ -867,12 +870,21 @@ impl RedisFdwState {
                 }
             }
             RedisTableType::Stream(_) => {
+                // data format after transform: [id, field1, val1, field2, val2, ...]
                 if data.len() >= 3 {
-                    pipe.cmd("XADD")
-                        .arg(key)
-                        .arg("*")
-                        .arg(&data[1])
-                        .arg(&data[2]);
+                    let id = if data[0] == "*" || data[0].contains('-') {
+                        data[0].as_str()
+                    } else {
+                        "*"
+                    };
+                    let mut cmd = redis::cmd("XADD");
+                    cmd.arg(key).arg(id);
+                    for chunk in data[1..].chunks(2) {
+                        if chunk.len() == 2 {
+                            cmd.arg(&chunk[0]).arg(&chunk[1]);
+                        }
+                    }
+                    pipe.add_command(cmd);
                     return true;
                 }
             }
@@ -927,12 +939,21 @@ impl RedisFdwState {
                 }
             }
             RedisTableType::Stream(_) => {
+                // data format after transform: [id, field1, val1, field2, val2, ...]
                 if data.len() >= 3 {
-                    pipe.cmd("XADD")
-                        .arg(key)
-                        .arg("*")
-                        .arg(&data[1])
-                        .arg(&data[2]);
+                    let id = if data[0] == "*" || data[0].contains('-') {
+                        data[0].as_str()
+                    } else {
+                        "*"
+                    };
+                    let mut cmd = redis::cmd("XADD");
+                    cmd.arg(key).arg(id);
+                    for chunk in data[1..].chunks(2) {
+                        if chunk.len() == 2 {
+                            cmd.arg(&chunk[0]).arg(&chunk[1]);
+                        }
+                    }
+                    pipe.add_command(cmd);
                     return true;
                 }
             }

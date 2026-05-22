@@ -9,17 +9,20 @@ use crate::{
         types::{DataContainer, DataSet, LoadDataResult},
     },
 };
+use std::borrow::Cow;
 
 /// Redis List table type
 #[derive(Debug, Clone, Default)]
 pub struct RedisListTable {
     pub dataset: DataSet,
+    pub include_index: bool,
 }
 
 impl RedisListTable {
     pub fn new() -> Self {
         Self {
             dataset: DataSet::Empty,
+            include_index: false,
         }
     }
 
@@ -190,6 +193,22 @@ impl RedisTableOperations for RedisListTable {
 
     fn get_dataset(&self) -> &DataSet {
         &self.dataset
+    }
+
+    fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
+        if self.include_index {
+            match &self.dataset {
+                DataSet::Complete(DataContainer::List(items)) => items
+                    .get(index)
+                    .map(|item| vec![Cow::Owned(index.to_string()), Cow::Borrowed(item.as_str())]),
+                DataSet::Filtered(items) => items
+                    .get(index)
+                    .map(|item| vec![Cow::Owned(index.to_string()), Cow::Borrowed(item.as_str())]),
+                _ => None,
+            }
+        } else {
+            self.dataset.get_row(index)
+        }
     }
 
     fn insert(

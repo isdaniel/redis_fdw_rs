@@ -39,6 +39,48 @@ unsafe fn detect_ttl_column(tupdesc: pg_sys::TupleDesc) -> Option<usize> {
     None
 }
 
+unsafe fn extract_column_names(tupdesc: pg_sys::TupleDesc) -> Vec<String> {
+    let natts = (*tupdesc).natts as usize;
+    let mut names = Vec::with_capacity(natts);
+    for i in 0..natts {
+        let attr = tuple_desc_attr(tupdesc, i);
+        if (*attr).attisdropped {
+            continue;
+        }
+        let name = pgrx::name_data_to_str(&(*attr).attname);
+        names.push(name.to_string());
+    }
+    names
+}
+
+fn transform_insert_data(
+    table_type: &RedisTableType,
+    column_names: &[String],
+    data: Vec<String>,
+) -> Vec<String> {
+    match table_type {
+        RedisTableType::List(_) if column_names.len() >= 2 => {
+            // List with index column: strip the index (first element)
+            data.into_iter().skip(1).collect()
+        }
+        RedisTableType::Stream(_) if column_names.len() > 1 => {
+            // Stream: interleave column names with values
+            // Input: [id, val1, val2, val3]
+            // Output: [id, col_name_1, val1, col_name_2, val2, ...]
+            let mut stream_data = Vec::with_capacity(1 + (data.len() - 1) * 2);
+            stream_data.push(data[0].clone());
+            for (i, val) in data[1..].iter().enumerate() {
+                if let Some(col_name) = column_names.get(i + 1) {
+                    stream_data.push(col_name.clone());
+                    stream_data.push(val.clone());
+                }
+            }
+            stream_data
+        }
+        _ => data,
+    }
+}
+
 const REDISMODY: &str = "__redis_UD_key_name";
 
 pub type FdwRoutine<A = AllocatedByRust> = PgBox<pgrx::pg_sys::FdwRoutine, A>;
@@ -435,6 +477,15 @@ extern "C-unwind" fn begin_foreign_scan(
         let relation = (*node).ss.ss_currentRelation;
         let tupdesc = (*relation).rd_att;
         state.ttl_column_index = detect_ttl_column(tupdesc);
+        state.column_names = extract_column_names(tupdesc);
+
+        // Configure table types that need column info
+        if let RedisTableType::List(ref mut list) = state.table_type {
+            list.include_index = state.column_names.len() >= 2;
+        }
+        if let RedisTableType::Stream(ref mut stream) = state.table_type {
+            stream.column_names = state.column_names.clone();
+        }
 
         // Pre-fetch TTL for single-key mode to avoid per-row Redis calls during iteration
         if state.ttl_column_index.is_some() && !state.is_multi_key {
@@ -738,6 +789,15 @@ unsafe extern "C-unwind" fn begin_foreign_modify(
     let relation = (*rinfo).ri_RelationDesc;
     let tupdesc = (*relation).rd_att;
     state.ttl_column_index = detect_ttl_column(tupdesc);
+    state.column_names = extract_column_names(tupdesc);
+
+    // Configure table types that need column info
+    if let RedisTableType::List(ref mut list) = state.table_type {
+        list.include_index = state.column_names.len() >= 2;
+    }
+    if let RedisTableType::Stream(ref mut stream) = state.table_type {
+        stream.column_names = state.column_names.clone();
+    }
 
     (*rinfo).ri_FdwState = state_ptr;
 }
@@ -802,6 +862,8 @@ unsafe extern "C-unwind" fn exec_foreign_insert(
         }
         state.apply_ttl(&key, row_ttl);
     } else {
+        // Transform data for specific table types
+        let data = transform_insert_data(&state.table_type, &state.column_names, data);
         if let Err(e) = state.insert_data(&data) {
             error!("Failed to insert data: {:?}", e);
         }
@@ -972,6 +1034,15 @@ unsafe extern "C-unwind" fn begin_foreign_insert(
 
     let tupdesc = (*relation).rd_att;
     state.ttl_column_index = detect_ttl_column(tupdesc);
+    state.column_names = extract_column_names(tupdesc);
+
+    // Configure table types that need column info
+    if let RedisTableType::List(ref mut list) = state.table_type {
+        list.include_index = state.column_names.len() >= 2;
+    }
+    if let RedisTableType::Stream(ref mut stream) = state.table_type {
+        stream.column_names = state.column_names.clone();
+    }
 
     let state_ptr = PgMemoryContexts::For(ctx).leak_and_drop_on_delete(state);
     (*rinfo).ri_FdwState = state_ptr as *mut std::os::raw::c_void;
@@ -1212,6 +1283,7 @@ unsafe extern "C-unwind" fn exec_foreign_batch_insert(
         } else {
             (all_data, None)
         };
+        let data = transform_insert_data(&state.table_type, &state.column_names, data);
         rows.push((data, row_ttl));
     }
 

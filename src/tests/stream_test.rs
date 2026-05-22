@@ -390,4 +390,107 @@ mod tests {
         let empty_delete = table.delete(&mut conn, "test:empty", &[]);
         assert!(empty_delete.is_ok()); // Should handle gracefully
     }
+
+    #[test]
+    fn test_stream_column_names_mapping_via_load_data() {
+        let mut conn = setup_redis_connection();
+        let mut table = RedisStreamTable::new(1000);
+        let test_key = "test:stream:colnames_load_data";
+
+        cleanup_test_stream(&mut conn, test_key);
+
+        // Set column_names as would happen in begin_foreign_scan
+        table.column_names = vec![
+            "id".to_string(),
+            "user_id".to_string(),
+            "action".to_string(),
+            "resource".to_string(),
+        ];
+
+        // Insert using the same format as transform_insert_data produces
+        let data = vec![
+            "*".to_string(),
+            "user_id".to_string(),
+            "user:alice".to_string(),
+            "action".to_string(),
+            "CREATE".to_string(),
+            "resource".to_string(),
+            "project:alpha".to_string(),
+        ];
+        table.insert(&mut conn, test_key, &data).unwrap();
+
+        // Load data (same path as begin_foreign_scan → iterate)
+        let result = table.load_data(&mut conn, test_key, None, &LimitOffsetInfo::default());
+        assert!(result.is_ok());
+
+        // Now get_row should map columns correctly
+        let row = table.get_row(0);
+        assert!(row.is_some(), "get_row(0) returned None");
+        let row_data = row.unwrap();
+        eprintln!("row_data = {:?}", row_data);
+        assert_eq!(row_data.len(), 4, "Expected 4 columns, got {:?}", row_data);
+        assert_eq!(
+            row_data[1].as_ref(),
+            "user:alice",
+            "user_id column mismatch"
+        );
+        assert_eq!(row_data[2].as_ref(), "CREATE", "action column mismatch");
+        assert_eq!(
+            row_data[3].as_ref(),
+            "project:alpha",
+            "resource column mismatch"
+        );
+
+        cleanup_test_stream(&mut conn, test_key);
+    }
+
+    #[test]
+    fn test_stream_column_names_mapping_via_load_batch() {
+        let mut conn = setup_redis_connection();
+        let mut table = RedisStreamTable::new(1000);
+        let test_key = "test:stream:colnames_batch";
+
+        cleanup_test_stream(&mut conn, test_key);
+
+        // Set column_names as would happen in begin_foreign_scan
+        table.column_names = vec![
+            "id".to_string(),
+            "user_id".to_string(),
+            "action".to_string(),
+            "resource".to_string(),
+        ];
+
+        // Insert via XADD directly
+        let data = vec![
+            "*".to_string(),
+            "user_id".to_string(),
+            "user:bob".to_string(),
+            "action".to_string(),
+            "UPDATE".to_string(),
+            "resource".to_string(),
+            "file:readme".to_string(),
+        ];
+        table.insert(&mut conn, test_key, &data).unwrap();
+
+        // Use load_batch (the streaming path used in iterate_foreign_scan)
+        let (cursor, rows) = table.load_batch(&mut conn, test_key, 0, 100, None).unwrap();
+        eprintln!("cursor={}, rows={}", cursor, rows);
+        assert_eq!(rows, 1);
+
+        // Now get_row should map correctly
+        let row = table.get_row(0);
+        assert!(row.is_some(), "get_row(0) returned None after load_batch");
+        let row_data = row.unwrap();
+        eprintln!("row_data after load_batch = {:?}", row_data);
+        assert_eq!(row_data.len(), 4, "Expected 4 columns, got {:?}", row_data);
+        assert_eq!(row_data[1].as_ref(), "user:bob", "user_id column mismatch");
+        assert_eq!(row_data[2].as_ref(), "UPDATE", "action column mismatch");
+        assert_eq!(
+            row_data[3].as_ref(),
+            "file:readme",
+            "resource column mismatch"
+        );
+
+        cleanup_test_stream(&mut conn, test_key);
+    }
 }

@@ -29,6 +29,8 @@ pub struct RedisStreamTable {
     pub last_id: Option<String>,
     /// Batch size for streaming operations to handle large data sets
     pub batch_size: usize,
+    /// Column names from the foreign table definition (for mapping fields to positions)
+    pub column_names: Vec<String>,
 }
 
 impl RedisStreamTable {
@@ -38,6 +40,7 @@ impl RedisStreamTable {
             entries: Vec::new(),
             last_id: None,
             batch_size,
+            column_names: Vec::new(),
         }
     }
 
@@ -225,22 +228,48 @@ impl RedisTableOperations for RedisStreamTable {
 
     #[inline]
     fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
-        // Use structured entries for zero-allocation access
         if !self.entries.is_empty() {
-            self.entries
-                .get(index)
-                .map(|row| row.iter().map(|s| Cow::Borrowed(s.as_str())).collect())
+            self.entries.get(index).map(|row| {
+                // row = [stream_id, field1, val1, field2, val2, ...]
+                if self.column_names.len() > 1 {
+                    // Map field-value pairs to declared column positions
+                    let mut result = Vec::with_capacity(self.column_names.len());
+                    result.push(Cow::Borrowed(row[0].as_str()));
+
+                    let field_pairs: Vec<(&str, &str)> = row[1..]
+                        .chunks(2)
+                        .filter_map(|chunk| {
+                            if chunk.len() == 2 {
+                                Some((chunk[0].as_str(), chunk[1].as_str()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    for col_name in &self.column_names[1..] {
+                        if let Some((_, val)) =
+                            field_pairs.iter().find(|(f, _)| *f == col_name.as_str())
+                        {
+                            result.push(Cow::Owned(val.to_string()));
+                        } else {
+                            result.push(Cow::Owned("NULL".to_string()));
+                        }
+                    }
+                    result
+                } else {
+                    // Legacy: return raw entries
+                    row.iter().map(|s| Cow::Borrowed(s.as_str())).collect()
+                }
+            })
         } else {
             match &self.dataset {
-                DataSet::Filtered(entries) => {
-                    // Legacy path: parse tab-separated entry back to fields
-                    entries.get(index).map(|entry| {
-                        entry
-                            .split('\t')
-                            .map(|s| Cow::Owned(s.to_string()))
-                            .collect()
-                    })
-                }
+                DataSet::Filtered(entries) => entries.get(index).map(|entry| {
+                    entry
+                        .split('\t')
+                        .map(|s| Cow::Owned(s.to_string()))
+                        .collect()
+                }),
                 DataSet::Complete(container) => container.get_row(index),
                 DataSet::Empty => None,
             }
