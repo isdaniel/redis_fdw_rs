@@ -378,7 +378,11 @@ pub(crate) unsafe extern "C-unwind" fn acquire_sample_rows(
                         }
                         let mut pipe = redis::pipe();
                         for key in batch {
-                            pipe.cmd("HSCAN").arg(key).arg(0u64).arg("COUNT").arg(100u64);
+                            pipe.cmd("HSCAN")
+                                .arg(key)
+                                .arg(0u64)
+                                .arg("COUNT")
+                                .arg(100u64);
                         }
                         let results: Vec<(u64, Vec<String>)> =
                             pipe.query(conn_like).unwrap_or_default();
@@ -405,8 +409,7 @@ pub(crate) unsafe extern "C-unwind" fn acquire_sample_rows(
                             let remaining = (max_per_key - result.len()).min(100) as i64;
                             pipe.cmd("LRANGE").arg(key).arg(0i64).arg(remaining - 1);
                         }
-                        let results: Vec<Vec<String>> =
-                            pipe.query(conn_like).unwrap_or_default();
+                        let results: Vec<Vec<String>> = pipe.query(conn_like).unwrap_or_default();
                         for (key, vals) in batch.iter().zip(results) {
                             for v in vals {
                                 if result.len() >= max_per_key {
@@ -424,7 +427,11 @@ pub(crate) unsafe extern "C-unwind" fn acquire_sample_rows(
                         }
                         let mut pipe = redis::pipe();
                         for key in batch {
-                            pipe.cmd("SSCAN").arg(key).arg(0u64).arg("COUNT").arg(100u64);
+                            pipe.cmd("SSCAN")
+                                .arg(key)
+                                .arg(0u64)
+                                .arg("COUNT")
+                                .arg(100u64);
                         }
                         let results: Vec<(u64, Vec<String>)> =
                             pipe.query(conn_like).unwrap_or_default();
@@ -451,8 +458,7 @@ pub(crate) unsafe extern "C-unwind" fn acquire_sample_rows(
                                 .arg(99i64)
                                 .arg("WITHSCORES");
                         }
-                        let results: Vec<Vec<String>> =
-                            pipe.query(conn_like).unwrap_or_default();
+                        let results: Vec<Vec<String>> = pipe.query(conn_like).unwrap_or_default();
                         for (key, vals) in batch.iter().zip(results) {
                             for chunk in vals.chunks(2) {
                                 if chunk.len() == 2 && result.len() < max_per_key {

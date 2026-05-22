@@ -923,7 +923,10 @@ mod tests {
 
         // Verify the imported stream tables are queryable (not multi-key, so no validation error)
         for table_name in &tables {
-            let query = format!("SELECT COUNT(*) FROM import_stream_test.\"{}\";", table_name);
+            let query = format!(
+                "SELECT COUNT(*) FROM import_stream_test.\"{}\";",
+                table_name
+            );
             let cnt = Spi::get_one::<i64>(&query).unwrap().unwrap();
             assert!(
                 cnt >= 1,
@@ -989,10 +992,7 @@ mod tests {
         );
 
         // Query the imported table — should return data
-        let query = format!(
-            "SELECT COUNT(*) FROM import_simple_test.\"{}\";",
-            tables[0]
-        );
+        let query = format!("SELECT COUNT(*) FROM import_simple_test.\"{}\";", tables[0]);
         let cnt = Spi::get_one::<i64>(&query).unwrap().unwrap();
         assert!(cnt >= 1, "Imported table should have data");
 
@@ -1048,10 +1048,7 @@ mod tests {
             tables
         });
 
-        assert!(
-            !tables.is_empty(),
-            "Should have imported zset table"
-        );
+        assert!(!tables.is_empty(), "Should have imported zset table");
 
         // Query and verify column order: key, member, score
         let query = format!(
