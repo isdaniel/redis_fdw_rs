@@ -182,11 +182,14 @@ extern "C-unwind" fn get_foreign_paths(
 
         if !state_ptr.is_null() {
             let state = &*state_ptr;
-            let supports_param = matches!(
-                state.table_type,
-                RedisTableType::Hash(_) | RedisTableType::Set(_) | RedisTableType::ZSet(_)
-            );
-            if supports_param && !state.is_multi_key {
+            let supports_param = match &state.table_type {
+                RedisTableType::Hash(_) | RedisTableType::Set(_) | RedisTableType::ZSet(_) => {
+                    !state.is_multi_key
+                }
+                RedisTableType::String(_) => state.is_multi_key,
+                _ => false,
+            };
+            if supports_param {
                 add_parameterized_paths(_root, baserel, state);
             }
         }

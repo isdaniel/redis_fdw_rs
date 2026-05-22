@@ -247,7 +247,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "redis_fdw: table type 'stream' requires 2")]
+    #[should_panic(expected = "redis_fdw: table type 'stream' requires at least 2")]
     fn test_stream_rejects_one_column() {
         setup_fdw();
         Spi::run(&format!(

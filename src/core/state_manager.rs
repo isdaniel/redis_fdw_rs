@@ -1095,6 +1095,21 @@ impl RedisFdwState {
                 }
                 false
             }
+            RedisTableType::String(ref mut t) => {
+                // Multi-key mode: param_column == 0 means lookup by key → GET
+                if self.is_multi_key && self.param_column == 0 {
+                    let val: Option<String> = redis::cmd("GET")
+                        .arg(param_value)
+                        .query(conn)
+                        .unwrap_or(None);
+                    if let Some(v) = val {
+                        t.dataset = DataSet::Filtered(vec![param_value.to_string(), v]);
+                        return true;
+                    }
+                    t.dataset = DataSet::Empty;
+                }
+                false
+            }
             _ => false,
         }
     }

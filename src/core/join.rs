@@ -76,6 +76,7 @@ pub(crate) unsafe fn add_parameterized_paths(
             RedisTableType::Hash(_) => my_col_idx == 0,
             RedisTableType::Set(_) => my_col_idx == 0,
             RedisTableType::ZSet(_) => my_col_idx == 0,
+            RedisTableType::String(_) if state.is_multi_key => my_col_idx == 0,
             _ => false,
         };
         if !valid {

@@ -110,6 +110,16 @@ pub(crate) fn validate_column_count(
                 multi_key_note,
                 column_count
             );
+        } else if max_cols == usize::MAX {
+            pgrx::error!(
+                "redis_fdw: table type '{}' requires at least {} data column(s) ({}){}, but foreign table has {}. \
+                 Exclude the optional 'ttl' column from this count.",
+                type_name,
+                min_cols,
+                expected_desc,
+                multi_key_note,
+                column_count
+            );
         } else {
             pgrx::error!(
                 "redis_fdw: table type '{}' requires {}-{} data column(s) ({}){}, but foreign table has {}. \
