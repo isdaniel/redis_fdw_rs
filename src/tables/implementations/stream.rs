@@ -232,33 +232,19 @@ impl RedisTableOperations for RedisStreamTable {
             self.entries.get(index).map(|row| {
                 // row = [stream_id, field1, val1, field2, val2, ...]
                 if self.column_names.len() > 1 {
-                    // Map field-value pairs to declared column positions
                     let mut result = Vec::with_capacity(self.column_names.len());
                     result.push(Cow::Borrowed(row[0].as_str()));
 
-                    let field_pairs: Vec<(&str, &str)> = row[1..]
-                        .chunks(2)
-                        .filter_map(|chunk| {
-                            if chunk.len() == 2 {
-                                Some((chunk[0].as_str(), chunk[1].as_str()))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-
                     for col_name in &self.column_names[1..] {
-                        if let Some((_, val)) =
-                            field_pairs.iter().find(|(f, _)| *f == col_name.as_str())
-                        {
-                            result.push(Cow::Owned(val.to_string()));
-                        } else {
-                            result.push(Cow::Owned("NULL".to_string()));
-                        }
+                        let val = row[1..]
+                            .chunks(2)
+                            .find(|chunk| chunk.len() == 2 && chunk[0] == *col_name)
+                            .map(|chunk| Cow::Borrowed(chunk[1].as_str()))
+                            .unwrap_or(Cow::Borrowed("NULL"));
+                        result.push(val);
                     }
                     result
                 } else {
-                    // Legacy: return raw entries
                     row.iter().map(|s| Cow::Borrowed(s.as_str())).collect()
                 }
             })

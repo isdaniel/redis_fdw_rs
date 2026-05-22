@@ -446,11 +446,10 @@ mod tests {
         assert_eq!(count, 3, "Expected 3 hash entries after COPY FROM");
 
         // Verify specific values
-        let val = Spi::get_one::<String>(
-            "SELECT value FROM colmap_hash_copyprog WHERE field = 'evt:1';",
-        )
-        .unwrap()
-        .unwrap();
+        let val =
+            Spi::get_one::<String>("SELECT value FROM colmap_hash_copyprog WHERE field = 'evt:1';")
+                .unwrap()
+                .unwrap();
         assert_eq!(val, "click_home");
 
         Spi::run("DROP FOREIGN TABLE colmap_hash_copyprog;").unwrap();
