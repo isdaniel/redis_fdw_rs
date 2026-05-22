@@ -169,8 +169,8 @@ impl RedisStreamTable {
                     })
                     .collect();
 
-            let mut filtered_entries = Vec::new();
-            let mut filtered_flat = Vec::new();
+            let mut filtered_entries = Vec::with_capacity(self.entries.len());
+            let mut filtered_flat = Vec::with_capacity(self.entries.len());
 
             for entry in &self.entries {
                 let matches = non_id_conditions.iter().enumerate().all(|(i, cond)| {
