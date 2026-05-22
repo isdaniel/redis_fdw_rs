@@ -9,6 +9,7 @@ use crate::{
         types::{DataContainer, DataSet, LoadDataResult},
     },
 };
+use std::borrow::Cow;
 
 /// Redis String table type
 #[derive(Debug, Clone, Default)]
@@ -137,6 +138,34 @@ impl RedisTableOperations for RedisStringTable {
 
     fn get_dataset(&self) -> &DataSet {
         &self.dataset
+    }
+
+    /// Override get_row to handle multi-key filtered data format [key, value, key, value, ...]
+    #[inline]
+    fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
+        match &self.dataset {
+            DataSet::Filtered(data) if data.len() >= 2 && data.len() % 2 == 0 => {
+                let data_index = index * 2;
+                if data_index + 1 < data.len() {
+                    Some(vec![
+                        Cow::Borrowed(data[data_index].as_str()),
+                        Cow::Borrowed(data[data_index + 1].as_str()),
+                    ])
+                } else {
+                    None
+                }
+            }
+            _ => self.dataset.get_row(index),
+        }
+    }
+
+    /// Override data_len to handle multi-key filtered data format
+    #[inline]
+    fn data_len(&self) -> usize {
+        match &self.dataset {
+            DataSet::Filtered(data) if data.len() >= 2 && data.len() % 2 == 0 => data.len() / 2,
+            _ => self.dataset.len(),
+        }
     }
 
     fn insert(
