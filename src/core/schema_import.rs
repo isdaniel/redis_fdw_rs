@@ -369,64 +369,105 @@ pub(crate) unsafe extern "C-unwind" fn acquire_sample_rows(
                 result.push(vec![key.clone(), val]);
             }
         } else {
-            for key in &keys {
-                if result.len() >= max_per_key {
-                    break;
+            const PIPE_BATCH: usize = 1000;
+            match table_type_str {
+                "hash" => {
+                    for batch in keys.chunks(PIPE_BATCH) {
+                        if result.len() >= max_per_key {
+                            break;
+                        }
+                        let mut pipe = redis::pipe();
+                        for key in batch {
+                            pipe.cmd("HSCAN").arg(key).arg(0u64).arg("COUNT").arg(100u64);
+                        }
+                        let results: Vec<(u64, Vec<String>)> =
+                            pipe.query(conn_like).unwrap_or_default();
+                        for (key, (_, vals)) in batch.iter().zip(results) {
+                            for chunk in vals.chunks(2) {
+                                if chunk.len() == 2 && result.len() < max_per_key {
+                                    result.push(vec![
+                                        key.clone(),
+                                        chunk[0].clone(),
+                                        chunk[1].clone(),
+                                    ]);
+                                }
+                            }
+                        }
+                    }
                 }
-                let remaining = max_per_key - result.len();
-                match table_type_str {
-                    "hash" => {
-                        let (_, vals): (u64, Vec<String>) = redis::cmd("HSCAN")
-                            .arg(key)
-                            .arg(0u64)
-                            .arg("COUNT")
-                            .arg(remaining)
-                            .query(conn_like)
-                            .unwrap_or((0, Vec::new()));
-                        for chunk in vals.chunks(2).take(remaining) {
-                            if chunk.len() == 2 {
-                                result.push(vec![key.clone(), chunk[0].clone(), chunk[1].clone()]);
+                "list" => {
+                    for batch in keys.chunks(PIPE_BATCH) {
+                        if result.len() >= max_per_key {
+                            break;
+                        }
+                        let mut pipe = redis::pipe();
+                        for key in batch {
+                            let remaining = (max_per_key - result.len()).min(100) as i64;
+                            pipe.cmd("LRANGE").arg(key).arg(0i64).arg(remaining - 1);
+                        }
+                        let results: Vec<Vec<String>> =
+                            pipe.query(conn_like).unwrap_or_default();
+                        for (key, vals) in batch.iter().zip(results) {
+                            for v in vals {
+                                if result.len() >= max_per_key {
+                                    break;
+                                }
+                                result.push(vec![key.clone(), v]);
                             }
                         }
                     }
-                    "list" => {
-                        let vals: Vec<String> = redis::cmd("LRANGE")
-                            .arg(key)
-                            .arg(0i64)
-                            .arg((remaining as i64) - 1)
-                            .query(conn_like)
-                            .unwrap_or_default();
-                        for v in vals {
-                            result.push(vec![key.clone(), v]);
+                }
+                "set" => {
+                    for batch in keys.chunks(PIPE_BATCH) {
+                        if result.len() >= max_per_key {
+                            break;
                         }
-                    }
-                    "set" => {
-                        let (_, vals): (u64, Vec<String>) = redis::cmd("SSCAN")
-                            .arg(key)
-                            .arg(0u64)
-                            .arg("COUNT")
-                            .arg(remaining)
-                            .query(conn_like)
-                            .unwrap_or((0, Vec::new()));
-                        for v in vals.into_iter().take(remaining) {
-                            result.push(vec![key.clone(), v]);
+                        let mut pipe = redis::pipe();
+                        for key in batch {
+                            pipe.cmd("SSCAN").arg(key).arg(0u64).arg("COUNT").arg(100u64);
                         }
-                    }
-                    "zset" => {
-                        let vals: Vec<String> = redis::cmd("ZRANGE")
-                            .arg(key)
-                            .arg(0i64)
-                            .arg((remaining as i64) - 1)
-                            .arg("WITHSCORES")
-                            .query(conn_like)
-                            .unwrap_or_default();
-                        for chunk in vals.chunks(2) {
-                            if chunk.len() == 2 {
-                                result.push(vec![key.clone(), chunk[0].clone(), chunk[1].clone()]);
+                        let results: Vec<(u64, Vec<String>)> =
+                            pipe.query(conn_like).unwrap_or_default();
+                        for (key, (_, vals)) in batch.iter().zip(results) {
+                            for v in vals {
+                                if result.len() >= max_per_key {
+                                    break;
+                                }
+                                result.push(vec![key.clone(), v]);
                             }
                         }
                     }
-                    _ => {
+                }
+                "zset" => {
+                    for batch in keys.chunks(PIPE_BATCH) {
+                        if result.len() >= max_per_key {
+                            break;
+                        }
+                        let mut pipe = redis::pipe();
+                        for key in batch {
+                            pipe.cmd("ZRANGE")
+                                .arg(key)
+                                .arg(0i64)
+                                .arg(99i64)
+                                .arg("WITHSCORES");
+                        }
+                        let results: Vec<Vec<String>> =
+                            pipe.query(conn_like).unwrap_or_default();
+                        for (key, vals) in batch.iter().zip(results) {
+                            for chunk in vals.chunks(2) {
+                                if chunk.len() == 2 && result.len() < max_per_key {
+                                    result.push(vec![
+                                        key.clone(),
+                                        chunk[0].clone(),
+                                        chunk[1].clone(),
+                                    ]);
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    for key in &keys {
                         result.push(vec![key.clone()]);
                     }
                 }

@@ -609,8 +609,8 @@ impl RedisFdwState {
                     }
                     for (member, score) in items {
                         all_rows.push(key.clone());
-                        all_rows.push(score.to_string());
                         all_rows.push(member);
+                        all_rows.push(score.to_string());
                     }
                 }
             }
