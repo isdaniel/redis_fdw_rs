@@ -126,7 +126,7 @@ impl RedisTableOperations for RedisZSetTable {
             // Score conditions are left to PostgreSQL's post-filter
             let member_conditions: Vec<PushableCondition> = conditions
                 .iter()
-                .filter(|c| c.column_name != "score")
+                .filter(|c| c.column_index == 0)
                 .cloned()
                 .collect();
 
@@ -411,7 +411,7 @@ impl RedisTableOperations for RedisZSetTable {
     ) -> Result<(u64, usize), redis::RedisError> {
         // Filter out score conditions — Redis ZSCAN can only match on member names
         let member_conditions: Option<Vec<&PushableCondition>> =
-            conditions.map(|conds| conds.iter().filter(|c| c.column_name != "score").collect());
+            conditions.map(|conds| conds.iter().filter(|c| c.column_index == 0).collect());
         let member_conds: Option<&[&PushableCondition]> = member_conditions.as_deref();
 
         let mut cmd = redis::cmd("ZSCAN");

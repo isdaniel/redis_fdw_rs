@@ -307,6 +307,7 @@ mod tests {
         use crate::query::pushdown_types::{ComparisonOperator, PushableCondition};
         let condition = PushableCondition {
             column_name: "id".to_string(),
+            column_index: 0,
             operator: ComparisonOperator::Equal,
             value: "2000000000000-0".to_string(),
         };
@@ -432,6 +433,7 @@ mod tests {
         use crate::query::pushdown_types::PushableCondition;
         let condition = PushableCondition {
             column_name: "stream_id".to_string(),
+            column_index: 0,
             operator: ComparisonOperator::Equal,
             value: id1.clone(),
         };
@@ -445,13 +447,18 @@ mod tests {
             &LimitOffsetInfo::default(),
         );
         assert!(result.is_ok());
-        assert_eq!(table2.data_len(), 1, "XRANGE by stream_id should return 1 row");
+        assert_eq!(
+            table2.data_len(),
+            1,
+            "XRANGE by stream_id should return 1 row"
+        );
         let row = table2.get_row(0).unwrap();
         assert_eq!(row[0].as_ref(), id1.as_str());
 
         // WHERE user_id = 'user:alice' should NOT be treated as stream ID
         let condition2 = PushableCondition {
             column_name: "user_id".to_string(),
+            column_index: 1,
             operator: ComparisonOperator::Equal,
             value: "user:alice".to_string(),
         };
@@ -563,6 +570,7 @@ mod tests {
         use crate::query::pushdown_types::PushableCondition;
         let condition = PushableCondition {
             column_name: "user_id".to_string(),
+            column_index: 1,
             operator: ComparisonOperator::Equal,
             value: "user:alice".to_string(),
         };
@@ -575,7 +583,10 @@ mod tests {
             Some(&[condition]),
             &LimitOffsetInfo::default(),
         );
-        assert!(result.is_ok(), "load_data with non-ID WHERE should not error");
+        assert!(
+            result.is_ok(),
+            "load_data with non-ID WHERE should not error"
+        );
         assert_eq!(table2.data_len(), 2, "Expected 2 rows for user:alice");
 
         // Verify filtered rows
@@ -587,6 +598,7 @@ mod tests {
         // Test WHERE action = 'CREATE'
         let condition2 = PushableCondition {
             column_name: "action".to_string(),
+            column_index: 2,
             operator: ComparisonOperator::Equal,
             value: "CREATE".to_string(),
         };
@@ -599,7 +611,10 @@ mod tests {
             Some(&[condition2]),
             &LimitOffsetInfo::default(),
         );
-        assert!(result2.is_ok(), "load_data with action WHERE should not error");
+        assert!(
+            result2.is_ok(),
+            "load_data with action WHERE should not error"
+        );
         assert_eq!(table3.data_len(), 2, "Expected 2 rows for action=CREATE");
 
         let row0 = table3.get_row(0).unwrap();
@@ -648,6 +663,7 @@ mod tests {
         use crate::query::pushdown_types::PushableCondition;
         let condition = PushableCondition {
             column_name: "user_id".to_string(),
+            column_index: 1,
             operator: ComparisonOperator::Equal,
             value: "user:alice".to_string(),
         };
@@ -668,6 +684,7 @@ mod tests {
         // Test WHERE action = 'CREATE' via load_batch
         let condition2 = PushableCondition {
             column_name: "action".to_string(),
+            column_index: 2,
             operator: ComparisonOperator::Equal,
             value: "CREATE".to_string(),
         };
@@ -727,6 +744,7 @@ mod tests {
         use crate::query::pushdown_types::PushableCondition;
         let condition = PushableCondition {
             column_name: "id".to_string(),
+            column_index: 0,
             operator: ComparisonOperator::Equal,
             value: id1.clone(),
         };

@@ -456,6 +456,7 @@ mod tests {
     fn test_pushable_condition_creation() {
         let condition = PushableCondition {
             column_name: "field".to_string(),
+            column_index: 0,
             operator: ComparisonOperator::Equal,
             value: "test_value".to_string(),
         };

@@ -355,31 +355,6 @@ impl PoolManager {
         Ok(pool)
     }
 
-    /// Get or create a pool based on connection type auto-detection
-    ///
-    /// This is the recommended method for external callers who want automatic
-    /// detection of single vs cluster mode based on the host_port format.
-    pub fn get_or_create_pool(
-        &mut self,
-        host_port: &str,
-        database: i64,
-        auth_config: &RedisAuthConfig,
-        pool_config: &PoolConfig,
-    ) -> Result<RedisPool, PoolError> {
-        match RedisConnectionType::from_host_port(host_port) {
-            RedisConnectionType::Single => {
-                let pool =
-                    self.get_or_create_single_pool(host_port, database, auth_config, pool_config)?;
-                Ok(RedisPool::Single(pool))
-            }
-            RedisConnectionType::Cluster => {
-                let pool =
-                    self.get_or_create_cluster_pool(host_port, database, auth_config, pool_config)?;
-                Ok(RedisPool::Cluster(pool))
-            }
-        }
-    }
-
     /// Get the number of cached single-node pools (for testing/monitoring)
     #[cfg(any(test, feature = "pg_test"))]
     pub fn single_pool_count(&self) -> usize {
@@ -499,11 +474,13 @@ pub fn get_pooled_connection(
     let mut writer = manager.write().map_err(|_| PoolError::LockPoisoned)?;
     let pool = match conn_type {
         RedisConnectionType::Single => {
-            let p = writer.get_or_create_single_pool(host_port, database, auth_config, pool_config)?;
+            let p =
+                writer.get_or_create_single_pool(host_port, database, auth_config, pool_config)?;
             RedisPool::Single(p)
         }
         RedisConnectionType::Cluster => {
-            let p = writer.get_or_create_cluster_pool(host_port, database, auth_config, pool_config)?;
+            let p =
+                writer.get_or_create_cluster_pool(host_port, database, auth_config, pool_config)?;
             RedisPool::Cluster(p)
         }
     };

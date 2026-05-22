@@ -45,7 +45,10 @@ impl RedisStreamTable {
     }
 
     fn id_column_name(&self) -> &str {
-        self.column_names.first().map(|s| s.as_str()).unwrap_or("id")
+        self.column_names
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("id")
     }
 
     fn is_id_column(&self, column_name: &str) -> bool {
@@ -138,13 +141,10 @@ impl RedisStreamTable {
 
         for condition in &scan_conditions.exact_conditions {
             if self.is_id_column(&condition.column_name) {
-                match condition.operator {
-                    ComparisonOperator::Equal => {
-                        start_id = condition.value.clone();
-                        end_id = condition.value.clone();
-                        count = Some(1);
-                    }
-                    _ => {}
+                if condition.operator == ComparisonOperator::Equal {
+                    start_id = condition.value.clone();
+                    end_id = condition.value.clone();
+                    count = Some(1);
                 }
             } else {
                 non_id_conditions.push(condition);
@@ -170,7 +170,12 @@ impl RedisStreamTable {
                 non_id_conditions
                     .iter()
                     .filter(|c| c.operator == ComparisonOperator::Like)
-                    .map(|c| (*c, crate::query::scan_ops::PatternMatcher::from_like_pattern(&c.value)))
+                    .map(|c| {
+                        (
+                            *c,
+                            crate::query::scan_ops::PatternMatcher::from_like_pattern(&c.value),
+                        )
+                    })
                     .collect();
 
             let mut filtered_entries = Vec::new();
@@ -442,7 +447,12 @@ impl RedisTableOperations for RedisStreamTable {
 
         // Collect non-ID conditions for client-side filtering
         let non_id_conds: Vec<&PushableCondition> = conditions
-            .map(|conds| conds.iter().filter(|c| !self.is_id_column(&c.column_name)).collect())
+            .map(|conds| {
+                conds
+                    .iter()
+                    .filter(|c| !self.is_id_column(&c.column_name))
+                    .collect()
+            })
             .unwrap_or_default();
 
         // Pre-calculate PatternMatchers for LIKE conditions (index-based)

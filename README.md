@@ -11,7 +11,7 @@ A high-performance Redis Foreign Data Wrapper (FDW) for PostgreSQL written in Ru
 - **WHERE pushdown**: Conditions executed directly in Redis (HGET/HMGET, SISMEMBER, etc.)
 - **TTL support**: Table-level default + per-row override via virtual `ttl` column
 - **Multi-key patterns**: Glob patterns (`*`, `?`, `[`) in `table_key_prefix` to query multiple keys
-- **DDL validation**: Option validator checks all options at CREATE time; column count validated at query time
+- **DDL validation**: Column count validated at `CREATE FOREIGN TABLE` time via `object_access_hook`; option validator checks all options at CREATE time
 - **Parameterized JOINs**: Point-lookup optimization for FDW-to-local JOINs (HGET, SISMEMBER, ZSCORE)
 - **Stream pagination**: Configurable batch processing for large data sets
 - **EXPLAIN support**: Detailed scan/modify metadata (server, key, pushdown, batch size)
@@ -156,7 +156,7 @@ SERVER redis_server OPTIONS (table_type 'stream', table_key_prefix 'events');
 
 ### Column Constraints
 
-Each Redis type enforces a specific number of data columns. The FDW validates this at first query time and raises a clear error if the table definition is invalid:
+Each Redis type enforces a specific number of data columns. The FDW validates this at `CREATE FOREIGN TABLE` time (via `object_access_hook`) and raises a clear error if the table definition is invalid. Column names are user-chosen — validation is position-based:
 
 | Type    | Min Cols | Max Cols | Expected Columns                      |
 |---------|----------|----------|---------------------------------------|
@@ -169,7 +169,7 @@ Each Redis type enforces a specific number of data columns. The FDW validates th
 
 - **Multi-key mode** (`table_key_prefix` with glob): adds +1 for the key column (first column)
 - **TTL column**: an optional `ttl bigint` column is automatically excluded from validation
-- Validation occurs in `begin_foreign_scan` / `begin_foreign_modify` (first SELECT/INSERT/UPDATE/DELETE)
+- Validation occurs at DDL time (`CREATE FOREIGN TABLE`) and as a safety net at first query
 
 ### Operations
 

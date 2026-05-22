@@ -6,6 +6,7 @@ use crate::query::limit::LimitOffsetInfo;
 #[derive(Debug, Clone)]
 pub struct PushableCondition {
     pub column_name: String,
+    pub column_index: usize,
     pub operator: ComparisonOperator,
     pub value: String,
 }
@@ -119,6 +120,7 @@ mod tests {
         let mut analysis = PushdownAnalysis::new();
         analysis.pushable_conditions.push(PushableCondition {
             column_name: "key".to_string(),
+            column_index: 0,
             operator: ComparisonOperator::Equal,
             value: "test".to_string(),
         });
@@ -132,6 +134,7 @@ mod tests {
         let mut analysis = PushdownAnalysis::new();
         analysis.pushable_conditions.push(PushableCondition {
             column_name: "member".to_string(),
+            column_index: 0,
             operator: ComparisonOperator::Like,
             value: "user:*".to_string(),
         });

@@ -495,4 +495,84 @@ mod tests {
         cleanup_redis_key(key);
         cleanup();
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Custom column names: hash pushdown uses position, not name
+    // ═══════════════════════════════════════════════════════════════════════
+
+    #[pg_test]
+    fn test_hash_custom_column_names_pushdown() {
+        setup_fdw();
+        let key = "colmap_test:hash:custom_push";
+        cleanup_redis_key(key);
+
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE colmap_hash_custom (k text, v text) SERVER {} OPTIONS (
+                database '{}', table_type 'hash', table_key_prefix '{}'
+            );",
+            SERVER_NAME, TEST_DATABASE, key
+        ))
+        .unwrap();
+
+        Spi::run("INSERT INTO colmap_hash_custom (k, v) VALUES ('alpha', '100');").unwrap();
+        Spi::run("INSERT INTO colmap_hash_custom (k, v) VALUES ('beta', '200');").unwrap();
+        Spi::run("INSERT INTO colmap_hash_custom (k, v) VALUES ('gamma', '300');").unwrap();
+
+        // WHERE on first column (k) should push down to HSCAN MATCH
+        let count =
+            Spi::get_one::<i64>("SELECT count(*) FROM colmap_hash_custom WHERE k = 'alpha';")
+                .unwrap()
+                .unwrap();
+        assert_eq!(count, 1);
+
+        // WHERE on second column (v) should be post-filtered by PG, not pushed to Redis
+        let count = Spi::get_one::<i64>("SELECT count(*) FROM colmap_hash_custom WHERE v = '200';")
+            .unwrap()
+            .unwrap();
+        assert_eq!(count, 1);
+
+        Spi::run("DROP FOREIGN TABLE colmap_hash_custom;").unwrap();
+        cleanup_redis_key(key);
+        cleanup();
+    }
+
+    #[pg_test]
+    fn test_zset_custom_column_names_pushdown() {
+        setup_fdw();
+        let key = "colmap_test:zset:custom_push";
+        cleanup_redis_key(key);
+
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE colmap_zset_custom (item text, rank text) SERVER {} OPTIONS (
+                database '{}', table_type 'zset', table_key_prefix '{}'
+            );",
+            SERVER_NAME, TEST_DATABASE, key
+        ))
+        .unwrap();
+
+        Spi::run("INSERT INTO colmap_zset_custom (item, rank) VALUES ('user:alice', '10');")
+            .unwrap();
+        Spi::run("INSERT INTO colmap_zset_custom (item, rank) VALUES ('user:bob', '20');").unwrap();
+        Spi::run("INSERT INTO colmap_zset_custom (item, rank) VALUES ('user:carol', '30');")
+            .unwrap();
+
+        // WHERE on first column (item) should push down to ZSCAN MATCH
+        let count = Spi::get_one::<i64>(
+            "SELECT count(*) FROM colmap_zset_custom WHERE item = 'user:alice';",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(count, 1);
+
+        // WHERE on second column (rank) should be post-filtered by PG
+        let count =
+            Spi::get_one::<i64>("SELECT count(*) FROM colmap_zset_custom WHERE rank = '20';")
+                .unwrap()
+                .unwrap();
+        assert_eq!(count, 1);
+
+        Spi::run("DROP FOREIGN TABLE colmap_zset_custom;").unwrap();
+        cleanup_redis_key(key);
+        cleanup();
+    }
 }

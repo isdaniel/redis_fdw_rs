@@ -26,6 +26,12 @@ pub use core::validator::redis_fdw_validator_wrapper;
 
 ::pgrx::pg_module_magic!(name, version);
 
+#[allow(non_snake_case)]
+#[pgrx::pg_guard]
+pub unsafe extern "C-unwind" fn _PG_init() {
+    core::ddl_hook::init_hook();
+}
+
 /// This module is required by `cargo pgrx test` invocations.
 /// It must be visible at the root of your extension crate.
 #[cfg(test)]
@@ -36,7 +42,6 @@ pub mod pg_test {
 
     #[must_use]
     pub fn postgresql_conf_options() -> Vec<&'static str> {
-        // return any postgresql.conf settings that are required for your tests
-        vec![]
+        vec!["shared_preload_libraries = 'redis_fdw_rs'"]
     }
 }
