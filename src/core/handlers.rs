@@ -477,7 +477,13 @@ extern "C-unwind" fn begin_foreign_scan(
         let relation = (*node).ss.ss_currentRelation;
         let tupdesc = (*relation).rd_att;
         state.ttl_column_index = detect_ttl_column(tupdesc);
-        state.column_names = extract_column_names(tupdesc);
+        let mut col_names = extract_column_names(tupdesc);
+        if let Some(ttl_idx) = state.ttl_column_index {
+            if ttl_idx < col_names.len() {
+                col_names.remove(ttl_idx);
+            }
+        }
+        state.column_names = col_names;
 
         // Configure table types that need column info
         if let RedisTableType::List(ref mut list) = state.table_type {
@@ -789,7 +795,13 @@ unsafe extern "C-unwind" fn begin_foreign_modify(
     let relation = (*rinfo).ri_RelationDesc;
     let tupdesc = (*relation).rd_att;
     state.ttl_column_index = detect_ttl_column(tupdesc);
-    state.column_names = extract_column_names(tupdesc);
+    let mut col_names = extract_column_names(tupdesc);
+    if let Some(ttl_idx) = state.ttl_column_index {
+        if ttl_idx < col_names.len() {
+            col_names.remove(ttl_idx);
+        }
+    }
+    state.column_names = col_names;
 
     // Configure table types that need column info
     if let RedisTableType::List(ref mut list) = state.table_type {
@@ -1034,7 +1046,13 @@ unsafe extern "C-unwind" fn begin_foreign_insert(
 
     let tupdesc = (*relation).rd_att;
     state.ttl_column_index = detect_ttl_column(tupdesc);
-    state.column_names = extract_column_names(tupdesc);
+    let mut col_names = extract_column_names(tupdesc);
+    if let Some(ttl_idx) = state.ttl_column_index {
+        if ttl_idx < col_names.len() {
+            col_names.remove(ttl_idx);
+        }
+    }
+    state.column_names = col_names;
 
     // Configure table types that need column info
     if let RedisTableType::List(ref mut list) = state.table_type {
