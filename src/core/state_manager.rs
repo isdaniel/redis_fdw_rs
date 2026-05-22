@@ -59,6 +59,8 @@ pub struct RedisFdwState {
     pub is_parameterized: bool,
     /// Column index (0-based, after TTL strip) that receives the parameter value
     pub param_column: usize,
+    /// Type OID of the parameter expression 
+    pub param_type_oid: pg_sys::Oid,
     /// ExprState for evaluating the parameterized expression at runtime
     pub param_expr_state: *mut pg_sys::ExprState,
     /// PlanState pointer for expression evaluation context
@@ -93,6 +95,7 @@ impl RedisFdwState {
             column_names: Vec::new(),
             is_parameterized: false,
             param_column: 0,
+            param_type_oid: pg_sys::InvalidOid,
             param_expr_state: std::ptr::null_mut(),
             param_plan_state: std::ptr::null_mut(),
         }

@@ -249,10 +249,12 @@ unsafe extern "C-unwind" fn get_foreign_plan(
 
             if left_is_mine && !right_is_mine && left_var.varattno > 0 {
                 param_col_idx = (left_var.varattno - 1) as usize;
+                state.param_type_oid = pg_sys::exprType(right_arg);
                 fdw_exprs = pg_sys::lappend(fdw_exprs, right_arg as *mut std::ffi::c_void);
                 break;
             } else if right_is_mine && !left_is_mine && right_var.varattno > 0 {
                 param_col_idx = (right_var.varattno - 1) as usize;
+                state.param_type_oid = pg_sys::exprType(left_arg);
                 fdw_exprs = pg_sys::lappend(fdw_exprs, left_arg as *mut std::ffi::c_void);
                 break;
             }
@@ -448,11 +450,7 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
             return slot;
         }
 
-        let param_value = datum_to_text_string(
-            datum,
-            state.param_column,
-            (*(*node).ss.ss_currentRelation).rd_att,
-        );
+        let param_value = datum_to_text_string(datum, state.param_type_oid);
 
         if state.parameterized_lookup(&param_value) {
             let natts_param = (*tupdesc).natts as usize;

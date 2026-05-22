@@ -40,16 +40,7 @@ pub(crate) unsafe fn extract_column_names(tupdesc: pg_sys::TupleDesc) -> Vec<Str
     names
 }
 
-pub(crate) unsafe fn datum_to_text_string(
-    datum: pg_sys::Datum,
-    col_idx: usize,
-    tupdesc: pg_sys::TupleDesc,
-) -> String {
-    use crate::utils::helpers::tuple_desc_attr;
-
-    let attr = tuple_desc_attr(tupdesc, col_idx);
-    let typoid = (*attr).atttypid;
-
+pub(crate) unsafe fn datum_to_text_string(datum: pg_sys::Datum, typoid: pg_sys::Oid) -> String {
     if typoid == pg_sys::TEXTOID || typoid == pg_sys::VARCHAROID || typoid == pg_sys::BPCHAROID {
         let text_ptr = datum.cast_mut_ptr::<pg_sys::varlena>();
         if text_ptr.is_null() {
