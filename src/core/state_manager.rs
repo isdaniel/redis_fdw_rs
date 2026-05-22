@@ -11,9 +11,9 @@ use crate::{
         cost_estimation::{CostEstimate, CostEstimator},
         pushdown_types::{ComparisonOperator, PushdownAnalysis},
     },
-    tables::types::RedisTableType,
+    tables::types::{DataContainer, DataSet, RedisTableType},
 };
-use pgrx::{pg_sys::MemoryContext, prelude::*};
+use pgrx::{pg_sys, pg_sys::MemoryContext, prelude::*};
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -55,6 +55,16 @@ pub struct RedisFdwState {
     pub join_executed: bool,
     /// Column names from the foreign table's tuple descriptor
     pub column_names: Vec<String>,
+    /// Whether this is a parameterized scan (receives join key from outer NestLoop)
+    pub is_parameterized: bool,
+    /// Column index (0-based, after TTL strip) that receives the parameter value
+    pub param_column: usize,
+    /// Type OID of the parameter expression
+    pub param_type_oid: pg_sys::Oid,
+    /// ExprState for evaluating the parameterized expression at runtime
+    pub param_expr_state: *mut pg_sys::ExprState,
+    /// PlanState pointer for expression evaluation context
+    pub param_plan_state: *mut pg_sys::PlanState,
 }
 
 impl RedisFdwState {
@@ -83,6 +93,11 @@ impl RedisFdwState {
             join_state: None,
             join_executed: false,
             column_names: Vec::new(),
+            is_parameterized: false,
+            param_column: 0,
+            param_type_oid: pg_sys::InvalidOid,
+            param_expr_state: std::ptr::null_mut(),
+            param_plan_state: std::ptr::null_mut(),
         }
     }
 
@@ -594,8 +609,8 @@ impl RedisFdwState {
                     }
                     for (member, score) in items {
                         all_rows.push(key.clone());
-                        all_rows.push(score.to_string());
                         all_rows.push(member);
+                        all_rows.push(score.to_string());
                     }
                 }
             }
@@ -1022,6 +1037,116 @@ impl RedisFdwState {
                 redis::ErrorKind::Io,
                 "Redis connection not initialized",
             )))
+        }
+    }
+
+    /// Execute a parameterized point-lookup for a single value.
+    /// Used during NestLoop joins to fetch only the matching row instead of full scan.
+    pub fn parameterized_lookup(&mut self, param_value: &str) -> bool {
+        let conn = match self.redis_connection.as_mut() {
+            Some(c) => c.as_connection_like_mut(),
+            None => return false,
+        };
+
+        match &mut self.table_type {
+            RedisTableType::Hash(ref mut t) => {
+                // param_column == 0 means lookup by field name → HGET
+                if self.param_column == 0 {
+                    let val: Option<String> = match redis::cmd("HGET")
+                        .arg(&self.table_key_prefix)
+                        .arg(param_value)
+                        .query(conn)
+                    {
+                        Ok(v) => v,
+                        Err(e) => {
+                            pgrx::warning!(
+                                "redis_fdw: HGET failed during parameterized lookup: {}",
+                                e
+                            );
+                            None
+                        }
+                    };
+                    if let Some(v) = val {
+                        t.dataset = DataSet::Filtered(vec![param_value.to_string(), v]);
+                        return true;
+                    }
+                    t.dataset = DataSet::Empty;
+                }
+                false
+            }
+            RedisTableType::Set(ref mut t) => {
+                let exists: bool = match redis::cmd("SISMEMBER")
+                    .arg(&self.table_key_prefix)
+                    .arg(param_value)
+                    .query(conn)
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        pgrx::warning!(
+                            "redis_fdw: SISMEMBER failed during parameterized lookup: {}",
+                            e
+                        );
+                        false
+                    }
+                };
+                if exists {
+                    t.dataset = DataSet::Filtered(vec![param_value.to_string()]);
+                    true
+                } else {
+                    t.dataset = DataSet::Empty;
+                    false
+                }
+            }
+            RedisTableType::ZSet(ref mut t) => {
+                // param_column == 0 means lookup by member → ZSCORE
+                if self.param_column == 0 {
+                    let score: Option<f64> = match redis::cmd("ZSCORE")
+                        .arg(&self.table_key_prefix)
+                        .arg(param_value)
+                        .query(conn)
+                    {
+                        Ok(v) => v,
+                        Err(e) => {
+                            pgrx::warning!(
+                                "redis_fdw: ZSCORE failed during parameterized lookup: {}",
+                                e
+                            );
+                            None
+                        }
+                    };
+                    if let Some(s) = score {
+                        t.dataset = DataSet::Complete(DataContainer::ZSet(vec![(
+                            param_value.to_string(),
+                            s,
+                        )]));
+                        return true;
+                    }
+                    t.dataset = DataSet::Empty;
+                }
+                false
+            }
+            RedisTableType::String(ref mut t) => {
+                // Multi-key mode: param_column == 0 means lookup by key → GET
+                if self.is_multi_key && self.param_column == 0 {
+                    let val: Option<String> = match redis::cmd("GET").arg(param_value).query(conn) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            pgrx::warning!(
+                                "redis_fdw: GET failed during parameterized lookup: {}",
+                                e
+                            );
+                            None
+                        }
+                    };
+                    if let Some(v) = val {
+                        t.dataset = DataSet::Filtered(vec![param_value.to_string(), v]);
+                        return true;
+                    }
+                    t.dataset = DataSet::Empty;
+                }
+                false
+            }
+            _ => false,
         }
     }
 }

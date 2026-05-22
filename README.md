@@ -11,7 +11,8 @@ A high-performance Redis Foreign Data Wrapper (FDW) for PostgreSQL written in Ru
 - **WHERE pushdown**: Conditions executed directly in Redis (HGET/HMGET, SISMEMBER, etc.)
 - **TTL support**: Table-level default + per-row override via virtual `ttl` column
 - **Multi-key patterns**: Glob patterns (`*`, `?`, `[`) in `table_key_prefix` to query multiple keys
-- **DDL validation**: Option validator checks all options at CREATE time
+- **DDL validation**: Option validator checks all options at CREATE time; column count validated at query time
+- **Parameterized JOINs**: Point-lookup optimization for FDW-to-local JOINs (HGET, SISMEMBER, ZSCORE)
 - **Stream pagination**: Configurable batch processing for large data sets
 - **EXPLAIN support**: Detailed scan/modify metadata (server, key, pushdown, batch size)
 - **Batch INSERT**: Pipelined multi-row inserts via `ExecForeignBatchInsert` (configurable `batch_size`)
@@ -152,6 +153,23 @@ SERVER redis_server OPTIONS (table_type 'zset', table_key_prefix 'leaderboard');
 CREATE FOREIGN TABLE redis_stream (stream_id TEXT, event_type TEXT, event_data TEXT)
 SERVER redis_server OPTIONS (table_type 'stream', table_key_prefix 'events');
 ```
+
+### Column Constraints
+
+Each Redis type enforces a specific number of data columns. The FDW validates this at first query time and raises a clear error if the table definition is invalid:
+
+| Type    | Min Cols | Max Cols | Expected Columns                      |
+|---------|----------|----------|---------------------------------------|
+| string  | 1        | 1        | `value`                               |
+| hash    | 2        | 2        | `field, value`                        |
+| list    | 1        | 2        | `element` or `index, element`         |
+| set     | 1        | 1        | `member`                              |
+| zset    | 2        | 2        | `member, score`                       |
+| stream  | 2        | ∞        | `stream_id, field1[, field2, ...]`    |
+
+- **Multi-key mode** (`table_key_prefix` with glob): adds +1 for the key column (first column)
+- **TTL column**: an optional `ttl bigint` column is automatically excluded from validation
+- Validation occurs in `begin_foreign_scan` / `begin_foreign_modify` (first SELECT/INSERT/UPDATE/DELETE)
 
 ### Operations
 
@@ -434,7 +452,7 @@ redis_fdw_rs=#  SELECT * FROM user_profiles where key like '555%';
 
 ### FDW-to-Local Table JOINs
 
-Redis foreign tables can be joined with regular PostgreSQL tables using standard nested-loop plans:
+Redis foreign tables can be joined with regular PostgreSQL tables. The FDW advertises parameterized paths for point-lookup columns, enabling O(1) per-row lookups instead of full rescans:
 
 ```sql
 SELECT u.name, r.value
@@ -442,7 +460,13 @@ FROM users u
 JOIN redis_hash_table r ON u.key = r.field;
 ```
 
-The FDW provides accurate cardinality estimates to PostgreSQL's planner, enabling optimal join strategy selection. Each outer row triggers a full rescan of the Redis table.
+**Parameterized path support** (O(1) per outer row):
+- Hash: join on `field` column → HGET
+- Set: join on `member` column → SISMEMBER
+- ZSet: join on `member` column → ZSCORE
+- String (multi-key): join on `key` column → GET
+
+When the planner cannot use a parameterized path (e.g., join on a non-lookup column), it falls back to the standard nested-loop with full rescan.
 
 ### FDW-to-FDW JOINs (Same Server Pushdown)
 

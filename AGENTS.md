@@ -9,6 +9,8 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 **Feature-complete for all CRUD operations plus EXPLAIN, batch INSERT, TRUNCATE, IMPORT FOREIGN SCHEMA, ANALYZE, and COPY FROM.** All Redis types (String, Hash, List, Set, ZSet) support SELECT, INSERT, UPDATE, DELETE, TRUNCATE. Stream supports SELECT, INSERT, DELETE, TRUNCATE only (append-only by design).
 
 ### Recent Work
+- Column validation: `validate_column_count()` enforces per-type column constraints at first query time (string=1, hash=2, list=1-2, set=1, zset=2, stream=2+)
+- Parameterized JOIN paths: `get_foreign_paths` advertises O(1) point-lookup paths for FDW-to-local JOINs (HGET, SISMEMBER, ZSCORE)
 - JOIN support: FDW-to-FDW join pushdown for same-server tables with automatic join column detection from query clauses
 - Connection pool optimization: planning phase now connects to Redis for real cardinality statistics
 - FDW lifecycle refactoring: batch insert logic moved to `state_manager.batch_insert_data()`; handlers is now a thin dispatch layer
@@ -34,7 +36,7 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 
 ### Known Issues
 - Cluster integration tests (9 tests) fail without Redis Cluster infrastructure running
-- All non-cluster tests pass (including 16 JOIN tests and 4 pool performance tests)
+- All non-cluster tests pass (including 23 JOIN tests, 16 column validation tests, and 4 pool performance tests)
 
 ## How to Work on This Project
 
@@ -67,12 +69,16 @@ make setup-redis
 # Run join-specific tests
 cargo pgrx test pg16 join_tests
 
+# Run column validation tests
+cargo pgrx test pg16 column_validation_tests
+
 # Run pool performance tests
 cargo pgrx test pg16 pool_performance
 ```
 
 JOIN tests create temporary local tables + Redis foreign tables and verify:
 - FDW-to-local INNER/LEFT JOINs return correct row counts
+- FDW-to-local parameterized path point-lookups (HGET/SISMEMBER/ZSCORE)
 - FDW-to-FDW same-server joins work with automatic column detection
 - Cross-type FDW-to-FDW joins (e.g., hash.field = zset.member)
 - JOIN + WHERE pushdown combinations
@@ -95,14 +101,20 @@ JOIN tests create temporary local tables + Redis foreign tables and verify:
 1. If it's a new Redis operation, implement it on `RedisTableOperations` trait in `src/tables/interface.rs`
 2. Add implementation for each type in `src/tables/implementations/{type}.rs`
 3. Add dispatch in `src/tables/types.rs` (use existing macro pattern)
-4. Wire the FDW callback in `src/core/handlers.rs`
-5. Add state management method in `src/core/state_manager.rs` if needed
-6. Add tests in `src/tests/`
+4. Wire the FDW callback in `src/core/handlers.rs` (registration) — implementation logic goes in the appropriate submodule (`join_handlers.rs`, `explain.rs`, `schema_import.rs`, `truncate.rs`)
+5. Shared column/TTL utilities go in `src/core/column_utils.rs`
+6. Add state management method in `src/core/state_manager.rs` if needed
+7. Add tests in `src/tests/`
 
 ### Key Files to Understand First
 | File | Purpose |
 |------|---------|
-| `src/core/handlers.rs` | All PostgreSQL FDW callbacks — the entry point for everything |
+| `src/core/handlers.rs` | FDW callback registration + core scan/modify flow |
+| `src/core/join_handlers.rs` | Join pushdown: parameterized paths, FDW-to-FDW join planning/execution |
+| `src/core/explain.rs` | EXPLAIN output for scan and modify operations |
+| `src/core/schema_import.rs` | IMPORT FOREIGN SCHEMA + ANALYZE + acquire_sample_rows |
+| `src/core/truncate.rs` | TRUNCATE implementation (UNLINK / SCAN+UNLINK) |
+| `src/core/column_utils.rs` | Shared utilities: TTL detection, column validation, data transformation |
 | `src/core/validator.rs` | DDL-time option validation (VALIDATOR function) |
 | `src/tables/interface.rs` | The `RedisTableOperations` trait — defines what each type must implement |
 | `src/tables/types.rs` | `RedisTableType` enum + dispatch methods |
@@ -114,7 +126,7 @@ JOIN tests create temporary local tables + Redis foreign tables and verify:
 PostgreSQL Query
     │
     ▼
-FDW Callbacks (handlers.rs)
+FDW Callbacks (handlers.rs — registration + core scan/modify)
     │
     ├── Planning: get_foreign_rel_size → get_foreign_paths → get_foreign_plan
     │       └── cost_estimation.rs, pushdown.rs
@@ -122,7 +134,7 @@ FDW Callbacks (handlers.rs)
     ├── Scanning: begin_foreign_scan → iterate → recheck → shutdown → end_foreign_scan
     │       └── state_manager.rs → RedisTableType dispatch → implementations/*
     │
-    ├── Explain: explain_foreign_scan, explain_foreign_modify
+    ├── Explain (explain.rs): explain_foreign_scan, explain_foreign_modify
     │       └── Reports server, key, type, pushdown, batch size, rows fetched
     │
     ├── Modify: begin_foreign_modify → exec_foreign_{insert,update,delete}
@@ -134,20 +146,22 @@ FDW Callbacks (handlers.rs)
     ├── Batch Insert: get_foreign_modify_batch_size → exec_foreign_batch_insert
     │       └── state_manager.batch_insert_data() — pipelines rows into Redis
     │
-    ├── Truncate: exec_foreign_truncate
+    ├── Truncate (truncate.rs): exec_foreign_truncate
     │       └── UNLINK (single-key) or SCAN+UNLINK (multi-key pattern)
     │
-    ├── Import Schema: import_foreign_schema
+    ├── Import Schema (schema_import.rs): import_foreign_schema
     │       └── SCAN → TYPE pipeline → group by prefix → generate DDL
     │
-    ├── Analyze: analyze_foreign_table → acquire_sample_rows
+    ├── Analyze (schema_import.rs): analyze_foreign_table → acquire_sample_rows
     │       └── Enables ANALYZE for query planning (HLEN/SCARD/ZCARD/XLEN + sampling)
     │
-    └── Join Pushdown: get_foreign_join_paths → plan_foreign_join → begin_foreign_join_scan
-            └── Same-server detection → hash-join execution (build/probe) → iterate results
-                    │
-                    ▼
-              Redis (via R2D2 pool_manager.rs)
+    ├── Join Pushdown (join_handlers.rs): get_foreign_join_paths → plan_foreign_join → begin_foreign_join_scan
+    │       └── Same-server detection → hash-join execution (build/probe) → iterate results
+    │
+    └── Column Utilities (column_utils.rs): TTL detection, column validation, data transformation
+            │
+            ▼
+      Redis (via R2D2 pool_manager.rs)
 ```
 
 ## Conventions

@@ -855,4 +855,227 @@ mod tests {
         flush_key("batch:regr:hash");
         teardown();
     }
+
+    #[pg_test]
+    fn test_import_foreign_schema_stream_not_multi_key() {
+        setup();
+        setup_import_server();
+        flush_pattern("impstream:*");
+
+        let client = redis::Client::open(format!("redis://{REDIS_HOST_PORT}")).unwrap();
+        let mut conn = client.get_connection().unwrap();
+        let _: () = redis::cmd("SELECT")
+            .arg(TEST_DATABASE)
+            .query(&mut conn)
+            .unwrap();
+
+        // Create two stream keys with shared prefix
+        let _: () = redis::cmd("XADD")
+            .arg("impstream:events:1")
+            .arg("*")
+            .arg("action")
+            .arg("click")
+            .query(&mut conn)
+            .unwrap();
+        let _: () = redis::cmd("XADD")
+            .arg("impstream:events:2")
+            .arg("*")
+            .arg("action")
+            .arg("scroll")
+            .query(&mut conn)
+            .unwrap();
+
+        Spi::run("CREATE SCHEMA IF NOT EXISTS import_stream_test;").unwrap();
+
+        let result = Spi::run(&format!(
+            "IMPORT FOREIGN SCHEMA \"public\" FROM SERVER {IMPORT_SERVER_NAME} INTO import_stream_test;"
+        ));
+        assert!(
+            result.is_ok(),
+            "IMPORT FOREIGN SCHEMA with streams should succeed: {:?}",
+            result.err()
+        );
+
+        // Each stream should get its own table (not grouped by prefix)
+        // Verify by querying one of the imported tables
+        let tables: Vec<String> = Spi::connect(|client| {
+            let mut tables = Vec::new();
+            let query = "SELECT foreign_table_name::text FROM information_schema.foreign_tables \
+                         WHERE foreign_table_schema = 'import_stream_test' \
+                         AND foreign_table_name::text LIKE 'impstream%' \
+                         ORDER BY foreign_table_name;";
+            let result = client.select(query, None, &[]).unwrap();
+            for row in result {
+                if let Some(name) = row.get::<&str>(1).unwrap() {
+                    tables.push(name.to_string());
+                }
+            }
+            tables
+        });
+
+        // Should have 2 separate stream tables (one per key), not 1 grouped table
+        assert!(
+            tables.len() >= 2,
+            "Expected at least 2 stream tables (one per key), got {}: {:?}",
+            tables.len(),
+            tables
+        );
+
+        // Verify the imported stream tables are queryable (not multi-key, so no validation error)
+        for table_name in &tables {
+            let query = format!(
+                "SELECT COUNT(*) FROM import_stream_test.\"{}\";",
+                table_name
+            );
+            let cnt = Spi::get_one::<i64>(&query).unwrap().unwrap();
+            assert!(
+                cnt >= 1,
+                "Stream table {} should have at least 1 entry",
+                table_name
+            );
+        }
+
+        let _ = Spi::run("DROP SCHEMA IF EXISTS import_stream_test CASCADE;");
+        flush_pattern("impstream:*");
+        teardown();
+    }
+
+    #[pg_test]
+    fn test_import_foreign_schema_derive_prefix_no_colon() {
+        setup();
+        setup_import_server();
+        flush_pattern("simplekey*");
+
+        let client = redis::Client::open(format!("redis://{REDIS_HOST_PORT}")).unwrap();
+        let mut conn = client.get_connection().unwrap();
+        let _: () = redis::cmd("SELECT")
+            .arg(TEST_DATABASE)
+            .query(&mut conn)
+            .unwrap();
+
+        // Create a key without colon separator
+        let _: () = redis::cmd("SET")
+            .arg("simplekey")
+            .arg("hello")
+            .query(&mut conn)
+            .unwrap();
+
+        Spi::run("CREATE SCHEMA IF NOT EXISTS import_simple_test;").unwrap();
+
+        let result = Spi::run(&format!(
+            "IMPORT FOREIGN SCHEMA \"public\" FROM SERVER {IMPORT_SERVER_NAME} INTO import_simple_test;"
+        ));
+        assert!(
+            result.is_ok(),
+            "IMPORT should succeed for keys without colon: {:?}",
+            result.err()
+        );
+
+        // The table should be queryable and return the value
+        let tables: Vec<String> = Spi::connect(|client| {
+            let mut tables = Vec::new();
+            let query = "SELECT foreign_table_name::text FROM information_schema.foreign_tables \
+                         WHERE foreign_table_schema = 'import_simple_test' \
+                         AND foreign_table_name::text LIKE 'simplekey%';";
+            let result = client.select(query, None, &[]).unwrap();
+            for row in result {
+                if let Some(name) = row.get::<&str>(1).unwrap() {
+                    tables.push(name.to_string());
+                }
+            }
+            tables
+        });
+
+        assert!(
+            !tables.is_empty(),
+            "Should have imported at least one table for 'simplekey'"
+        );
+
+        // Query the imported table — should return data
+        let query = format!("SELECT COUNT(*) FROM import_simple_test.\"{}\";", tables[0]);
+        let cnt = Spi::get_one::<i64>(&query).unwrap().unwrap();
+        assert!(cnt >= 1, "Imported table should have data");
+
+        let _ = Spi::run("DROP SCHEMA IF EXISTS import_simple_test CASCADE;");
+        flush_pattern("simplekey*");
+        teardown();
+    }
+
+    #[pg_test]
+    fn test_import_foreign_schema_zset_column_order() {
+        setup();
+        setup_import_server();
+        flush_pattern("impzset:*");
+
+        let client = redis::Client::open(format!("redis://{REDIS_HOST_PORT}")).unwrap();
+        let mut conn = client.get_connection().unwrap();
+        let _: () = redis::cmd("SELECT")
+            .arg(TEST_DATABASE)
+            .query(&mut conn)
+            .unwrap();
+
+        // Create a zset with known member/score
+        let _: () = redis::cmd("ZADD")
+            .arg("impzset:scores:1")
+            .arg(42.5f64)
+            .arg("alice")
+            .query(&mut conn)
+            .unwrap();
+
+        Spi::run("CREATE SCHEMA IF NOT EXISTS import_zset_test;").unwrap();
+
+        let result = Spi::run(&format!(
+            "IMPORT FOREIGN SCHEMA \"public\" FROM SERVER {IMPORT_SERVER_NAME} INTO import_zset_test;"
+        ));
+        assert!(
+            result.is_ok(),
+            "IMPORT should succeed for zset: {:?}",
+            result.err()
+        );
+
+        // Find the imported zset table
+        let tables: Vec<String> = Spi::connect(|client| {
+            let mut tables = Vec::new();
+            let query = "SELECT foreign_table_name::text FROM information_schema.foreign_tables \
+                         WHERE foreign_table_schema = 'import_zset_test' \
+                         AND foreign_table_name::text LIKE 'impzset%';";
+            let result = client.select(query, None, &[]).unwrap();
+            for row in result {
+                if let Some(name) = row.get::<&str>(1).unwrap() {
+                    tables.push(name.to_string());
+                }
+            }
+            tables
+        });
+
+        assert!(!tables.is_empty(), "Should have imported zset table");
+
+        // Query and verify column order: key, member, score
+        let query = format!(
+            "SELECT member, score FROM import_zset_test.\"{}\" LIMIT 1;",
+            tables[0]
+        );
+        let row = Spi::connect(|client| {
+            let result = client.select(&query, None, &[]).unwrap();
+            let mut rows = Vec::new();
+            for r in result {
+                let member = r.get::<&str>(1).unwrap().unwrap_or("").to_string();
+                let score = r.get::<&str>(2).unwrap().unwrap_or("").to_string();
+                rows.push((member, score));
+            }
+            rows
+        });
+
+        assert_eq!(row.len(), 1, "Should have 1 row");
+        assert_eq!(row[0].0, "alice", "member column should be 'alice'");
+        assert!(
+            row[0].1.starts_with("42"),
+            "score column should start with '42', got '{}'",
+            row[0].1
+        );
+
+        let _ = Spi::run("DROP SCHEMA IF EXISTS import_zset_test CASCADE;");
+        flush_pattern("impzset:*");
+        teardown();
+    }
 }
