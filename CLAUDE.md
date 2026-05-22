@@ -38,7 +38,7 @@ cargo fmt
 ## Key Architecture
 
 ### Module Structure
-- `src/core/` — FDW handler callbacks (`handlers.rs`), join pushdown logic (`join_handlers.rs`), EXPLAIN output (`explain.rs`), schema import & analyze (`schema_import.rs`), truncate (`truncate.rs`), shared column/TTL utilities (`column_utils.rs`), state management (`state_manager.rs`), connection pool (`pool_manager.rs`), connection factory (`connection_factory.rs`), DDL validator (`validator.rs`)
+- `src/core/` — FDW handler callbacks (`handlers.rs`), join pushdown logic (`join_handlers.rs`), EXPLAIN output (`explain.rs`), schema import & analyze (`schema_import.rs`), truncate (`truncate.rs`), shared column/TTL utilities (`column_utils.rs`), state management (`state_manager.rs`), connection pool (`pool_manager.rs`), connection factory (`connection_factory.rs`), DDL validator (`validator.rs`), DDL-time column validation hook (`ddl_hook.rs`)
 - `src/tables/` — Trait interface (`interface.rs`), type enum + dispatch (`types.rs`, `macros.rs`), per-type implementations in `implementations/`
 - `src/query/` — WHERE pushdown (`pushdown.rs`), cost estimation (`cost_estimation.rs`), LIMIT handling (`limit.rs`), scan ops (`scan_ops.rs`)
 - `src/join/` — JOIN support: FDW-to-FDW pushdown (`foreign_join.rs`), types (`types.rs`)
@@ -99,12 +99,23 @@ Stream is append-only; UPDATE returns an error at the trait level and `IsForeign
 - INSERT routes to specific key (first column); DELETE uses `DEL` on the full key
 
 ### Column Validation
-- `validate_column_count()` in handlers.rs enforces per-type column constraints at first query time
-- Called from both `begin_foreign_scan` and `begin_foreign_modify`
-- Column count excludes the TTL column (detected by name "ttl")
+- **DDL-time validation**: `object_access_hook` in `ddl_hook.rs` validates column count at `CREATE FOREIGN TABLE` time
+  - Registered via `_PG_init()` in `src/lib.rs`
+  - Only fires for tables belonging to our FDW (checks `fdwhandler` → `get_func_name` == "redis_fdw_handler")
+  - Chains previous hook value for compatibility with other extensions
+  - Scope guards: skips non-POST_CREATE events, non-ForeignTable classes, handler-less FDWs, non-redis_fdw handlers
+- **Query-time validation**: `validate_column_count()` in `column_utils.rs` also runs at `begin_foreign_scan` / `begin_foreign_modify` as safety net
+- Column count excludes the TTL column (detected by name "ttl", case-insensitive)
 - Multi-key mode adds +1 expected column for the key prefix
 - Constraints: string=1, hash=2, list=1-2, set=1, zset=2, stream=2+
 - Error format: `redis_fdw: table type '{type}' requires {N} data column(s), got {M}`
+
+### WHERE Pushdown
+- `PushableCondition` carries `column_index: usize` (0-based, from `varattno - 1`) — this is the raw PostgreSQL attribute position
+- Hash/ZSet/Stream table types store a `pushdown_column_index: usize` field that identifies the target column for pushdown (field for hash, member for zset, stream_id for stream)
+- `pushdown_column_index` is computed by `compute_pushdown_column_index(ttl_column_index, is_multi_key)` in `column_utils.rs`, accounting for TTL column position and multi-key offset
+- Filtering compares `condition.column_index == self.pushdown_column_index` (not hardcoded to 0)
+- Column names are user-chosen — filtering is position-based, never hardcoded to specific names
 
 ### JOIN Architecture
 - **FDW-to-Local (parameterized)**: `get_foreign_paths` advertises cheap parameterized paths for point-lookup columns (hash/field→HGET, set/member→SISMEMBER, zset/member→ZSCORE). PostgreSQL's planner picks these for NestLoop joins, passing the outer row's value as a parameter. `iterate_foreign_scan` evaluates the expression and does a single-key Redis lookup per outer row.

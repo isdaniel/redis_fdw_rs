@@ -70,3 +70,6 @@ pub mod column_mapping_tests;
 
 #[cfg(any(test, feature = "pg_test"))]
 pub mod column_validation_tests;
+
+#[cfg(any(test, feature = "pg_test"))]
+pub mod ddl_validation_tests;

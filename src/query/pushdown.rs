@@ -110,7 +110,8 @@ impl WhereClausePushdown {
         let right_arg = pg_sys::list_nth(op_expr.args, 1) as *mut pg_sys::Node;
 
         // Extract column name and value
-        let (column_name, value) = Self::extract_column_and_value(left_arg, right_arg, relation)?;
+        let (column_name, column_index, value) =
+            Self::extract_column_and_value(left_arg, right_arg, relation)?;
         // Determine operator type based on operator OID
         let operator = Self::get_operator_from_oid(op_expr.opno)?;
 
@@ -118,6 +119,7 @@ impl WhereClausePushdown {
         if table_type.supports_pushdown(&operator) {
             Some(PushableCondition {
                 column_name,
+                column_index,
                 operator,
                 value,
             })
@@ -170,8 +172,8 @@ impl WhereClausePushdown {
         let left_arg = pg_sys::list_nth(array_op_expr.args, 0) as *mut pg_sys::Node;
         let right_arg = pg_sys::list_nth(array_op_expr.args, 1) as *mut pg_sys::Node;
 
-        // Extract column name
-        let column_name = Self::extract_column_name(left_arg, relation)?;
+        // Extract column name and index
+        let (column_name, column_index) = Self::extract_column_info(left_arg, relation)?;
 
         // Determine if it's IN or NOT IN
         let operator = if array_op_expr.useOr {
@@ -190,6 +192,7 @@ impl WhereClausePushdown {
             let value = array_values.join(",");
             Some(PushableCondition {
                 column_name,
+                column_index,
                 operator,
                 value,
             })
@@ -355,31 +358,31 @@ impl WhereClausePushdown {
         left_arg: *mut pg_sys::Node,
         right_arg: *mut pg_sys::Node,
         relation: pg_sys::Relation,
-    ) -> Option<(String, String)> {
+    ) -> Option<(String, usize, String)> {
         // Try left as column, right as value
-        if let (Some(column), Some(value)) = (
-            Self::extract_column_name(left_arg, relation),
+        if let (Some((column, index)), Some(value)) = (
+            Self::extract_column_info(left_arg, relation),
             Self::extract_constant_value(right_arg),
         ) {
-            return Some((column, value));
+            return Some((column, index, value));
         }
 
         // Try right as column, left as value (for cases like '5' = column)
-        if let (Some(column), Some(value)) = (
-            Self::extract_column_name(right_arg, relation),
+        if let (Some((column, index)), Some(value)) = (
+            Self::extract_column_info(right_arg, relation),
             Self::extract_constant_value(left_arg),
         ) {
-            return Some((column, value));
+            return Some((column, index, value));
         }
 
         None
     }
 
-    /// Extract column name from a Var node
-    unsafe fn extract_column_name(
+    /// Extract column name and 0-based index from a Var node
+    unsafe fn extract_column_info(
         node: *mut pg_sys::Node,
         relation: pg_sys::Relation,
-    ) -> Option<String> {
+    ) -> Option<(String, usize)> {
         if node.is_null() {
             return None;
         }
@@ -399,7 +402,7 @@ impl WhereClausePushdown {
                         if !attr.is_null() {
                             let attr_ref = &*attr;
                             let column_name = pgrx::name_data_to_str(&attr_ref.attname);
-                            return Some(column_name.to_string());
+                            return Some((column_name.to_string(), attr_idx));
                         }
                     }
                 }

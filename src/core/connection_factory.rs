@@ -45,6 +45,7 @@ pub struct RedisConnectionConfig {
     pub retry_attempts: Option<u32>,
     pub auth_config: RedisAuthConfig,
     pub pool_config: PoolConfig,
+    pub cluster_mode: bool,
 }
 
 impl RedisConnectionConfig {
@@ -65,12 +66,17 @@ impl RedisConnectionConfig {
             .transpose()?
             .unwrap_or(0);
 
+        let cluster_mode = opts
+            .get("cluster_mode")
+            .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+
         let config = RedisConnectionConfig {
             host_port,
             database,
             retry_attempts: Some(3),
             auth_config: RedisAuthConfig::from_user_mapping_options(opts),
             pool_config: PoolConfig::from_options(opts),
+            cluster_mode,
         };
 
         config.validate()?;
@@ -108,6 +114,7 @@ impl RedisConnectionFactory {
             config.database,
             &config.auth_config,
             &config.pool_config,
+            config.cluster_mode,
         )
         .map_err(|e| ConnectionFactoryError::ConnectionFailed(e.to_string()))
     }

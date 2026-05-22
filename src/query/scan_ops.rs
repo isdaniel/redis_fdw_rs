@@ -376,11 +376,13 @@ mod tests {
         let conditions = vec![
             PushableCondition {
                 column_name: "key".to_string(),
+                column_index: 0,
                 operator: ComparisonOperator::Like,
                 value: "user_%".to_string(),
             },
             PushableCondition {
                 column_name: "key".to_string(),
+                column_index: 0,
                 operator: ComparisonOperator::Equal,
                 value: "exact_key".to_string(),
             },

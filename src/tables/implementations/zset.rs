@@ -16,12 +16,14 @@ use crate::{
 #[derive(Debug, Clone, Default)]
 pub struct RedisZSetTable {
     pub dataset: DataSet,
+    pub pushdown_column_index: usize,
 }
 
 impl RedisZSetTable {
     pub fn new() -> Self {
         Self {
             dataset: DataSet::Empty,
+            pushdown_column_index: 0,
         }
     }
 
@@ -122,11 +124,11 @@ impl RedisTableOperations for RedisZSetTable {
         limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(conditions) = conditions {
-            // For ZSet, only pushdown conditions on the member column (first column)
-            // Score conditions are left to PostgreSQL's post-filter
+            // For ZSet, only pushdown conditions on the member column conditions are left to PostgreSQL's post-filter
+            let target_idx = self.pushdown_column_index;
             let member_conditions: Vec<PushableCondition> = conditions
                 .iter()
-                .filter(|c| c.column_name != "score")
+                .filter(|c| c.column_index == target_idx)
                 .cloned()
                 .collect();
 
@@ -410,8 +412,13 @@ impl RedisTableOperations for RedisZSetTable {
         conditions: Option<&[PushableCondition]>,
     ) -> Result<(u64, usize), redis::RedisError> {
         // Filter out score conditions — Redis ZSCAN can only match on member names
-        let member_conditions: Option<Vec<&PushableCondition>> =
-            conditions.map(|conds| conds.iter().filter(|c| c.column_name != "score").collect());
+        let target_idx = self.pushdown_column_index;
+        let member_conditions: Option<Vec<&PushableCondition>> = conditions.map(|conds| {
+            conds
+                .iter()
+                .filter(|c| c.column_index == target_idx)
+                .collect()
+        });
         let member_conds: Option<&[&PushableCondition]> = member_conditions.as_deref();
 
         let mut cmd = redis::cmd("ZSCAN");

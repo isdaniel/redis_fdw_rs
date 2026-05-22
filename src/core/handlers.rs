@@ -1,19 +1,22 @@
 use crate::{
     core::{
         column_utils::{
-            datum_to_text_string, detect_ttl_column, extract_column_names, extract_delete_key,
-            state_from_ptr, transform_insert_data, validate_column_count,
+            compute_pushdown_column_index, datum_to_text_string, detect_ttl_column,
+            extract_column_names, extract_delete_key, state_from_ptr, transform_insert_data,
+            validate_column_count,
         },
         explain::{explain_foreign_modify, explain_foreign_scan},
-        join::{
-            add_parameterized_paths, begin_foreign_join_scan, get_foreign_join_paths,
-            plan_foreign_join,
-        },
         schema_import::{analyze_foreign_table, import_foreign_schema},
         state_manager::RedisFdwState,
         truncate::exec_foreign_truncate,
     },
-    join::foreign_join::execute_foreign_join,
+    join::{
+        foreign_join::execute_foreign_join,
+        planner::{
+            add_parameterized_paths, begin_foreign_join_scan, get_foreign_join_paths,
+            plan_foreign_join,
+        },
+    },
     query::{limit::extract_limit_offset_info, pushdown::WhereClausePushdown},
     tables::types::RedisTableType,
     utils::{helpers::*, memory::create_wrappers_memctx, row::Row},
@@ -374,6 +377,15 @@ extern "C-unwind" fn begin_foreign_scan(
         }
         if let RedisTableType::Stream(ref mut stream) = state.table_type {
             stream.column_names = state.column_names.clone();
+        }
+
+        let pushdown_idx =
+            compute_pushdown_column_index(state.ttl_column_index, state.is_multi_key);
+        match &mut state.table_type {
+            RedisTableType::Hash(ref mut h) => h.pushdown_column_index = pushdown_idx,
+            RedisTableType::ZSet(ref mut z) => z.pushdown_column_index = pushdown_idx,
+            RedisTableType::Stream(ref mut s) => s.pushdown_column_index = pushdown_idx,
+            _ => {}
         }
 
         if state.ttl_column_index.is_some() && !state.is_multi_key {
