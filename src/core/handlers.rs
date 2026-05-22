@@ -713,6 +713,12 @@ unsafe extern "C-unwind" fn begin_foreign_modify(
     }
     state.column_names = col_names;
 
+    validate_column_count(
+        &state.table_type,
+        state.column_names.len(),
+        state.is_multi_key,
+    );
+
     if let RedisTableType::List(ref mut list) = state.table_type {
         list.include_index = state.column_names.len() >= 2;
     }
