@@ -103,7 +103,11 @@ pub(crate) unsafe extern "C-unwind" fn import_foreign_schema(
         if redis_type == "none" {
             continue;
         }
-        let prefix = derive_key_prefix(key);
+        let prefix = if redis_type == "stream" {
+            key.clone()
+        } else {
+            derive_key_prefix(key)
+        };
         groups.entry(prefix).or_insert_with(|| redis_type.clone());
     }
 
@@ -156,7 +160,11 @@ pub(crate) unsafe extern "C-unwind" fn import_foreign_schema(
         }
 
         let columns = columns_for_type(redis_type);
-        let key_pattern = format!("{}*", prefix);
+        let key_pattern = if redis_type == "stream" {
+            prefix.clone()
+        } else {
+            format!("{}*", prefix)
+        };
         let database_str = config.database.to_string();
 
         let quoted_table = table_name.replace('"', "\"\"");
@@ -171,7 +179,11 @@ pub(crate) unsafe extern "C-unwind" fn import_foreign_schema(
         let ddl_cstr = match CString::new(ddl) {
             Ok(c) => c,
             Err(_) => {
-                error!("import_foreign_schema: table name contains null byte");
+                pgrx::warning!(
+                    "redis_fdw: skipping key prefix '{}' (contains null byte)",
+                    prefix.replace('\0', "\\0")
+                );
+                continue;
             }
         };
         let pg_str = pg_sys::pstrdup(ddl_cstr.as_ptr());
@@ -410,7 +422,7 @@ pub(crate) unsafe extern "C-unwind" fn acquire_sample_rows(
                             .unwrap_or_default();
                         for chunk in vals.chunks(2) {
                             if chunk.len() == 2 {
-                                result.push(vec![key.clone(), chunk[1].clone(), chunk[0].clone()]);
+                                result.push(vec![key.clone(), chunk[0].clone(), chunk[1].clone()]);
                             }
                         }
                     }
@@ -472,7 +484,7 @@ fn derive_key_prefix(key: &str) -> String {
     if let Some(pos) = key.rfind(':') {
         key[..=pos].to_string()
     } else {
-        format!("{}_", key)
+        key.to_string()
     }
 }
 
