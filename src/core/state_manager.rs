@@ -1049,11 +1049,20 @@ impl RedisFdwState {
             RedisTableType::Hash(ref mut t) => {
                 // param_column == 0 means lookup by field name → HGET
                 if self.param_column == 0 {
-                    let val: Option<String> = redis::cmd("HGET")
+                    let val: Option<String> = match redis::cmd("HGET")
                         .arg(&self.table_key_prefix)
                         .arg(param_value)
                         .query(conn)
-                        .unwrap_or(None);
+                    {
+                        Ok(v) => v,
+                        Err(e) => {
+                            pgrx::warning!(
+                                "redis_fdw: HGET failed during parameterized lookup: {}",
+                                e
+                            );
+                            None
+                        }
+                    };
                     if let Some(v) = val {
                         t.dataset = DataSet::Filtered(vec![param_value.to_string(), v]);
                         return true;
@@ -1063,11 +1072,20 @@ impl RedisFdwState {
                 false
             }
             RedisTableType::Set(ref mut t) => {
-                let exists: bool = redis::cmd("SISMEMBER")
+                let exists: bool = match redis::cmd("SISMEMBER")
                     .arg(&self.table_key_prefix)
                     .arg(param_value)
                     .query(conn)
-                    .unwrap_or(false);
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        pgrx::warning!(
+                            "redis_fdw: SISMEMBER failed during parameterized lookup: {}",
+                            e
+                        );
+                        false
+                    }
+                };
                 if exists {
                     t.dataset = DataSet::Filtered(vec![param_value.to_string()]);
                     true
@@ -1079,11 +1097,20 @@ impl RedisFdwState {
             RedisTableType::ZSet(ref mut t) => {
                 // param_column == 0 means lookup by member → ZSCORE
                 if self.param_column == 0 {
-                    let score: Option<f64> = redis::cmd("ZSCORE")
+                    let score: Option<f64> = match redis::cmd("ZSCORE")
                         .arg(&self.table_key_prefix)
                         .arg(param_value)
                         .query(conn)
-                        .unwrap_or(None);
+                    {
+                        Ok(v) => v,
+                        Err(e) => {
+                            pgrx::warning!(
+                                "redis_fdw: ZSCORE failed during parameterized lookup: {}",
+                                e
+                            );
+                            None
+                        }
+                    };
                     if let Some(s) = score {
                         t.dataset = DataSet::Complete(DataContainer::ZSet(vec![(
                             param_value.to_string(),
@@ -1098,10 +1125,16 @@ impl RedisFdwState {
             RedisTableType::String(ref mut t) => {
                 // Multi-key mode: param_column == 0 means lookup by key → GET
                 if self.is_multi_key && self.param_column == 0 {
-                    let val: Option<String> = redis::cmd("GET")
-                        .arg(param_value)
-                        .query(conn)
-                        .unwrap_or(None);
+                    let val: Option<String> = match redis::cmd("GET").arg(param_value).query(conn) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            pgrx::warning!(
+                                "redis_fdw: GET failed during parameterized lookup: {}",
+                                e
+                            );
+                            None
+                        }
+                    };
                     if let Some(v) = val {
                         t.dataset = DataSet::Filtered(vec![param_value.to_string(), v]);
                         return true;

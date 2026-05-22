@@ -70,6 +70,9 @@ pub(crate) unsafe fn datum_to_text_string(
         let mut is_varlena = false;
         pg_sys::getTypeOutputInfo(typoid, &mut out_func_oid, &mut is_varlena);
         let cstr = pg_sys::OidOutputFunctionCall(out_func_oid, datum);
+        if cstr.is_null() {
+            return String::new();
+        }
         let result = std::ffi::CStr::from_ptr(cstr)
             .to_string_lossy()
             .into_owned();

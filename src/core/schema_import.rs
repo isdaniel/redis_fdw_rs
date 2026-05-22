@@ -83,16 +83,20 @@ pub(crate) unsafe extern "C-unwind" fn import_foreign_schema(
         return ptr::null_mut();
     }
 
-    let mut pipe = redis::pipe();
-    for key in &all_keys {
-        pipe.cmd("TYPE").arg(key);
-    }
-    let types: Vec<String> = match pipe.query(conn_like) {
-        Ok(t) => t,
-        Err(e) => {
-            error!("Redis TYPE pipeline error during import: {}", e);
+    let mut types: Vec<String> = Vec::with_capacity(all_keys.len());
+    for chunk in all_keys.chunks(1000) {
+        let mut pipe = redis::pipe();
+        for key in chunk {
+            pipe.cmd("TYPE").arg(key);
         }
-    };
+        let chunk_types: Vec<String> = match pipe.query(conn_like) {
+            Ok(t) => t,
+            Err(e) => {
+                error!("Redis TYPE pipeline error during import: {}", e);
+            }
+        };
+        types.extend(chunk_types);
+    }
 
     let mut groups: StdHashMap<String, String> = StdHashMap::new();
     for (key, redis_type) in all_keys.iter().zip(types.iter()) {
