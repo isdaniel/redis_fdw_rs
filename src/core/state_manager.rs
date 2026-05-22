@@ -59,7 +59,7 @@ pub struct RedisFdwState {
     pub is_parameterized: bool,
     /// Column index (0-based, after TTL strip) that receives the parameter value
     pub param_column: usize,
-    /// Type OID of the parameter expression 
+    /// Type OID of the parameter expression
     pub param_type_oid: pg_sys::Oid,
     /// ExprState for evaluating the parameterized expression at runtime
     pub param_expr_state: *mut pg_sys::ExprState,

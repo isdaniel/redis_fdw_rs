@@ -60,6 +60,12 @@ pub(crate) unsafe fn datum_to_text_string(datum: pg_sys::Datum, typoid: pg_sys::
         let mut out_func_oid: pg_sys::Oid = pg_sys::InvalidOid;
         let mut is_varlena = false;
         pg_sys::getTypeOutputInfo(typoid, &mut out_func_oid, &mut is_varlena);
+        if out_func_oid == pg_sys::InvalidOid {
+            pgrx::error!(
+                "redis_fdw: could not find output function for type OID {}",
+                typoid
+            );
+        }
         let cstr = pg_sys::OidOutputFunctionCall(out_func_oid, datum);
         if cstr.is_null() {
             return String::new();
@@ -84,7 +90,12 @@ pub(crate) fn validate_column_count(
         RedisTableType::List(_) => (1 + extra, 2 + extra, "list", "element [, index]"),
         RedisTableType::Set(_) => (1 + extra, 1 + extra, "set", "member"),
         RedisTableType::ZSet(_) => (2 + extra, 2 + extra, "zset", "member, score"),
-        RedisTableType::Stream(_) => (2, usize::MAX, "stream", "stream_id, field1[, ...]"),
+        RedisTableType::Stream(_) => {
+            if is_multi_key {
+                pgrx::error!("redis_fdw: multi-key mode is not supported for stream tables");
+            }
+            (2, usize::MAX, "stream", "stream_id, field1[, ...]")
+        }
         RedisTableType::None => return,
     };
 
