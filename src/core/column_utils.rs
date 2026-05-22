@@ -40,6 +40,22 @@ pub(crate) unsafe fn extract_column_names(tupdesc: pg_sys::TupleDesc) -> Vec<Str
     names
 }
 
+/// Compute the raw attribute index of the first data column for pushdown.
+///
+/// The "first data column" is the column that HSCAN MATCH / ZSCAN MATCH / XRANGE should target. It accounts for:
+/// - Multi-key mode: the key-prefix column occupies the first non-TTL position
+/// - TTL column: may appear before the data columns, shifting their raw position
+pub(crate) fn compute_pushdown_column_index(
+    ttl_column_index: Option<usize>,
+    is_multi_key: bool,
+) -> usize {
+    let logical_position = if is_multi_key { 1 } else { 0 };
+    match ttl_column_index {
+        Some(ttl_idx) if ttl_idx <= logical_position => logical_position + 1,
+        _ => logical_position,
+    }
+}
+
 pub(crate) unsafe fn datum_to_text_string(datum: pg_sys::Datum, typoid: pg_sys::Oid) -> String {
     if typoid == pg_sys::TEXTOID || typoid == pg_sys::VARCHAROID || typoid == pg_sys::BPCHAROID {
         String::from_datum(datum, false).unwrap_or_default()
@@ -177,5 +193,28 @@ pub(crate) unsafe fn extract_delete_key(
             }
         }
         None => Err("Failed to convert datum to string"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compute_pushdown_column_index() {
+        // Normal mode, no TTL
+        assert_eq!(compute_pushdown_column_index(None, false), 0);
+        // Normal mode, TTL at position 0 (before data)
+        assert_eq!(compute_pushdown_column_index(Some(0), false), 1);
+        // Normal mode, TTL after data columns
+        assert_eq!(compute_pushdown_column_index(Some(2), false), 0);
+        // Multi-key, no TTL: key at 0, data at 1
+        assert_eq!(compute_pushdown_column_index(None, true), 1);
+        // Multi-key, TTL at 0: TTL at 0, key at 1, data at 2
+        assert_eq!(compute_pushdown_column_index(Some(0), true), 2);
+        // Multi-key, TTL at 1: key at 0, TTL at 1, data at 2
+        assert_eq!(compute_pushdown_column_index(Some(1), true), 2);
+        // Multi-key, TTL after data columns
+        assert_eq!(compute_pushdown_column_index(Some(3), true), 1);
     }
 }

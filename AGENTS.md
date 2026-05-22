@@ -9,6 +9,8 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 **Feature-complete for all CRUD operations plus EXPLAIN, batch INSERT, TRUNCATE, IMPORT FOREIGN SCHEMA, ANALYZE, and COPY FROM.** All Redis types (String, Hash, List, Set, ZSet) support SELECT, INSERT, UPDATE, DELETE, TRUNCATE. Stream supports SELECT, INSERT, DELETE, TRUNCATE only (append-only by design).
 
 ### Recent Work
+- DDL-time column validation: `object_access_hook` in `ddl_hook.rs` validates column count at `CREATE FOREIGN TABLE` time (no longer deferred to first query)
+- Position-based column filtering: `PushableCondition.column_index` replaces hardcoded column name checks in hash/zset pushdown
 - Column validation: `validate_column_count()` enforces per-type column constraints at first query time (string=1, hash=2, list=1-2, set=1, zset=2, stream=2+)
 - Parameterized JOIN paths: `get_foreign_paths` advertises O(1) point-lookup paths for FDW-to-local JOINs (HGET, SISMEMBER, ZSCORE)
 - JOIN support: FDW-to-FDW join pushdown for same-server tables with automatic join column detection from query clauses
@@ -26,11 +28,12 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 - TTL support: table-level default + per-row override via virtual `ttl` column
 - Multi-key pattern queries: glob patterns in `table_key_prefix` for scanning multiple keys
 - DDL-time option validation via `redis_fdw_validator`
+- DDL-time column count validation via `object_access_hook` (rejects invalid CREATE FOREIGN TABLE)
 - TLS/SSL support: `rediss://` URI scheme for encrypted connections (rustls backend)
 - UPDATE support implemented for all types (except Stream)
 - Cost estimation for query planner (`src/query/cost_estimation.rs`)
 - Connection pooling via R2D2 with global pool manager
-- WHERE clause pushdown optimization
+- WHERE clause pushdown optimization (position-aware: handles TTL column at any position, multi-key offset)
 - LIMIT/OFFSET handling
 - Auto-release GitHub pipeline on `v*` tags
 
@@ -116,6 +119,7 @@ JOIN tests create temporary local tables + Redis foreign tables and verify:
 | `src/core/truncate.rs` | TRUNCATE implementation (UNLINK / SCAN+UNLINK) |
 | `src/core/column_utils.rs` | Shared utilities: TTL detection, column validation, data transformation |
 | `src/core/validator.rs` | DDL-time option validation (VALIDATOR function) |
+| `src/core/ddl_hook.rs` | DDL-time column count validation via `object_access_hook` |
 | `src/tables/interface.rs` | The `RedisTableOperations` trait — defines what each type must implement |
 | `src/tables/types.rs` | `RedisTableType` enum + dispatch methods |
 | `src/core/state_manager.rs` | `RedisFdwState` — holds connection, table type, scan state, TTL, multi-key |

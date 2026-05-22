@@ -108,6 +108,7 @@ mod tests {
         // Add WHERE conditions
         let condition = PushableCondition {
             column_name: "key".to_string(),
+            column_index: 0,
             operator: ComparisonOperator::Equal,
             value: "test".to_string(),
         };

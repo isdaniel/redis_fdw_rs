@@ -16,12 +16,15 @@ use crate::{
 #[derive(Debug, Clone, Default)]
 pub struct RedisHashTable {
     pub dataset: DataSet,
+    /// Raw attribute index of the field column (accounts for TTL position and multi-key offset)
+    pub pushdown_column_index: usize,
 }
 
 impl RedisHashTable {
     pub fn new() -> Self {
         Self {
             dataset: DataSet::Empty,
+            pushdown_column_index: 0,
         }
     }
 
@@ -115,27 +118,37 @@ impl RedisTableOperations for RedisHashTable {
         limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(conditions) = conditions {
-            let scan_conditions = extract_scan_conditions(conditions);
+            let target_idx = self.pushdown_column_index;
+            let field_conditions: Vec<&PushableCondition> = conditions
+                .iter()
+                .filter(|c| c.column_index == target_idx)
+                .collect();
 
-            if !scan_conditions.pattern_conditions.is_empty() {
-                return self.load_with_scan_optimization(
-                    conn,
-                    key_prefix,
-                    &scan_conditions,
-                    limit_offset,
-                );
-            }
+            if !field_conditions.is_empty() {
+                let field_cond_refs: Vec<PushableCondition> =
+                    field_conditions.iter().map(|c| (*c).clone()).collect();
+                let scan_conditions = extract_scan_conditions(&field_cond_refs);
 
-            if let Some(first) = conditions.first() {
-                match first.operator {
-                    ComparisonOperator::Equal => {
-                        return self.hget_exact(conn, key_prefix, &first.value);
+                if !scan_conditions.pattern_conditions.is_empty() {
+                    return self.load_with_scan_optimization(
+                        conn,
+                        key_prefix,
+                        &scan_conditions,
+                        limit_offset,
+                    );
+                }
+
+                if let Some(first) = field_conditions.first() {
+                    match first.operator {
+                        ComparisonOperator::Equal => {
+                            return self.hget_exact(conn, key_prefix, &first.value);
+                        }
+                        ComparisonOperator::In => {
+                            let fields: Vec<&str> = first.value.split(',').collect();
+                            return self.hmget_fields(conn, key_prefix, &fields);
+                        }
+                        _ => {} // fallback
                     }
-                    ComparisonOperator::In => {
-                        let fields: Vec<&str> = first.value.split(',').collect();
-                        return self.hmget_fields(conn, key_prefix, &fields);
-                    }
-                    _ => {} // fallback
                 }
             }
         }
@@ -269,8 +282,13 @@ impl RedisTableOperations for RedisHashTable {
     ) -> Result<(u64, usize), redis::RedisError> {
         // Only apply conditions on the field/key column (first column) to Redis
         // Value column conditions must be handled by PG post-filter
-        let field_conditions: Option<Vec<&PushableCondition>> =
-            conditions.map(|conds| conds.iter().filter(|c| c.column_name != "value").collect());
+        let target_idx = self.pushdown_column_index;
+        let field_conditions: Option<Vec<&PushableCondition>> = conditions.map(|conds| {
+            conds
+                .iter()
+                .filter(|c| c.column_index == target_idx)
+                .collect()
+        });
         let field_conds: Option<&[&PushableCondition]> = field_conditions.as_deref();
 
         let mut cmd = redis::cmd("HSCAN");
