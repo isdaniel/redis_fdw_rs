@@ -244,11 +244,11 @@ unsafe extern "C-unwind" fn get_foreign_plan(
             let left_is_mine = pg_sys::bms_is_member(left_var.varno as i32, my_relids);
             let right_is_mine = pg_sys::bms_is_member(right_var.varno as i32, my_relids);
 
-            if left_is_mine && !right_is_mine {
+            if left_is_mine && !right_is_mine && left_var.varattno > 0 {
                 param_col_idx = (left_var.varattno - 1) as usize;
                 fdw_exprs = pg_sys::lappend(fdw_exprs, right_arg as *mut std::ffi::c_void);
                 break;
-            } else if right_is_mine && !left_is_mine {
+            } else if right_is_mine && !left_is_mine && right_var.varattno > 0 {
                 param_col_idx = (right_var.varattno - 1) as usize;
                 fdw_exprs = pg_sys::lappend(fdw_exprs, left_arg as *mut std::ffi::c_void);
                 break;

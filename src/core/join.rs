@@ -92,8 +92,8 @@ pub(crate) unsafe fn add_parameterized_paths(
             1.0,
             #[cfg(feature = "pg18")]
             0,
-            1.0,
-            2.0,
+            costs::NETWORK_ROUND_TRIP,
+            costs::NETWORK_ROUND_TRIP + costs::CPU_TUPLE_COST,
             ptr::null_mut(),
             required_outer,
             ptr::null_mut(),
