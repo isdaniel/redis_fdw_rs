@@ -44,17 +44,6 @@ impl RedisStreamTable {
         }
     }
 
-    fn id_column_name(&self) -> &str {
-        self.column_names
-            .first()
-            .map(|s| s.as_str())
-            .unwrap_or("id")
-    }
-
-    fn is_id_column(&self, column_name: &str) -> bool {
-        column_name == self.id_column_name()
-    }
-
     fn next_start_id(&self) -> String {
         match &self.last_id {
             Some(id) => {
@@ -140,7 +129,7 @@ impl RedisStreamTable {
         let mut non_id_conditions: Vec<&PushableCondition> = Vec::new();
 
         for condition in &scan_conditions.exact_conditions {
-            if self.is_id_column(&condition.column_name) {
+            if condition.column_index == 0 {
                 if condition.operator == ComparisonOperator::Equal {
                     start_id = condition.value.clone();
                     end_id = condition.value.clone();
@@ -152,7 +141,7 @@ impl RedisStreamTable {
         }
 
         for condition in &scan_conditions.pattern_conditions {
-            if !self.is_id_column(&condition.column_name) {
+            if condition.column_index != 0 {
                 non_id_conditions.push(condition);
             }
         }
@@ -166,15 +155,17 @@ impl RedisStreamTable {
 
         // Apply client-side filtering for non-ID column conditions
         if !non_id_conditions.is_empty() && !self.entries.is_empty() {
-            let like_matchers: Vec<(&PushableCondition, crate::query::scan_ops::PatternMatcher)> =
+            let like_matchers: Vec<Option<crate::query::scan_ops::PatternMatcher>> =
                 non_id_conditions
                     .iter()
-                    .filter(|c| c.operator == ComparisonOperator::Like)
                     .map(|c| {
-                        (
-                            *c,
-                            crate::query::scan_ops::PatternMatcher::from_like_pattern(&c.value),
-                        )
+                        if c.operator == ComparisonOperator::Like {
+                            Some(crate::query::scan_ops::PatternMatcher::from_like_pattern(
+                                &c.value,
+                            ))
+                        } else {
+                            None
+                        }
                     })
                     .collect();
 
@@ -182,9 +173,7 @@ impl RedisStreamTable {
             let mut filtered_flat = Vec::new();
 
             for entry in &self.entries {
-                // entry = [stream_id, field1, val1, field2, val2, ...]
-                let matches = non_id_conditions.iter().all(|cond| {
-                    // Find matching field-value pair by column name
+                let matches = non_id_conditions.iter().enumerate().all(|(i, cond)| {
                     entry[1..].chunks(2).any(|chunk| {
                         if chunk.len() != 2 || chunk[0] != cond.column_name {
                             return false;
@@ -193,10 +182,9 @@ impl RedisStreamTable {
                         match cond.operator {
                             ComparisonOperator::Equal => val == &cond.value,
                             ComparisonOperator::NotEqual => val != &cond.value,
-                            ComparisonOperator::Like => like_matchers
-                                .iter()
-                                .find(|(c, _)| std::ptr::eq(*c, *cond))
-                                .is_some_and(|(_, m)| m.matches(val)),
+                            ComparisonOperator::Like => {
+                                like_matchers[i].as_ref().is_some_and(|m| m.matches(val))
+                            }
                             _ => true,
                         }
                     })
@@ -209,7 +197,11 @@ impl RedisStreamTable {
             }
 
             self.entries = filtered_entries;
-            self.dataset = DataSet::Filtered(filtered_flat);
+            if self.entries.is_empty() {
+                self.dataset = DataSet::Empty;
+            } else {
+                self.dataset = DataSet::Filtered(filtered_flat);
+            }
         }
 
         Ok(result)
@@ -412,7 +404,7 @@ impl RedisTableOperations for RedisStreamTable {
             let mut start = None;
             let mut end = None;
             for c in conds {
-                if c.operator == ComparisonOperator::Equal && self.is_id_column(&c.column_name) {
+                if c.operator == ComparisonOperator::Equal && c.column_index == 0 {
                     start = Some(c.value.clone());
                     end = Some(c.value.clone());
                     break;
@@ -447,24 +439,20 @@ impl RedisTableOperations for RedisStreamTable {
 
         // Collect non-ID conditions for client-side filtering
         let non_id_conds: Vec<&PushableCondition> = conditions
-            .map(|conds| {
-                conds
-                    .iter()
-                    .filter(|c| !self.is_id_column(&c.column_name))
-                    .collect()
-            })
+            .map(|conds| conds.iter().filter(|c| c.column_index != 0).collect())
             .unwrap_or_default();
 
-        // Pre-calculate PatternMatchers for LIKE conditions (index-based)
-        let like_matchers: Vec<(usize, crate::query::scan_ops::PatternMatcher)> = non_id_conds
+        // Pre-calculate PatternMatchers for LIKE conditions (O(1) lookup by index)
+        let like_matchers: Vec<Option<crate::query::scan_ops::PatternMatcher>> = non_id_conds
             .iter()
-            .enumerate()
-            .filter(|(_, c)| c.operator == ComparisonOperator::Like)
-            .map(|(i, c)| {
-                (
-                    i,
-                    crate::query::scan_ops::PatternMatcher::from_like_pattern(&c.value),
-                )
+            .map(|c| {
+                if c.operator == ComparisonOperator::Like {
+                    Some(crate::query::scan_ops::PatternMatcher::from_like_pattern(
+                        &c.value,
+                    ))
+                } else {
+                    None
+                }
             })
             .collect();
 
@@ -481,10 +469,9 @@ impl RedisTableOperations for RedisStreamTable {
                         match c.operator {
                             ComparisonOperator::Equal => v == &c.value,
                             ComparisonOperator::NotEqual => v != &c.value,
-                            ComparisonOperator::Like => like_matchers
-                                .iter()
-                                .find(|(idx, _)| *idx == i)
-                                .is_some_and(|(_, m)| m.matches(v)),
+                            ComparisonOperator::Like => {
+                                like_matchers[i].as_ref().is_some_and(|m| m.matches(v))
+                            }
                             _ => true,
                         }
                     })

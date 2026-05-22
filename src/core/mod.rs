@@ -3,7 +3,6 @@ pub mod connection_factory;
 pub mod ddl_hook;
 pub mod explain;
 pub mod handlers;
-pub mod join;
 pub mod pool_manager;
 pub mod schema_import;
 pub mod state_manager;

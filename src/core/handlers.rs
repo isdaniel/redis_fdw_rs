@@ -5,15 +5,17 @@ use crate::{
             state_from_ptr, transform_insert_data, validate_column_count,
         },
         explain::{explain_foreign_modify, explain_foreign_scan},
-        join::{
-            add_parameterized_paths, begin_foreign_join_scan, get_foreign_join_paths,
-            plan_foreign_join,
-        },
         schema_import::{analyze_foreign_table, import_foreign_schema},
         state_manager::RedisFdwState,
         truncate::exec_foreign_truncate,
     },
-    join::foreign_join::execute_foreign_join,
+    join::{
+        foreign_join::execute_foreign_join,
+        planner::{
+            add_parameterized_paths, begin_foreign_join_scan, get_foreign_join_paths,
+            plan_foreign_join,
+        },
+    },
     query::{limit::extract_limit_offset_info, pushdown::WhereClausePushdown},
     tables::types::RedisTableType,
     utils::{helpers::*, memory::create_wrappers_memctx, row::Row},
