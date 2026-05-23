@@ -389,9 +389,16 @@ extern "C-unwind" fn begin_foreign_scan(
             RedisTableType::Hash(ref mut h) => h.pushdown_column_index = pushdown_idx,
             RedisTableType::ZSet(ref mut z) => {
                 z.pushdown_column_index = pushdown_idx;
+                // Find the next active (non-dropped, non-TTL) column after pushdown_idx
                 let mut score_idx = pushdown_idx + 1;
-                if Some(score_idx) == state.ttl_column_index {
-                    score_idx += 1;
+                let natts = (*tupdesc).natts as usize;
+                while score_idx < natts {
+                    let attr = tuple_desc_attr(tupdesc, score_idx);
+                    if (*attr).attisdropped || Some(score_idx) == state.ttl_column_index {
+                        score_idx += 1;
+                        continue;
+                    }
+                    break;
                 }
                 z.score_column_index = score_idx;
             }
@@ -671,13 +678,30 @@ unsafe extern "C-unwind" fn add_foreign_update_targets(
     let relid = (*target_relation).rd_id;
     let opts = get_foreign_table_options(relid);
     let table_type = opts.get("table_type").map(|s| s.as_str()).unwrap_or("");
-    let num_data_cols = if ttl_idx.is_some() { natts - 1 } else { natts };
+
+    // Count active (non-dropped, non-TTL) data columns
+    let mut num_data_cols = 0usize;
+    for i in 0..natts {
+        let a = tuple_desc_attr(tupdesc, i);
+        if (*a).attisdropped {
+            continue;
+        }
+        if Some(i) == ttl_idx {
+            continue;
+        }
+        num_data_cols += 1;
+    }
 
     let identity_attno = if table_type == "list" && num_data_cols >= 2 {
-        // For 2-column list (index, value): LREM needs the value column, which is the second non-TTL column
+        // For 2-column list (index, value): LREM needs the value column,
+        // which is the second active non-TTL column
         let mut count = 0usize;
         let mut target = 0usize;
         for i in 0..natts {
+            let a = tuple_desc_attr(tupdesc, i);
+            if (*a).attisdropped {
+                continue;
+            }
             if Some(i) == ttl_idx {
                 continue;
             }
@@ -689,10 +713,20 @@ unsafe extern "C-unwind" fn add_foreign_update_targets(
         }
         target
     } else {
-        match ttl_idx {
-            Some(0) => 1,
-            _ => 0,
+        // Default: first active non-TTL column
+        let mut target = 0usize;
+        for i in 0..natts {
+            let a = tuple_desc_attr(tupdesc, i);
+            if (*a).attisdropped {
+                continue;
+            }
+            if Some(i) == ttl_idx {
+                continue;
+            }
+            target = i;
+            break;
         }
+        target
     };
 
     let attr = *tuple_desc_attr(tupdesc, identity_attno);
