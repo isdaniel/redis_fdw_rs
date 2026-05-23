@@ -1274,4 +1274,279 @@ mod tests {
         let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", large_table));
         cleanup_join_fdw();
     }
+
+    // === TTL-position-aware join tests ===
+
+    #[pg_test]
+    fn test_join_hash_ttl_first_with_local() {
+        setup_join_fdw();
+
+        let key_prefix = "join_test:ttl_first_hash";
+        let table_name = "join_ttl_first_hash";
+
+        // TTL column at position 0, before data columns
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE {} (ttl bigint, field text, value text)
+             SERVER {} OPTIONS (
+                database '{}', table_type 'hash', table_key_prefix '{}', ttl '3600'
+             );",
+            table_name, SERVER_NAME, TEST_DATABASE, key_prefix
+        ))
+        .unwrap();
+
+        Spi::run(&format!(
+            "INSERT INTO {} (field, value) VALUES ('a', 'val_a'), ('b', 'val_b'), ('c', 'val_c');",
+            table_name
+        ))
+        .unwrap();
+
+        Spi::run("CREATE TEMPORARY TABLE join_ttl_local (id text, name text);").unwrap();
+        Spi::run("INSERT INTO join_ttl_local VALUES ('a', 'Alice'), ('b', 'Bob'), ('d', 'Dave');")
+            .unwrap();
+
+        // Parameterized HGET path should work even with TTL at position 0
+        let count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM join_ttl_local l JOIN {} r ON l.id = r.field;",
+            table_name
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            count, 2,
+            "JOIN with TTL-first hash should find 2 matches (a, b)"
+        );
+
+        // LEFT JOIN
+        let left_count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM join_ttl_local l LEFT JOIN {} r ON l.id = r.field;",
+            table_name
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            left_count, 3,
+            "LEFT JOIN with TTL-first should return all 3 local rows"
+        );
+
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'a';", table_name)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'b';", table_name)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'c';", table_name)).unwrap();
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", table_name));
+        let _ = Spi::run("DROP TABLE IF EXISTS join_ttl_local;");
+        cleanup_join_fdw();
+    }
+
+    #[pg_test]
+    fn test_join_hash_ttl_middle_with_local() {
+        setup_join_fdw();
+
+        let key_prefix = "join_test:ttl_mid_hash";
+        let table_name = "join_ttl_mid_hash";
+
+        // TTL column between data columns
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE {} (field text, ttl bigint, value text)
+             SERVER {} OPTIONS (
+                database '{}', table_type 'hash', table_key_prefix '{}', ttl '3600'
+             );",
+            table_name, SERVER_NAME, TEST_DATABASE, key_prefix
+        ))
+        .unwrap();
+
+        Spi::run(&format!(
+            "INSERT INTO {} (field, value) VALUES ('x', 'val_x'), ('y', 'val_y');",
+            table_name
+        ))
+        .unwrap();
+
+        Spi::run("CREATE TEMPORARY TABLE join_ttl_mid_local (id text);").unwrap();
+        Spi::run("INSERT INTO join_ttl_mid_local VALUES ('x'), ('y'), ('z');").unwrap();
+
+        let count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM join_ttl_mid_local l JOIN {} r ON l.id = r.field;",
+            table_name
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(count, 2, "JOIN with TTL-middle hash should find 2 matches");
+
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'x';", table_name)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'y';", table_name)).unwrap();
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", table_name));
+        let _ = Spi::run("DROP TABLE IF EXISTS join_ttl_mid_local;");
+        cleanup_join_fdw();
+    }
+
+    #[pg_test]
+    fn test_join_zset_ttl_first_with_local() {
+        setup_join_fdw();
+
+        let key_prefix = "join_test:ttl_first_zset";
+        let table_name = "join_ttl_first_zset";
+
+        // TTL at position 0 for zset
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE {} (ttl bigint, member text, score text)
+             SERVER {} OPTIONS (
+                database '{}', table_type 'zset', table_key_prefix '{}', ttl '3600'
+             );",
+            table_name, SERVER_NAME, TEST_DATABASE, key_prefix
+        ))
+        .unwrap();
+
+        Spi::run(&format!(
+            "INSERT INTO {} (member, score) VALUES ('p1', 10), ('p2', 20), ('p3', 30);",
+            table_name
+        ))
+        .unwrap();
+
+        Spi::run("CREATE TEMPORARY TABLE join_ttl_zset_local (name text);").unwrap();
+        Spi::run("INSERT INTO join_ttl_zset_local VALUES ('p1'), ('p2'), ('missing');").unwrap();
+
+        let count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM join_ttl_zset_local l JOIN {} r ON l.name = r.member;",
+            table_name
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(count, 2, "JOIN with TTL-first zset should match p1 and p2");
+
+        Spi::run(&format!("DELETE FROM {} WHERE member = 'p1';", table_name)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE member = 'p2';", table_name)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE member = 'p3';", table_name)).unwrap();
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", table_name));
+        let _ = Spi::run("DROP TABLE IF EXISTS join_ttl_zset_local;");
+        cleanup_join_fdw();
+    }
+
+    #[pg_test]
+    fn test_join_fdw_hash_to_hash_ttl_first() {
+        setup_join_fdw();
+
+        let table1 = "join_ttl_fdw_h1";
+        let table2 = "join_ttl_fdw_h2";
+        let key1 = "join_test:ttl_fdw_h1";
+        let key2 = "join_test:ttl_fdw_h2";
+
+        // Both tables with TTL at position 0
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE {} (ttl bigint, field text, value text)
+             SERVER {} OPTIONS (
+                database '{}', table_type 'hash', table_key_prefix '{}', ttl '3600'
+             );",
+            table1, SERVER_NAME, TEST_DATABASE, key1
+        ))
+        .unwrap();
+
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE {} (ttl bigint, field text, value text)
+             SERVER {} OPTIONS (
+                database '{}', table_type 'hash', table_key_prefix '{}', ttl '3600'
+             );",
+            table2, SERVER_NAME, TEST_DATABASE, key2
+        ))
+        .unwrap();
+
+        Spi::run(&format!(
+            "INSERT INTO {} (field, value) VALUES ('k1', 'v1a'), ('k2', 'v2a');",
+            table1
+        ))
+        .unwrap();
+        Spi::run(&format!(
+            "INSERT INTO {} (field, value) VALUES ('k1', 'v1b'), ('k3', 'v3b');",
+            table2
+        ))
+        .unwrap();
+
+        // FDW-to-FDW join with TTL at position 0 on both sides
+        let count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM {} t1 JOIN {} t2 ON t1.field = t2.field;",
+            table1, table2
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            count, 1,
+            "FDW-to-FDW with TTL-first should find 1 match (k1)"
+        );
+
+        // LEFT JOIN
+        let left_count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM {} t1 LEFT JOIN {} t2 ON t1.field = t2.field;",
+            table1, table2
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(left_count, 2, "LEFT JOIN should return both rows from t1");
+
+        // Verify content
+        let val = Spi::get_one::<String>(&format!(
+            "SELECT t2.value FROM {} t1 JOIN {} t2 ON t1.field = t2.field WHERE t1.field = 'k1';",
+            table1, table2
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            val, "v1b",
+            "Should get correct value from t2 via TTL-first join"
+        );
+
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'k1';", table1)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'k2';", table1)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'k1';", table2)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE field = 'k3';", table2)).unwrap();
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", table1));
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", table2));
+        cleanup_join_fdw();
+    }
+
+    #[pg_test]
+    fn test_join_set_ttl_first_with_local() {
+        setup_join_fdw();
+
+        let key_prefix = "join_test:ttl_first_set";
+        let table_name = "join_ttl_first_set";
+
+        // Set with TTL at position 0
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE {} (ttl bigint, member text)
+             SERVER {} OPTIONS (
+                database '{}', table_type 'set', table_key_prefix '{}', ttl '3600'
+             );",
+            table_name, SERVER_NAME, TEST_DATABASE, key_prefix
+        ))
+        .unwrap();
+
+        Spi::run(&format!(
+            "INSERT INTO {} (member) VALUES ('m1'), ('m2'), ('m3');",
+            table_name
+        ))
+        .unwrap();
+
+        Spi::run("CREATE TEMPORARY TABLE join_ttl_set_local (id text);").unwrap();
+        Spi::run("INSERT INTO join_ttl_set_local VALUES ('m1'), ('m2'), ('missing');").unwrap();
+
+        let count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM join_ttl_set_local l JOIN {} r ON l.id = r.member;",
+            table_name
+        ))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(count, 2, "SET JOIN with TTL-first should match m1 and m2");
+
+        Spi::run(&format!("DELETE FROM {} WHERE member = 'm1';", table_name)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE member = 'm2';", table_name)).unwrap();
+        Spi::run(&format!("DELETE FROM {} WHERE member = 'm3';", table_name)).unwrap();
+        let _ = Spi::run(&format!("DROP FOREIGN TABLE IF EXISTS {};", table_name));
+        let _ = Spi::run("DROP TABLE IF EXISTS join_ttl_set_local;");
+        cleanup_join_fdw();
+    }
 }

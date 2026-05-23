@@ -48,12 +48,14 @@ cargo fmt
 ### FDW Lifecycle (PostgreSQL callbacks)
 1. **Planning**: `get_foreign_rel_size` → `get_foreign_paths` → `get_foreign_plan`
    - Planning (`get_foreign_rel_size`) connects to Redis for real statistics (DBSIZE, HLEN, etc.)
+   - Planning detects TTL column early so `get_foreign_paths` can compute correct pushdown column indices for parameterized paths
    - Planning releases connection immediately; `begin_foreign_scan` re-acquires from pool (fast path: read-lock only)
 2. **Scanning**: `begin_foreign_scan` → `iterate_foreign_scan` → `re_scan_foreign_scan` → `end_foreign_scan`
    - `recheck_foreign_scan` (returns true; no lossy filtering)
    - `shutdown_foreign_scan` (early connection release back to pool)
 3. **Explain**: `explain_foreign_scan`, `explain_foreign_modify` (EXPLAIN output with server, key, type, pushdown, batch info)
 4. **Modify**: `plan_foreign_modify` → `begin_foreign_modify` → `exec_foreign_insert`/`update`/`delete` → `end_foreign_modify`
+   - `add_foreign_update_targets` registers the row identity column (first non-TTL column) for UPDATE/DELETE operations; skips TTL column at position 0
 5. **Batch Insert**: `get_foreign_modify_batch_size` → `exec_foreign_batch_insert` (pipelined multi-row)
 6. **COPY FROM / INSERT SELECT**: `begin_foreign_insert` → (reuses `exec_foreign_insert`) → `end_foreign_insert`
 7. **Truncate**: `exec_foreign_truncate` (UNLINK for single-key; SCAN+UNLINK for patterns)
@@ -113,15 +115,16 @@ Stream is append-only; UPDATE returns an error at the trait level and `IsForeign
 ### WHERE Pushdown
 - `PushableCondition` carries `column_index: usize` (0-based, from `varattno - 1`) — this is the raw PostgreSQL attribute position
 - Hash/ZSet/Stream table types store a `pushdown_column_index: usize` field that identifies the target column for pushdown (field for hash, member for zset, stream_id for stream)
+- ZSet additionally stores `score_column_index: usize` = `pushdown_column_index + 1`; range operators (>=, <=, >, <) on the score column trigger ZRANGEBYSCORE instead of ZSCAN
 - `pushdown_column_index` is computed by `compute_pushdown_column_index(ttl_column_index, is_multi_key)` in `column_utils.rs`, accounting for TTL column position and multi-key offset
 - Filtering compares `condition.column_index == self.pushdown_column_index` (not hardcoded to 0)
 - Column names are user-chosen — filtering is position-based, never hardcoded to specific names
 
 ### JOIN Architecture
-- **FDW-to-Local (parameterized)**: `get_foreign_paths` advertises cheap parameterized paths for point-lookup columns (hash/field→HGET, set/member→SISMEMBER, zset/member→ZSCORE). PostgreSQL's planner picks these for NestLoop joins, passing the outer row's value as a parameter. `iterate_foreign_scan` evaluates the expression and does a single-key Redis lookup per outer row.
+- **FDW-to-Local (parameterized)**: `get_foreign_paths` advertises cheap parameterized paths for point-lookup columns (hash/field→HGET, set/member→SISMEMBER, zset/member→ZSCORE). Uses EquivalenceClass (EC) detection from `root->eq_classes` and `compute_pushdown_column_index()` to find the correct column even when TTL column is at position 0. Costs tuned low (`PARAMETERIZED_LOOKUP_COST=0.5`) so the planner auto-selects parameterized path when the outer side is small (typically 50×+ faster than full scan for selective joins).
 - **FDW-to-Local (fallback)**: If no parameterized path applies, standard nested-loop with full rescan on each iteration
-- **FDW-to-FDW**: `GetForeignJoinPaths` detects same-server tables, extracts join columns from restrictlist, creates pushdown join path
-- **Pushdown guards**: same server (host_port match), non-multi-key tables, non-Stream tables, merge-joinable (equality) operator, INNER/LEFT only, no base restrictions on either relation
+- **FDW-to-FDW**: `GetForeignJoinPaths` detects same-server tables, extracts join columns from restrictlist, adjusts for TTL column stripping via `adjust_column_for_ttl_strip()`, creates pushdown join path
+- **Pushdown guards**: same server (host_port match), non-multi-key tables, non-Stream tables, non-single-key-String tables, merge-joinable (equality) operator, INNER/LEFT only, no base restrictions on either relation
 - **Base restriction guard**: If either relation has `baserestrictinfo` (WHERE clauses on individual tables), pushdown is skipped and PostgreSQL falls back to nested-loop which handles base quals correctly
 - **Join column detection**: Walks `extra.restrictlist` → `RestrictInfo` → `OpExpr` → validates `op_mergejoinable()` → `Var` nodes to find equality columns
 - **Join execution**: Fetch both datasets → build HashMap on smaller side → probe with larger side → LEFT JOIN NULL-pads unmatched outer rows

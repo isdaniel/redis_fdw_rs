@@ -111,6 +111,10 @@ extern "C-unwind" fn get_foreign_rel_size(
             state.table_type = RedisTableType::from_str(table_type_str);
         }
 
+        let rel = pg_sys::relation_open(foreigntableid, pg_sys::AccessShareLock as i32);
+        state.ttl_column_index = detect_ttl_column((*rel).rd_att);
+        pg_sys::relation_close(rel, pg_sys::AccessShareLock as i32);
+
         if let Err(e) = state.init_redis_connection_from_options() {
             log!(
                 "Could not connect to Redis for cost estimation, using defaults: {}",
@@ -383,7 +387,21 @@ extern "C-unwind" fn begin_foreign_scan(
             compute_pushdown_column_index(state.ttl_column_index, state.is_multi_key);
         match &mut state.table_type {
             RedisTableType::Hash(ref mut h) => h.pushdown_column_index = pushdown_idx,
-            RedisTableType::ZSet(ref mut z) => z.pushdown_column_index = pushdown_idx,
+            RedisTableType::ZSet(ref mut z) => {
+                z.pushdown_column_index = pushdown_idx;
+                // Find the next active (non-dropped, non-TTL) column after pushdown_idx
+                let mut score_idx = pushdown_idx + 1;
+                let natts = (*tupdesc).natts as usize;
+                while score_idx < natts {
+                    let attr = tuple_desc_attr(tupdesc, score_idx);
+                    if (*attr).attisdropped || Some(score_idx) == state.ttl_column_index {
+                        score_idx += 1;
+                        continue;
+                    }
+                    break;
+                }
+                z.score_column_index = score_idx;
+            }
             RedisTableType::Stream(ref mut s) => s.pushdown_column_index = pushdown_idx,
             _ => {}
         }
@@ -653,11 +671,70 @@ unsafe extern "C-unwind" fn add_foreign_update_targets(
     target_relation: pgrx::pg_sys::Relation,
 ) {
     log!("---> add_foreign_update_targets");
-    let attr = *tuple_desc_attr(relation_get_descr(target_relation), 0);
+    let tupdesc = relation_get_descr(target_relation);
+    let ttl_idx = detect_ttl_column(tupdesc);
+    let natts = (*tupdesc).natts as usize;
+
+    let relid = (*target_relation).rd_id;
+    let opts = get_foreign_table_options(relid);
+    let table_type = opts.get("table_type").map(|s| s.as_str()).unwrap_or("");
+
+    // Count active (non-dropped, non-TTL) data columns
+    let mut num_data_cols = 0usize;
+    for i in 0..natts {
+        let a = tuple_desc_attr(tupdesc, i);
+        if (*a).attisdropped {
+            continue;
+        }
+        if Some(i) == ttl_idx {
+            continue;
+        }
+        num_data_cols += 1;
+    }
+
+    let identity_attno = if table_type == "list" && num_data_cols >= 2 {
+        // For 2-column list (index, value): LREM needs the value column,
+        // which is the second active non-TTL column
+        let mut count = 0usize;
+        let mut target = 0usize;
+        for i in 0..natts {
+            let a = tuple_desc_attr(tupdesc, i);
+            if (*a).attisdropped {
+                continue;
+            }
+            if Some(i) == ttl_idx {
+                continue;
+            }
+            count += 1;
+            if count == 2 {
+                target = i;
+                break;
+            }
+        }
+        target
+    } else {
+        // Default: first active non-TTL column
+        let mut target = 0usize;
+        for i in 0..natts {
+            let a = tuple_desc_attr(tupdesc, i);
+            if (*a).attisdropped {
+                continue;
+            }
+            if Some(i) == ttl_idx {
+                continue;
+            }
+            target = i;
+            break;
+        }
+        target
+    };
+
+    let attr = *tuple_desc_attr(tupdesc, identity_attno);
+    let varattno = (identity_attno as i16) + 1;
 
     let var = pg_sys::makeVar(
         rtindex as _,
-        1,
+        varattno,
         attr.atttypid,
         attr.atttypmod,
         pg_sys::InvalidOid,

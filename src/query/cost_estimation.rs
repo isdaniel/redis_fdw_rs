@@ -50,6 +50,11 @@ pub mod costs {
 
     /// Minimum selectivity when SCAN sample finds no matches but DB is non-empty
     pub const MIN_SCAN_SELECTIVITY: f64 = 0.01;
+
+    /// Cost of a single parameterized point-lookup (HGET/SISMEMBER/ZSCORE)
+    /// on a pooled connection — much cheaper than a full NETWORK_ROUND_TRIP
+    /// because connection is already established and the command is O(1)
+    pub const PARAMETERIZED_LOOKUP_COST: f64 = 0.5;
 }
 
 /// Statistics gathered from Redis for cost estimation
