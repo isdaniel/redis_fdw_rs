@@ -7,7 +7,7 @@
 -- ============================================================
 
 -- Create a foreign table backed by a Redis STREAM
-CREATE FOREIGN TABLE demo_audit_log (aaa text, user_id text, action text, resource text)
+CREATE FOREIGN TABLE demo_audit_log (stream_id text, user_id text, action text, resource text)
     SERVER redis_server
     OPTIONS (
         database '0',
