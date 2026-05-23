@@ -346,4 +346,165 @@ mod tests {
         teardown_fdw(table);
         cleanup_redis_key(key);
     }
+
+    #[pg_test]
+    fn test_pushdown_verify_zset_score_gte_uses_zrangebyscore() {
+        let table = "pv_zset_score_gte";
+        let key = "pv_test:zset_score_gte";
+        cleanup_redis_key(key);
+        setup_fdw(table, "member text, score numeric", "zset", key);
+
+        for i in 0..100 {
+            Spi::run(&format!("INSERT INTO {table} VALUES ('m{i}', {i});")).unwrap();
+        }
+
+        let before = get_all_command_counts();
+        let count = get_count(&format!("SELECT COUNT(*) FROM {table} WHERE score >= 90"));
+        let after = get_all_command_counts();
+
+        assert_eq!(count, 10, "score >= 90 should return 10 members (90..99)");
+
+        let zrangebyscore_delta = command_delta(&before, &after, "zrangebyscore");
+        assert!(
+            zrangebyscore_delta >= 1,
+            "Expected ZRANGEBYSCORE for >= pushdown, but delta={}",
+            zrangebyscore_delta
+        );
+
+        teardown_fdw(table);
+        cleanup_redis_key(key);
+    }
+
+    #[pg_test]
+    fn test_pushdown_verify_zset_score_range_uses_zrangebyscore() {
+        let table = "pv_zset_score_range";
+        let key = "pv_test:zset_score_range";
+        cleanup_redis_key(key);
+        setup_fdw(table, "member text, score numeric", "zset", key);
+
+        for i in 0..100 {
+            Spi::run(&format!("INSERT INTO {table} VALUES ('m{i}', {i});")).unwrap();
+        }
+
+        let before = get_all_command_counts();
+        let count = get_count(&format!(
+            "SELECT COUNT(*) FROM {table} WHERE score >= 20 AND score <= 30"
+        ));
+        let after = get_all_command_counts();
+
+        assert_eq!(count, 11, "20 <= score <= 30 should return 11 members");
+
+        let zrangebyscore_delta = command_delta(&before, &after, "zrangebyscore");
+        assert!(
+            zrangebyscore_delta >= 1,
+            "Expected ZRANGEBYSCORE for range pushdown, but delta={}",
+            zrangebyscore_delta
+        );
+
+        teardown_fdw(table);
+        cleanup_redis_key(key);
+    }
+
+    #[pg_test]
+    fn test_pushdown_verify_zset_score_gt_exclusive() {
+        let table = "pv_zset_score_gt";
+        let key = "pv_test:zset_score_gt";
+        cleanup_redis_key(key);
+        setup_fdw(table, "member text, score numeric", "zset", key);
+
+        for i in 0..50 {
+            Spi::run(&format!("INSERT INTO {table} VALUES ('m{i}', {i});")).unwrap();
+        }
+
+        let count = get_count(&format!("SELECT COUNT(*) FROM {table} WHERE score > 45"));
+        assert_eq!(count, 4, "score > 45 should return 4 members (46,47,48,49)");
+
+        teardown_fdw(table);
+        cleanup_redis_key(key);
+    }
+
+    #[pg_test]
+    fn test_pushdown_verify_zset_score_lt_uses_zrangebyscore() {
+        let table = "pv_zset_score_lt";
+        let key = "pv_test:zset_score_lt";
+        cleanup_redis_key(key);
+        setup_fdw(table, "member text, score numeric", "zset", key);
+
+        for i in 0..100 {
+            Spi::run(&format!("INSERT INTO {table} VALUES ('m{i}', {i});")).unwrap();
+        }
+
+        let before = get_all_command_counts();
+        let count = get_count(&format!("SELECT COUNT(*) FROM {table} WHERE score < 5"));
+        let after = get_all_command_counts();
+
+        assert_eq!(count, 5, "score < 5 should return 5 members (0,1,2,3,4)");
+
+        let zrangebyscore_delta = command_delta(&before, &after, "zrangebyscore");
+        assert!(
+            zrangebyscore_delta >= 1,
+            "Expected ZRANGEBYSCORE for < pushdown, but delta={}",
+            zrangebyscore_delta
+        );
+
+        teardown_fdw(table);
+        cleanup_redis_key(key);
+    }
+
+    #[pg_test]
+    fn test_pushdown_verify_zset_score_range_with_ttl_first() {
+        let table = "pv_zset_score_ttl";
+        let key = "pv_test:zset_score_ttl";
+        cleanup_redis_key(key);
+
+        let wrapper = format!("pv_{}_wrapper", table);
+        let server = format!("pv_{}_server", table);
+        Spi::run(&format!(
+            "CREATE FOREIGN DATA WRAPPER {wrapper} HANDLER redis_fdw_handler;"
+        ))
+        .unwrap();
+        Spi::run(&format!(
+            "CREATE SERVER {server} FOREIGN DATA WRAPPER {wrapper} \
+             OPTIONS (host_port '127.0.0.1:8899');"
+        ))
+        .unwrap();
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE {table} (ttl bigint, member text, score numeric) \
+             SERVER {server} OPTIONS (\
+               database '15', \
+               table_type 'zset', \
+               table_key_prefix '{key}', \
+               ttl '600'\
+             );"
+        ))
+        .unwrap();
+
+        for i in 0..50 {
+            Spi::run(&format!(
+                "INSERT INTO {table} (member, score) VALUES ('player{i}', {});",
+                i * 10
+            ))
+            .unwrap();
+        }
+
+        let count = get_count(&format!("SELECT COUNT(*) FROM {table} WHERE score >= 400"));
+        assert_eq!(
+            count, 10,
+            "score >= 400 with TTL-first should return 10 members (40..49)"
+        );
+
+        let before = get_all_command_counts();
+        let _ = get_count(&format!("SELECT COUNT(*) FROM {table} WHERE score >= 400"));
+        let after = get_all_command_counts();
+
+        let zrangebyscore_delta = command_delta(&before, &after, "zrangebyscore");
+        assert!(
+            zrangebyscore_delta >= 1,
+            "Expected ZRANGEBYSCORE even with TTL at position 0, but delta={}",
+            zrangebyscore_delta
+        );
+
+        teardown_fdw(table);
+        cleanup_redis_key(key);
+    }
 }

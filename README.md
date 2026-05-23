@@ -272,10 +272,15 @@ CREATE FOREIGN TABLE cached_data (value text)
 SERVER redis_server
 OPTIONS (table_type 'string', table_key_prefix 'cache:item1', ttl '3600');
 
--- Per-row TTL override via virtual column
+-- Per-row TTL override via virtual column (TTL column can be at any position)
 CREATE FOREIGN TABLE cached_items (value text, ttl bigint)
 SERVER redis_server
 OPTIONS (table_type 'string', table_key_prefix 'cache:item2', ttl '3600');
+
+-- TTL column at first position is also supported
+CREATE FOREIGN TABLE cached_hash (ttl bigint, field text, value text)
+SERVER redis_server
+OPTIONS (table_type 'hash', table_key_prefix 'cache:hash1', ttl '3600');
 
 INSERT INTO cached_items VALUES ('short-lived', 60);   -- expires in 60s
 UPDATE cached_items SET value = 'permanent', ttl = -1; -- persist forever
@@ -383,6 +388,10 @@ SELECT * FROM user_profiles WHERE field IN ('name', 'email', 'phone');
 
 -- Set: uses SISMEMBER for direct membership check
 SELECT EXISTS(SELECT 1 FROM user_roles WHERE member = 'admin');
+
+-- ZSet: uses ZRANGEBYSCORE for score range queries (O(log N + M) instead of full scan)
+SELECT * FROM leaderboard WHERE score >= 1000 AND score <= 2000;
+SELECT * FROM leaderboard WHERE score > 99000 ORDER BY score DESC;
 ```
 
 ### Bulk Insert Example
@@ -487,6 +496,7 @@ The FDW automatically detects which columns are used in the join condition from 
 - Neither table can have base WHERE restrictions (these force nested-loop fallback)
 - Multi-key pattern tables (glob in `table_key_prefix`) cannot be push-down joined
 - Stream tables are not eligible for join pushdown (variable-width rows)
+- Single-key String tables are not eligible for join pushdown (no join column)
 - RIGHT JOIN and FULL OUTER JOIN are not pushed down (handled via nested-loop)
 - Both datasets are loaded into memory for the hash join (warning emitted if >500K rows)
 - Redis command errors during join fetch are raised as SQL errors (no silent data loss)
