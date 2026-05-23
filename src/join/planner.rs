@@ -453,8 +453,9 @@ pub(crate) unsafe extern "C-unwind" fn get_foreign_join_paths(
         return;
     }
 
-    if matches!(outer_state.table_type, RedisTableType::String(_))
-        || matches!(inner_state.table_type, RedisTableType::String(_))
+    if (matches!(outer_state.table_type, RedisTableType::String(_)) && !outer_state.is_multi_key)
+        || (matches!(inner_state.table_type, RedisTableType::String(_))
+            && !inner_state.is_multi_key)
     {
         log!("Single-key String table detected, join pushdown not supported");
         return;

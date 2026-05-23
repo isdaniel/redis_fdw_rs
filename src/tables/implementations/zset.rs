@@ -69,10 +69,8 @@ impl RedisZSetTable {
 
         if limit_offset.has_constraints() {
             let offset = limit_offset.offset.unwrap_or(0);
-            let limit = limit_offset.limit.unwrap_or(usize::MAX);
-            if limit != usize::MAX {
-                cmd.arg("LIMIT").arg(offset).arg(limit);
-            }
+            let limit = limit_offset.limit.unwrap_or(i64::MAX as usize);
+            cmd.arg("LIMIT").arg(offset).arg(limit);
         }
 
         let result: Vec<String> = cmd.query(conn)?;
@@ -183,32 +181,7 @@ impl RedisTableOperations for RedisZSetTable {
         limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(conditions) = conditions {
-            let score_idx = self.score_column_index;
-            let score_conditions: Vec<&PushableCondition> = conditions
-                .iter()
-                .filter(|c| {
-                    c.column_index == score_idx
-                        && matches!(
-                            c.operator,
-                            ComparisonOperator::GreaterThan
-                                | ComparisonOperator::GreaterThanOrEqual
-                                | ComparisonOperator::LessThan
-                                | ComparisonOperator::LessThanOrEqual
-                                | ComparisonOperator::Equal
-                        )
-                })
-                .collect();
-
-            if !score_conditions.is_empty() {
-                return self.load_with_score_range(
-                    conn,
-                    key_prefix,
-                    &score_conditions,
-                    limit_offset,
-                );
-            }
-
-            // For ZSet, only pushdown conditions on the member column conditions are left to PostgreSQL's post-filter
+            // Prioritize member equality lookups (ZSCORE is O(1)) over score-range (ZRANGEBYSCORE is O(log N + M))
             let target_idx = self.pushdown_column_index;
             let member_conditions: Vec<PushableCondition> = conditions
                 .iter()
@@ -313,9 +286,25 @@ impl RedisTableOperations for RedisZSetTable {
                                 Ok(LoadDataResult::FullyLoaded)
                             };
                         }
-                        _ => {} // Fall back to full scan
+                        _ => {} // Fall through to score-range check
                     }
                 }
+            }
+
+            // Fallback: score-range conditions (ZRANGEBYSCORE is O(log N + M))
+            let score_idx = self.score_column_index;
+            let score_conditions: Vec<&PushableCondition> = conditions
+                .iter()
+                .filter(|c| c.column_index == score_idx)
+                .collect();
+
+            if !score_conditions.is_empty() {
+                return self.load_with_score_range(
+                    conn,
+                    key_prefix,
+                    &score_conditions,
+                    limit_offset,
+                );
             }
         }
 
