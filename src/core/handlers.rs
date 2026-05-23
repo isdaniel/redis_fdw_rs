@@ -111,6 +111,10 @@ extern "C-unwind" fn get_foreign_rel_size(
             state.table_type = RedisTableType::from_str(table_type_str);
         }
 
+        let rel = pg_sys::relation_open(foreigntableid, pg_sys::AccessShareLock as i32);
+        state.ttl_column_index = detect_ttl_column((*rel).rd_att);
+        pg_sys::relation_close(rel, pg_sys::AccessShareLock as i32);
+
         if let Err(e) = state.init_redis_connection_from_options() {
             log!(
                 "Could not connect to Redis for cost estimation, using defaults: {}",
@@ -383,7 +387,10 @@ extern "C-unwind" fn begin_foreign_scan(
             compute_pushdown_column_index(state.ttl_column_index, state.is_multi_key);
         match &mut state.table_type {
             RedisTableType::Hash(ref mut h) => h.pushdown_column_index = pushdown_idx,
-            RedisTableType::ZSet(ref mut z) => z.pushdown_column_index = pushdown_idx,
+            RedisTableType::ZSet(ref mut z) => {
+                z.pushdown_column_index = pushdown_idx;
+                z.score_column_index = pushdown_idx + 1;
+            }
             RedisTableType::Stream(ref mut s) => s.pushdown_column_index = pushdown_idx,
             _ => {}
         }
@@ -653,11 +660,20 @@ unsafe extern "C-unwind" fn add_foreign_update_targets(
     target_relation: pgrx::pg_sys::Relation,
 ) {
     log!("---> add_foreign_update_targets");
-    let attr = *tuple_desc_attr(relation_get_descr(target_relation), 0);
+    let tupdesc = relation_get_descr(target_relation);
+    let ttl_idx = detect_ttl_column(tupdesc);
+
+    let identity_attno = match ttl_idx {
+        Some(0) => 1,
+        _ => 0,
+    };
+
+    let attr = *tuple_desc_attr(tupdesc, identity_attno);
+    let varattno = (identity_attno as i16) + 1;
 
     let var = pg_sys::makeVar(
         rtindex as _,
-        1,
+        varattno,
         attr.atttypid,
         attr.atttypmod,
         pg_sys::InvalidOid,

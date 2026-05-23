@@ -276,6 +276,20 @@ impl RedisFdwState {
                 return true;
             }
 
+            // Use direct load for ZSet score-range conditions (ZRANGEBYSCORE is O(log N + M))
+            let has_range_condition = analysis.pushable_conditions.iter().any(|c| {
+                matches!(
+                    c.operator,
+                    ComparisonOperator::GreaterThan
+                        | ComparisonOperator::GreaterThanOrEqual
+                        | ComparisonOperator::LessThan
+                        | ComparisonOperator::LessThanOrEqual
+                )
+            });
+            if has_range_condition {
+                return true;
+            }
+
             // Use direct load if we have LIMIT/OFFSET (load_data handles it efficiently)
             if analysis.has_limit_pushdown() {
                 return true;
@@ -1050,8 +1064,7 @@ impl RedisFdwState {
 
         match &mut self.table_type {
             RedisTableType::Hash(ref mut t) => {
-                // param_column == 0 means lookup by field name → HGET
-                if self.param_column == 0 {
+                if self.param_column == t.pushdown_column_index {
                     let val: Option<String> = match redis::cmd("HGET")
                         .arg(&self.table_key_prefix)
                         .arg(param_value)
@@ -1098,8 +1111,7 @@ impl RedisFdwState {
                 }
             }
             RedisTableType::ZSet(ref mut t) => {
-                // param_column == 0 means lookup by member → ZSCORE
-                if self.param_column == 0 {
+                if self.param_column == t.pushdown_column_index {
                     let score: Option<f64> = match redis::cmd("ZSCORE")
                         .arg(&self.table_key_prefix)
                         .arg(param_value)
@@ -1126,8 +1138,11 @@ impl RedisFdwState {
                 false
             }
             RedisTableType::String(ref mut t) => {
-                // Multi-key mode: param_column == 0 means lookup by key → GET
-                if self.is_multi_key && self.param_column == 0 {
+                let expected_col = crate::core::column_utils::compute_pushdown_column_index(
+                    self.ttl_column_index,
+                    false,
+                );
+                if self.is_multi_key && self.param_column == expected_col {
                     let val: Option<String> = match redis::cmd("GET").arg(param_value).query(conn) {
                         Ok(v) => v,
                         Err(e) => {

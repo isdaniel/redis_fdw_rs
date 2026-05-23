@@ -1,5 +1,10 @@
 use crate::{
-    core::{column_utils::state_from_ptr, state_manager::RedisFdwState},
+    core::{
+        column_utils::{
+            adjust_column_for_ttl_strip, compute_pushdown_column_index, state_from_ptr,
+        },
+        state_manager::RedisFdwState,
+    },
     join::types::{RedisJoinState, RedisJoinType},
     query::cost_estimation::costs,
     tables::types::RedisTableType,
@@ -13,12 +18,88 @@ pub(crate) unsafe fn add_parameterized_paths(
     baserel: *mut pg_sys::RelOptInfo,
     state: &RedisFdwState,
 ) {
+    let my_relids = (*baserel).relids;
+
+    let pushdown_col = compute_pushdown_column_index(state.ttl_column_index, false);
+
+    if (*baserel).has_eclass_joins {
+        let ec_list = (*root).eq_classes;
+        if !ec_list.is_null() {
+            let ec_len = pg_sys::list_length(ec_list);
+            for i in 0..ec_len {
+                let ec = pg_sys::list_nth(ec_list, i) as *mut pg_sys::EquivalenceClass;
+                if ec.is_null() {
+                    continue;
+                }
+
+                let ec_members = (*ec).ec_members;
+                if ec_members.is_null() {
+                    continue;
+                }
+
+                let mut has_my_pushdown_col = false;
+                let mut outer_relids_for_ec: *mut pg_sys::Bitmapset = ptr::null_mut();
+
+                let mem_len = pg_sys::list_length(ec_members);
+                for j in 0..mem_len {
+                    let em = pg_sys::list_nth(ec_members, j) as *mut pg_sys::EquivalenceMember;
+                    if em.is_null() {
+                        continue;
+                    }
+
+                    let em_expr = (*em).em_expr as *mut pg_sys::Node;
+                    if em_expr.is_null() {
+                        continue;
+                    }
+                    if (*em_expr).type_ != pg_sys::NodeTag::T_Var {
+                        continue;
+                    }
+
+                    let var = &*(em_expr as *mut pg_sys::Var);
+
+                    if pg_sys::bms_is_member(var.varno as i32, my_relids) {
+                        let col_idx = (var.varattno - 1) as usize;
+                        if col_idx == pushdown_col {
+                            has_my_pushdown_col = true;
+                        }
+                    } else if var.varno > 0 {
+                        outer_relids_for_ec =
+                            pg_sys::bms_add_member(outer_relids_for_ec, var.varno as i32);
+                    }
+                }
+
+                if has_my_pushdown_col && !outer_relids_for_ec.is_null() {
+                    let param_path = pg_sys::create_foreignscan_path(
+                        root,
+                        baserel,
+                        ptr::null_mut(),
+                        1.0,
+                        #[cfg(feature = "pg18")]
+                        0,
+                        costs::CPU_TUPLE_COST,
+                        costs::PARAMETERIZED_LOOKUP_COST,
+                        ptr::null_mut(),
+                        outer_relids_for_ec,
+                        ptr::null_mut(),
+                        #[cfg(any(feature = "pg17", feature = "pg18"))]
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                    );
+                    pg_sys::add_path(baserel, param_path as *mut pg_sys::Path);
+                    log!(
+                        "Added EC parameterized path for pushdown col {} with outer relids",
+                        pushdown_col
+                    );
+                }
+            }
+        }
+    }
+
     let joininfo = (*baserel).joininfo;
     if joininfo.is_null() {
         return;
     }
 
-    let my_relids = (*baserel).relids;
     let list_len = pg_sys::list_length(joininfo);
 
     for i in 0..list_len {
@@ -73,10 +154,10 @@ pub(crate) unsafe fn add_parameterized_paths(
         let my_col_idx = (my_col_attno - 1) as usize;
 
         let valid = match &state.table_type {
-            RedisTableType::Hash(_) => my_col_idx == 0,
-            RedisTableType::Set(_) => my_col_idx == 0,
-            RedisTableType::ZSet(_) => my_col_idx == 0,
-            RedisTableType::String(_) if state.is_multi_key => my_col_idx == 0,
+            RedisTableType::Hash(_) => my_col_idx == pushdown_col,
+            RedisTableType::Set(_) => my_col_idx == pushdown_col,
+            RedisTableType::ZSet(_) => my_col_idx == pushdown_col,
+            RedisTableType::String(_) if state.is_multi_key => my_col_idx == pushdown_col,
             _ => false,
         };
         if !valid {
@@ -93,8 +174,8 @@ pub(crate) unsafe fn add_parameterized_paths(
             1.0,
             #[cfg(feature = "pg18")]
             0,
-            costs::NETWORK_ROUND_TRIP,
-            costs::NETWORK_ROUND_TRIP + costs::CPU_TUPLE_COST,
+            costs::CPU_TUPLE_COST,
+            costs::PARAMETERIZED_LOOKUP_COST,
             ptr::null_mut(),
             required_outer,
             ptr::null_mut(),
@@ -372,6 +453,13 @@ pub(crate) unsafe extern "C-unwind" fn get_foreign_join_paths(
         return;
     }
 
+    if matches!(outer_state.table_type, RedisTableType::String(_))
+        || matches!(inner_state.table_type, RedisTableType::String(_))
+    {
+        log!("Single-key String table detected, join pushdown not supported");
+        return;
+    }
+
     if !(*outerrel).baserestrictinfo.is_null()
         && pg_sys::list_length((*outerrel).baserestrictinfo) > 0
     {
@@ -392,6 +480,9 @@ pub(crate) unsafe extern "C-unwind" fn get_foreign_join_paths(
             return;
         }
     };
+
+    let join_col_outer = adjust_column_for_ttl_strip(join_col_outer, outer_state.ttl_column_index);
+    let join_col_inner = adjust_column_for_ttl_strip(join_col_inner, inner_state.ttl_column_index);
 
     log!(
         "Detected join columns: outer={}, inner={}",
