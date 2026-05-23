@@ -31,9 +31,9 @@ pub struct PoolConfig {
 impl Default for PoolConfig {
     fn default() -> Self {
         Self {
-            max_size: 16,
+            max_size: 8,
             min_idle: Some(1),
-            connection_timeout: Duration::from_secs(30),
+            connection_timeout: Duration::from_secs(15),
             max_lifetime: Some(Duration::from_secs(1800)), // 30 minutes
             idle_timeout: Some(Duration::from_secs(600)),  // 10 minutes
         }
@@ -471,17 +471,27 @@ pub fn get_pooled_connection(
     // Read lock dropped here
 
     // Pool doesn't exist — acquire write lock to create it
-    let mut writer = manager.write().map_err(|_| PoolError::LockPoisoned)?;
-    let pool = match conn_type {
-        RedisConnectionType::Single => {
-            let p =
-                writer.get_or_create_single_pool(host_port, database, auth_config, pool_config)?;
-            RedisPool::Single(p)
-        }
-        RedisConnectionType::Cluster => {
-            let p =
-                writer.get_or_create_cluster_pool(host_port, database, auth_config, pool_config)?;
-            RedisPool::Cluster(p)
+    let pool = {
+        let mut writer = manager.write().map_err(|_| PoolError::LockPoisoned)?;
+        match conn_type {
+            RedisConnectionType::Single => {
+                let p = writer.get_or_create_single_pool(
+                    host_port,
+                    database,
+                    auth_config,
+                    pool_config,
+                )?;
+                RedisPool::Single(p)
+            }
+            RedisConnectionType::Cluster => {
+                let p = writer.get_or_create_cluster_pool(
+                    host_port,
+                    database,
+                    auth_config,
+                    pool_config,
+                )?;
+                RedisPool::Cluster(p)
+            }
         }
     };
     pool.get_connection()
@@ -503,9 +513,9 @@ mod tests {
     #[test]
     fn test_pool_config_default() {
         let config = PoolConfig::default();
-        assert_eq!(config.max_size, 16);
+        assert_eq!(config.max_size, 8);
         assert_eq!(config.min_idle, Some(1));
-        assert_eq!(config.connection_timeout, Duration::from_secs(30));
+        assert_eq!(config.connection_timeout, Duration::from_secs(15));
         assert_eq!(config.max_lifetime, Some(Duration::from_secs(1800)));
         assert_eq!(config.idle_timeout, Some(Duration::from_secs(600)));
     }
