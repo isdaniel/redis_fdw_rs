@@ -31,6 +31,8 @@ pub struct RedisStreamTable {
     pub batch_size: usize,
     /// Column names from the foreign table definition (for mapping fields to positions)
     pub column_names: Vec<String>,
+    /// Raw attribute index of the stream ID column (accounts for TTL position)
+    pub pushdown_column_index: usize,
 }
 
 impl RedisStreamTable {
@@ -41,6 +43,7 @@ impl RedisStreamTable {
             last_id: None,
             batch_size,
             column_names: Vec::new(),
+            pushdown_column_index: 0,
         }
     }
 
@@ -127,9 +130,10 @@ impl RedisStreamTable {
         let mut end_id = "+".to_string();
         let mut count = Some(self.batch_size);
         let mut non_id_conditions: Vec<&PushableCondition> = Vec::new();
+        let id_col_idx = self.pushdown_column_index;
 
         for condition in &scan_conditions.exact_conditions {
-            if condition.column_index == 0 {
+            if condition.column_index == id_col_idx {
                 if condition.operator == ComparisonOperator::Equal {
                     start_id = condition.value.clone();
                     end_id = condition.value.clone();
@@ -141,7 +145,7 @@ impl RedisStreamTable {
         }
 
         for condition in &scan_conditions.pattern_conditions {
-            if condition.column_index != 0 {
+            if condition.column_index != id_col_idx {
                 non_id_conditions.push(condition);
             }
         }
@@ -199,6 +203,7 @@ impl RedisStreamTable {
             self.entries = filtered_entries;
             if self.entries.is_empty() {
                 self.dataset = DataSet::Empty;
+                return Ok(LoadDataResult::Empty);
             } else {
                 self.dataset = DataSet::Filtered(filtered_flat);
             }
@@ -400,11 +405,12 @@ impl RedisTableOperations for RedisStreamTable {
         conditions: Option<&[PushableCondition]>,
     ) -> Result<(u64, usize), redis::RedisError> {
         // Determine start/end IDs from ID-column conditions only
+        let id_col_idx = self.pushdown_column_index;
         let (start_id, end_id) = if let Some(conds) = conditions {
             let mut start = None;
             let mut end = None;
             for c in conds {
-                if c.operator == ComparisonOperator::Equal && c.column_index == 0 {
+                if c.operator == ComparisonOperator::Equal && c.column_index == id_col_idx {
                     start = Some(c.value.clone());
                     end = Some(c.value.clone());
                     break;
@@ -439,7 +445,12 @@ impl RedisTableOperations for RedisStreamTable {
 
         // Collect non-ID conditions for client-side filtering
         let non_id_conds: Vec<&PushableCondition> = conditions
-            .map(|conds| conds.iter().filter(|c| c.column_index != 0).collect())
+            .map(|conds| {
+                conds
+                    .iter()
+                    .filter(|c| c.column_index != id_col_idx)
+                    .collect()
+            })
             .unwrap_or_default();
 
         // Pre-calculate PatternMatchers for LIKE conditions (O(1) lookup by index)

@@ -512,4 +512,103 @@ mod tests {
         let debug_str = format!("{:?}", ComparisonOperator::Like);
         assert!(debug_str.contains("Like"));
     }
+
+    /// Test WHERE pushdown works correctly when TTL column is at position 0
+    /// (proving pushdown_column_index correctly offsets past TTL)
+    #[pg_test]
+    fn test_hash_pushdown_with_ttl_first() {
+        let _ = Spi::run("DROP FOREIGN DATA WRAPPER IF EXISTS redis_pd_ttl CASCADE;");
+        Spi::run(
+            "CREATE FOREIGN DATA WRAPPER redis_pd_ttl HANDLER redis_fdw_handler VALIDATOR redis_fdw_validator;",
+        )
+        .unwrap();
+        Spi::run(
+            "CREATE SERVER redis_pd_ttl_srv FOREIGN DATA WRAPPER redis_pd_ttl OPTIONS (host_port '127.0.0.1:8899');",
+        )
+        .unwrap();
+
+        let key = "pushdown:ttl_first:hash";
+        let mut conn = redis::Client::open("redis://127.0.0.1:8899/15")
+            .unwrap()
+            .get_connection()
+            .unwrap();
+        let _: () = redis::cmd("DEL").arg(key).query(&mut conn).unwrap();
+        let _: () = redis::cmd("HSET")
+            .arg(key)
+            .arg("alpha")
+            .arg("100")
+            .arg("beta")
+            .arg("200")
+            .arg("gamma")
+            .arg("300")
+            .query(&mut conn)
+            .unwrap();
+
+        // TTL column FIRST, then data columns
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE pd_ttl_first_hash (ttl bigint, field text, value text)
+             SERVER redis_pd_ttl_srv OPTIONS (
+                database '15', table_type 'hash', table_key_prefix '{}', ttl '3600'
+             );",
+            key
+        ))
+        .unwrap();
+
+        // WHERE on field column should still work with pushdown
+        let result =
+            Spi::get_one::<String>("SELECT value FROM pd_ttl_first_hash WHERE field = 'beta';")
+                .unwrap();
+        assert_eq!(result, Some("200".to_string()));
+
+        let _: () = redis::cmd("DEL").arg(key).query(&mut conn).unwrap();
+    }
+
+    /// Test WHERE pushdown works correctly when TTL column is at position 0 for ZSet
+    #[pg_test]
+    fn test_zset_pushdown_with_ttl_first() {
+        let _ = Spi::run("DROP FOREIGN DATA WRAPPER IF EXISTS redis_pd_ttl_z CASCADE;");
+        Spi::run(
+            "CREATE FOREIGN DATA WRAPPER redis_pd_ttl_z HANDLER redis_fdw_handler VALIDATOR redis_fdw_validator;",
+        )
+        .unwrap();
+        Spi::run(
+            "CREATE SERVER redis_pd_ttl_z_srv FOREIGN DATA WRAPPER redis_pd_ttl_z OPTIONS (host_port '127.0.0.1:8899');",
+        )
+        .unwrap();
+
+        let key = "pushdown:ttl_first:zset";
+        let mut conn = redis::Client::open("redis://127.0.0.1:8899/15")
+            .unwrap()
+            .get_connection()
+            .unwrap();
+        let _: () = redis::cmd("DEL").arg(key).query(&mut conn).unwrap();
+        let _: () = redis::cmd("ZADD")
+            .arg(key)
+            .arg(10.0)
+            .arg("alice")
+            .arg(20.0)
+            .arg("bob")
+            .arg(30.0)
+            .arg("charlie")
+            .query(&mut conn)
+            .unwrap();
+
+        // TTL column FIRST, then data columns
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE pd_ttl_first_zset (ttl bigint, member text, score text)
+             SERVER redis_pd_ttl_z_srv OPTIONS (
+                database '15', table_type 'zset', table_key_prefix '{}', ttl '3600'
+             );",
+            key
+        ))
+        .unwrap();
+
+        // WHERE on member column should still work with pushdown
+        let result =
+            Spi::get_one::<String>("SELECT score FROM pd_ttl_first_zset WHERE member = 'bob';")
+                .unwrap();
+        assert_eq!(result, Some("20".to_string()));
+
+        let _: () = redis::cmd("DEL").arg(key).query(&mut conn).unwrap();
+    }
 }

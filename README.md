@@ -168,7 +168,7 @@ Each Redis type enforces a specific number of data columns. The FDW validates th
 | stream  | 2        | ∞        | `stream_id, field1[, field2, ...]`    |
 
 - **Multi-key mode** (`table_key_prefix` with glob): adds +1 for the key column (first column)
-- **TTL column**: an optional `ttl bigint` column is automatically excluded from validation
+- **TTL column**: an optional `ttl bigint` column is automatically excluded from validation; can be placed at any position in the column list
 - Validation occurs at DDL time (`CREATE FOREIGN TABLE`) and as a safety net at first query
 
 ### Operations

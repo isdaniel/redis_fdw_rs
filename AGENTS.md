@@ -28,11 +28,12 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 - TTL support: table-level default + per-row override via virtual `ttl` column
 - Multi-key pattern queries: glob patterns in `table_key_prefix` for scanning multiple keys
 - DDL-time option validation via `redis_fdw_validator`
+- DDL-time column count validation via `object_access_hook` (rejects invalid CREATE FOREIGN TABLE)
 - TLS/SSL support: `rediss://` URI scheme for encrypted connections (rustls backend)
 - UPDATE support implemented for all types (except Stream)
 - Cost estimation for query planner (`src/query/cost_estimation.rs`)
 - Connection pooling via R2D2 with global pool manager
-- WHERE clause pushdown optimization
+- WHERE clause pushdown optimization (position-aware: handles TTL column at any position, multi-key offset)
 - LIMIT/OFFSET handling
 - Auto-release GitHub pipeline on `v*` tags
 

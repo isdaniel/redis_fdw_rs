@@ -253,9 +253,67 @@ mod tests {
         Spi::run("SELECT * FROM ddl_mk_str_bad;").unwrap();
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Hook isolation: regular tables are NOT affected
-    // ═══════════════════════════════════════════════════════════════════════
+    #[pg_test]
+    fn test_ddl_ttl_first_position_hash_accepted() {
+        setup_fdw();
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE ddl_ttl_first_hash (ttl bigint, field text, value text) SERVER {} OPTIONS (
+                database '{}', table_type 'hash', table_key_prefix 'ddl:ttl:first:hash', ttl '60'
+            );",
+            SERVER_NAME, TEST_DATABASE
+        ))
+        .unwrap();
+    }
+
+    #[pg_test]
+    fn test_ddl_ttl_first_position_string_accepted() {
+        setup_fdw();
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE ddl_ttl_first_str (ttl bigint, value text) SERVER {} OPTIONS (
+                database '{}', table_type 'string', table_key_prefix 'ddl:ttl:first:str', ttl '60'
+            );",
+            SERVER_NAME, TEST_DATABASE
+        ))
+        .unwrap();
+    }
+
+    #[pg_test]
+    fn test_ddl_ttl_first_position_zset_accepted() {
+        setup_fdw();
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE ddl_ttl_first_zset (ttl bigint, member text, score text) SERVER {} OPTIONS (
+                database '{}', table_type 'zset', table_key_prefix 'ddl:ttl:first:zset', ttl '60'
+            );",
+            SERVER_NAME, TEST_DATABASE
+        ))
+        .unwrap();
+    }
+
+    #[pg_test]
+    fn test_ddl_ttl_middle_position_stream_accepted() {
+        setup_fdw();
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE ddl_ttl_mid_stream (id text, ttl bigint, user_id text, action text) SERVER {} OPTIONS (
+                database '{}', table_type 'stream', table_key_prefix 'ddl:ttl:mid:stream', ttl '60'
+            );",
+            SERVER_NAME, TEST_DATABASE
+        ))
+        .unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "redis_fdw: table type 'hash' requires exactly 2 data column")]
+    fn test_ddl_ttl_first_still_validates_extra_columns() {
+        setup_fdw();
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE ddl_ttl_first_bad (ttl bigint, f text, v text, extra text) SERVER {} OPTIONS (
+                database '{}', table_type 'hash', table_key_prefix 'ddl:ttl:first:bad', ttl '60'
+            );",
+            SERVER_NAME, TEST_DATABASE
+        ))
+        .unwrap();
+        Spi::run("SELECT * FROM ddl_ttl_first_bad;").unwrap();
+    }
 
     #[pg_test]
     fn test_hook_does_not_affect_regular_tables() {
@@ -263,10 +321,6 @@ mod tests {
             .unwrap();
         Spi::run("DROP TABLE ddl_hook_regular_test;").unwrap();
     }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // Hook isolation: other FDW extensions are NOT affected
-    // ═══════════════════════════════════════════════════════════════════════
 
     #[pg_test]
     fn test_hook_does_not_affect_handler_less_fdw() {
