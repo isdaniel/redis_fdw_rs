@@ -197,16 +197,31 @@ pub(crate) unsafe fn extract_delete_key(
     let mut is_null = false;
     let datum = exec_get_junk_attribute(plan_slot, state.key_attno, &mut is_null);
 
-    match String::from_datum(datum, is_null) {
-        Some(key_string) => {
-            if key_string.is_empty() {
-                Err("Delete key is empty")
-            } else {
-                Ok(key_string)
-            }
-        }
-        None => Err("Failed to convert datum to string"),
+    if is_null {
+        return Err("Delete key is NULL");
     }
+
+    if let Some(key_string) = String::from_datum(datum, false) {
+        if key_string.is_empty() {
+            return Err("Delete key is empty");
+        }
+        return Ok(key_string);
+    }
+
+    // Fallback for non-text types: use PG output function
+    let tupdesc = (*plan_slot).tts_tupleDescriptor;
+    let attidx = (state.key_attno - 1) as usize;
+    if !tupdesc.is_null() && attidx < (*tupdesc).natts as usize {
+        let attr = crate::utils::helpers::tuple_desc_attr(tupdesc, attidx);
+        let typoid = (*attr).atttypid;
+        let key_string = datum_to_text_string(datum, typoid);
+        if key_string.is_empty() {
+            return Err("Delete key is empty");
+        }
+        return Ok(key_string);
+    }
+
+    Err("Failed to convert datum to string")
 }
 
 #[cfg(test)]

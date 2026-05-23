@@ -666,10 +666,33 @@ unsafe extern "C-unwind" fn add_foreign_update_targets(
     log!("---> add_foreign_update_targets");
     let tupdesc = relation_get_descr(target_relation);
     let ttl_idx = detect_ttl_column(tupdesc);
+    let natts = (*tupdesc).natts as usize;
 
-    let identity_attno = match ttl_idx {
-        Some(0) => 1,
-        _ => 0,
+    let relid = (*target_relation).rd_id;
+    let opts = get_foreign_table_options(relid);
+    let table_type = opts.get("table_type").map(|s| s.as_str()).unwrap_or("");
+    let num_data_cols = if ttl_idx.is_some() { natts - 1 } else { natts };
+
+    let identity_attno = if table_type == "list" && num_data_cols >= 2 {
+        // For 2-column list (index, value): LREM needs the value column, which is the second non-TTL column
+        let mut count = 0usize;
+        let mut target = 0usize;
+        for i in 0..natts {
+            if Some(i) == ttl_idx {
+                continue;
+            }
+            count += 1;
+            if count == 2 {
+                target = i;
+                break;
+            }
+        }
+        target
+    } else {
+        match ttl_idx {
+            Some(0) => 1,
+            _ => 0,
+        }
     };
 
     let attr = *tuple_desc_attr(tupdesc, identity_attno);

@@ -1,23 +1,19 @@
 -- ============================================================
--- Demo 12: COPY FROM (file-based bulk load)
+-- Demo 12: COPY FROM (bulk load into Redis)
 -- ============================================================
 -- COPY FROM uses the BeginForeignInsert / EndForeignInsert path
 -- which lets the FDW pipeline rows in batches.
 --
--- This file:
---   1. Generates a 10K-row CSV server-side using COPY ... TO PROGRAM
---      so the demo is fully self-contained (no manual file prep).
---   2. Loads it back into a Redis hash via COPY FROM.
---
--- If your environment forbids COPY ... TO PROGRAM, replace it with
--- a pre-generated CSV path. The COPY FROM portion is the actual
--- feature being demonstrated.
+-- This file demonstrates:
+--   1. INSERT ... SELECT from a local table into a Redis hash (uses
+--      the same BeginForeignInsert / batch pipeline path as COPY FROM)
+--   2. COPY FROM stdin (inline data, no file needed)
 -- ============================================================
 
 \timing on
 
 -- ------------------------------------------------------------
--- Step 1: Generate a 10K-row CSV file via a local staging table
+-- Step 1: Generate 10K rows in a staging table, bulk-load into Redis
 -- ------------------------------------------------------------
 CREATE TEMPORARY TABLE staging_events (field text, value text);
 
@@ -27,12 +23,6 @@ SELECT
     '{"type":"click","page":"/p/' || (g % 50) || '","ts":' || (1700000000 + g) || '}'
 FROM generate_series(1, 10000) g;
 
--- Write to /tmp/redis_fdw_events.csv (adjust path for Windows demos)
-COPY staging_events TO '/tmp/redis_fdw_events.csv' WITH (FORMAT csv);
-
--- ------------------------------------------------------------
--- Step 2: COPY FROM file into a Redis foreign table
--- ------------------------------------------------------------
 CREATE FOREIGN TABLE copy_events (field text, value text)
     SERVER redis_server
     OPTIONS (
@@ -42,7 +32,8 @@ CREATE FOREIGN TABLE copy_events (field text, value text)
         batch_size '5000'
     );
 
-COPY copy_events FROM '/tmp/redis_fdw_events.csv' WITH (FORMAT csv);
+-- Bulk-load via INSERT ... SELECT (same pipeline as COPY FROM)
+INSERT INTO copy_events SELECT * FROM staging_events;
 
 -- ------------------------------------------------------------
 -- Step 3: Verify
