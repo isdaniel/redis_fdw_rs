@@ -389,7 +389,11 @@ extern "C-unwind" fn begin_foreign_scan(
             RedisTableType::Hash(ref mut h) => h.pushdown_column_index = pushdown_idx,
             RedisTableType::ZSet(ref mut z) => {
                 z.pushdown_column_index = pushdown_idx;
-                z.score_column_index = pushdown_idx + 1;
+                let mut score_idx = pushdown_idx + 1;
+                if Some(score_idx) == state.ttl_column_index {
+                    score_idx += 1;
+                }
+                z.score_column_index = score_idx;
             }
             RedisTableType::Stream(ref mut s) => s.pushdown_column_index = pushdown_idx,
             _ => {}
