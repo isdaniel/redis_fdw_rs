@@ -12,6 +12,14 @@ use crate::{
     },
 };
 
+/// Safe default limit for Redis LIMIT argument (works on both 32-bit and 64-bit).
+/// On 64-bit this equals i64::MAX; on 32-bit it equals u32::MAX (usize::MAX).
+const REDIS_LIMIT_MAX: usize = if (usize::MAX as u128) < (i64::MAX as u128) {
+    usize::MAX
+} else {
+    i64::MAX as usize
+};
+
 /// Parse a ZRANGEBYSCORE bound string into f64 for comparison.
 fn parse_bound(s: &str, default: f64) -> f64 {
     let trimmed = s.strip_prefix('(').unwrap_or(s);
@@ -86,10 +94,19 @@ impl RedisZSetTable {
                     }
                 }
                 ComparisonOperator::Equal => {
-                    min_score = cond.value.clone();
-                    max_score = cond.value.clone();
-                    min_exclusive = false;
-                    max_exclusive = false;
+                    let eq_val: f64 = cond.value.parse().unwrap_or(0.0);
+                    let cur_min = parse_bound(&min_score, f64::NEG_INFINITY);
+                    let cur_max = parse_bound(&max_score, f64::INFINITY);
+
+                    // Only apply if equality value is within current bounds
+                    if eq_val > cur_min || (eq_val == cur_min && !min_exclusive) {
+                        min_score = cond.value.clone();
+                        min_exclusive = false;
+                    }
+                    if eq_val < cur_max || (eq_val == cur_max && !max_exclusive) {
+                        max_score = cond.value.clone();
+                        max_exclusive = false;
+                    }
                 }
                 _ => {}
             }
@@ -114,9 +131,7 @@ impl RedisZSetTable {
 
         if limit_offset.has_constraints() {
             let offset = limit_offset.offset.unwrap_or(0);
-            let limit = limit_offset
-                .limit
-                .unwrap_or(usize::MAX.min(i64::MAX as usize));
+            let limit = limit_offset.limit.unwrap_or(REDIS_LIMIT_MAX);
             cmd.arg("LIMIT").arg(offset).arg(limit);
         }
 
@@ -194,7 +209,7 @@ impl RedisZSetTable {
         // Apply LIMIT/OFFSET to filtered results at the pair level
         if limit_offset.has_constraints() {
             let offset = limit_offset.offset.unwrap_or(0);
-            let limit = limit_offset.limit.unwrap_or(usize::MAX);
+            let limit = limit_offset.limit.unwrap_or(REDIS_LIMIT_MAX);
 
             // filtered_data is [member1, score1, member2, score2, ...]
             // Apply offset/limit at pair granularity (2 elements per pair)
@@ -358,8 +373,8 @@ impl RedisTableOperations for RedisZSetTable {
         // ZSets support efficient range queries with LIMIT/OFFSET using ZRANGE
         let (start, end) = if limit_offset.has_constraints() {
             let offset = limit_offset.offset.unwrap_or(0) as isize;
-            let limit = limit_offset.limit.unwrap_or(usize::MAX);
-            let end_idx = if limit == usize::MAX {
+            let limit = limit_offset.limit.unwrap_or(REDIS_LIMIT_MAX);
+            let end_idx = if limit == REDIS_LIMIT_MAX {
                 -1isize // Redis ZRANGE end=-1 means to the end of sorted set
             } else {
                 offset + (limit as isize) - 1
