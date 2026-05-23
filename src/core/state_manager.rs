@@ -277,17 +277,19 @@ impl RedisFdwState {
             }
 
             // Use direct load for ZSet score-range conditions (ZRANGEBYSCORE is O(log N + M))
-            if matches!(self.table_type, RedisTableType::ZSet(_)) {
-                let has_range_condition = analysis.pushable_conditions.iter().any(|c| {
-                    matches!(
-                        c.operator,
-                        ComparisonOperator::GreaterThan
-                            | ComparisonOperator::GreaterThanOrEqual
-                            | ComparisonOperator::LessThan
-                            | ComparisonOperator::LessThanOrEqual
-                    )
+            if let RedisTableType::ZSet(ref z) = self.table_type {
+                let score_idx = z.score_column_index;
+                let has_score_range = analysis.pushable_conditions.iter().any(|c| {
+                    c.column_index == score_idx
+                        && matches!(
+                            c.operator,
+                            ComparisonOperator::GreaterThan
+                                | ComparisonOperator::GreaterThanOrEqual
+                                | ComparisonOperator::LessThan
+                                | ComparisonOperator::LessThanOrEqual
+                        )
                 });
-                if has_range_condition {
+                if has_score_range {
                     return true;
                 }
             }

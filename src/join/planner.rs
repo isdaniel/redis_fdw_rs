@@ -482,8 +482,22 @@ pub(crate) unsafe extern "C-unwind" fn get_foreign_join_paths(
         }
     };
 
-    let join_col_outer = adjust_column_for_ttl_strip(join_col_outer, outer_state.ttl_column_index);
-    let join_col_inner = adjust_column_for_ttl_strip(join_col_inner, inner_state.ttl_column_index);
+    let join_col_outer =
+        match adjust_column_for_ttl_strip(join_col_outer, outer_state.ttl_column_index) {
+            Some(col) => col,
+            None => {
+                log!("Join condition targets TTL column on outer relation, cannot push down");
+                return;
+            }
+        };
+    let join_col_inner =
+        match adjust_column_for_ttl_strip(join_col_inner, inner_state.ttl_column_index) {
+            Some(col) => col,
+            None => {
+                log!("Join condition targets TTL column on inner relation, cannot push down");
+                return;
+            }
+        };
 
     log!(
         "Detected join columns: outer={}, inner={}",

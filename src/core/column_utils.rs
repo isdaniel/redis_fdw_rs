@@ -61,10 +61,11 @@ pub(crate) fn compute_pushdown_column_index(
 /// `fetch_dataset` in join execution returns rows without the TTL column.
 /// This adjusts the raw `varattno - 1` index so it points at the correct
 /// position in the TTL-stripped data row.
-pub(crate) fn adjust_column_for_ttl_strip(col: usize, ttl_idx: Option<usize>) -> usize {
+pub(crate) fn adjust_column_for_ttl_strip(col: usize, ttl_idx: Option<usize>) -> Option<usize> {
     match ttl_idx {
-        Some(t) if t < col => col - 1,
-        _ => col,
+        Some(t) if t == col => None,
+        Some(t) if t < col => Some(col - 1),
+        _ => Some(col),
     }
 }
 
@@ -233,19 +234,21 @@ mod tests {
     #[test]
     fn test_adjust_column_for_ttl_strip() {
         // No TTL column
-        assert_eq!(adjust_column_for_ttl_strip(0, None), 0);
-        assert_eq!(adjust_column_for_ttl_strip(1, None), 1);
+        assert_eq!(adjust_column_for_ttl_strip(0, None), Some(0));
+        assert_eq!(adjust_column_for_ttl_strip(1, None), Some(1));
         // TTL at position 0, accessing column 1 → becomes 0 in stripped data
-        assert_eq!(adjust_column_for_ttl_strip(1, Some(0)), 0);
-        assert_eq!(adjust_column_for_ttl_strip(2, Some(0)), 1);
-        // TTL at position 0, accessing column 0 → still 0 (TTL IS the column)
-        assert_eq!(adjust_column_for_ttl_strip(0, Some(0)), 0);
+        assert_eq!(adjust_column_for_ttl_strip(1, Some(0)), Some(0));
+        assert_eq!(adjust_column_for_ttl_strip(2, Some(0)), Some(1));
+        // TTL at position 0, accessing column 0 → None (targeting the TTL column itself)
+        assert_eq!(adjust_column_for_ttl_strip(0, Some(0)), None);
         // TTL at position 1, accessing column 0 → unchanged
-        assert_eq!(adjust_column_for_ttl_strip(0, Some(1)), 0);
+        assert_eq!(adjust_column_for_ttl_strip(0, Some(1)), Some(0));
+        // TTL at position 1, accessing column 1 → None (targeting TTL)
+        assert_eq!(adjust_column_for_ttl_strip(1, Some(1)), None);
         // TTL at position 1, accessing column 2 → becomes 1
-        assert_eq!(adjust_column_for_ttl_strip(2, Some(1)), 1);
+        assert_eq!(adjust_column_for_ttl_strip(2, Some(1)), Some(1));
         // TTL after the target column
-        assert_eq!(adjust_column_for_ttl_strip(0, Some(3)), 0);
-        assert_eq!(adjust_column_for_ttl_strip(1, Some(3)), 1);
+        assert_eq!(adjust_column_for_ttl_strip(0, Some(3)), Some(0));
+        assert_eq!(adjust_column_for_ttl_strip(1, Some(3)), Some(1));
     }
 }
