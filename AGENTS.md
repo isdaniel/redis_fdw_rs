@@ -9,6 +9,11 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 **Feature-complete for all CRUD operations plus EXPLAIN, batch INSERT, TRUNCATE, IMPORT FOREIGN SCHEMA, ANALYZE, and COPY FROM.** All Redis types (String, Hash, List, Set, ZSet) support SELECT, INSERT, UPDATE, DELETE, TRUNCATE. Stream supports SELECT, INSERT, DELETE, TRUNCATE only (append-only by design).
 
 ### Recent Work
+- TTL-position-aware modify path: `add_foreign_update_targets` now skips TTL column at position 0, fixing DELETE/UPDATE crashes on TTL-first tables
+- TTL-aware parameterized JOIN paths: `add_parameterized_paths` uses `compute_pushdown_column_index()` instead of hardcoded column 0
+- TTL-aware FDW-to-FDW join columns: `get_foreign_join_paths` adjusts join column indices for TTL stripping via `adjust_column_for_ttl_strip()`
+- Single-key String join guard: FDW-to-FDW pushdown correctly rejects single-key String tables (no join column to match)
+- ZSet score-range pushdown: `WHERE score >= X` / `score <= Y` uses ZRANGEBYSCORE instead of full ZSCAN (O(log N + M) vs O(N))
 - DDL-time column validation: `object_access_hook` in `ddl_hook.rs` validates column count at `CREATE FOREIGN TABLE` time (no longer deferred to first query)
 - Position-based column filtering: `PushableCondition.column_index` replaces hardcoded column name checks in hash/zset pushdown
 - Column validation: `validate_column_count()` enforces per-type column constraints at first query time (string=1, hash=2, list=1-2, set=1, zset=2, stream=2+)
@@ -39,7 +44,7 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 
 ### Known Issues
 - Cluster integration tests (9 tests) fail without Redis Cluster infrastructure running
-- All non-cluster tests pass (including 23 JOIN tests, 16 column validation tests, and 4 pool performance tests)
+- All non-cluster tests pass (including 28 JOIN tests, 16 column validation tests, and 4 pool performance tests)
 
 ## How to Work on This Project
 
@@ -90,14 +95,18 @@ JOIN tests create temporary local tables + Redis foreign tables and verify:
 - List type JOINs and String multi-key JOINs
 - Large dataset JOINs (100+ rows)
 - Rescan correctness (duplicate local rows trigger multiple scans)
+- TTL column at position 0 (before data columns) for hash, zset, set JOINs
+- TTL column at middle position (between data columns) for hash JOINs
+- FDW-to-FDW hash join with TTL at position 0 on both sides
 
 **Join pushdown eligibility requires ALL of:**
 1. Both tables on same Redis server (host_port match)
 2. Neither table in multi-key pattern mode (no glob in table_key_prefix)
 3. Neither table is a Stream type (variable-width rows not supported)
-4. Equality operator in join condition (`op_mergejoinable()` check)
-5. INNER JOIN or LEFT JOIN only (RIGHT/FULL not pushed down)
-6. Neither relation has base WHERE restrictions (`baserestrictinfo` must be empty)
+4. Neither table is a single-key String type (only one value, no join column)
+5. Equality operator in join condition (`op_mergejoinable()` check)
+6. INNER JOIN or LEFT JOIN only (RIGHT/FULL not pushed down)
+7. Neither relation has base WHERE restrictions (`baserestrictinfo` must be empty)
 
 ### Adding a New Feature
 

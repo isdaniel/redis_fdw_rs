@@ -12,11 +12,22 @@ use crate::{
     },
 };
 
+/// Parse a ZRANGEBYSCORE bound string into f64 for comparison.
+fn parse_bound(s: &str, default: f64) -> f64 {
+    let trimmed = s.strip_prefix('(').unwrap_or(s);
+    match trimmed {
+        "-inf" => f64::NEG_INFINITY,
+        "+inf" => f64::INFINITY,
+        v => v.parse().unwrap_or(default),
+    }
+}
+
 /// Redis Sorted Set table type
 #[derive(Debug, Clone, Default)]
 pub struct RedisZSetTable {
     pub dataset: DataSet,
     pub pushdown_column_index: usize,
+    pub score_column_index: usize,
 }
 
 impl RedisZSetTable {
@@ -24,6 +35,99 @@ impl RedisZSetTable {
         Self {
             dataset: DataSet::Empty,
             pushdown_column_index: 0,
+            score_column_index: 1,
+        }
+    }
+
+    fn load_with_score_range(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        score_conditions: &[&PushableCondition],
+        limit_offset: &LimitOffsetInfo,
+    ) -> Result<LoadDataResult, redis::RedisError> {
+        let mut min_score = "-inf".to_string();
+        let mut max_score = "+inf".to_string();
+        let mut min_exclusive = false;
+        let mut max_exclusive = false;
+
+        for cond in score_conditions {
+            match cond.operator {
+                ComparisonOperator::GreaterThan => {
+                    let new_val: f64 = cond.value.parse().unwrap_or(f64::NEG_INFINITY);
+                    let cur_val = parse_bound(&min_score, f64::NEG_INFINITY);
+                    if new_val > cur_val || (new_val == cur_val && !min_exclusive) {
+                        min_score = cond.value.clone();
+                        min_exclusive = true;
+                    }
+                }
+                ComparisonOperator::GreaterThanOrEqual => {
+                    let new_val: f64 = cond.value.parse().unwrap_or(f64::NEG_INFINITY);
+                    let cur_val = parse_bound(&min_score, f64::NEG_INFINITY);
+                    if new_val > cur_val {
+                        min_score = cond.value.clone();
+                        min_exclusive = false;
+                    }
+                }
+                ComparisonOperator::LessThan => {
+                    let new_val: f64 = cond.value.parse().unwrap_or(f64::INFINITY);
+                    let cur_val = parse_bound(&max_score, f64::INFINITY);
+                    if new_val < cur_val || (new_val == cur_val && !max_exclusive) {
+                        max_score = cond.value.clone();
+                        max_exclusive = true;
+                    }
+                }
+                ComparisonOperator::LessThanOrEqual => {
+                    let new_val: f64 = cond.value.parse().unwrap_or(f64::INFINITY);
+                    let cur_val = parse_bound(&max_score, f64::INFINITY);
+                    if new_val < cur_val {
+                        max_score = cond.value.clone();
+                        max_exclusive = false;
+                    }
+                }
+                ComparisonOperator::Equal => {
+                    min_score = cond.value.clone();
+                    max_score = cond.value.clone();
+                    min_exclusive = false;
+                    max_exclusive = false;
+                }
+                _ => {}
+            }
+        }
+
+        let final_min = if min_exclusive {
+            format!("({}", min_score)
+        } else {
+            min_score
+        };
+        let final_max = if max_exclusive {
+            format!("({}", max_score)
+        } else {
+            max_score
+        };
+
+        let mut cmd = redis::cmd("ZRANGEBYSCORE");
+        cmd.arg(key_prefix)
+            .arg(&final_min)
+            .arg(&final_max)
+            .arg("WITHSCORES");
+
+        if limit_offset.has_constraints() {
+            let offset = limit_offset.offset.unwrap_or(0);
+            let limit = limit_offset
+                .limit
+                .unwrap_or(usize::MAX.min(i64::MAX as usize));
+            cmd.arg("LIMIT").arg(offset).arg(limit);
+        }
+
+        let result: Vec<String> = cmd.query(conn)?;
+
+        if result.is_empty() {
+            self.dataset = DataSet::Empty;
+            Ok(LoadDataResult::Empty)
+        } else {
+            self.dataset = DataSet::Filtered(result);
+            Ok(LoadDataResult::FullyLoaded)
         }
     }
 
@@ -124,7 +228,7 @@ impl RedisTableOperations for RedisZSetTable {
         limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         if let Some(conditions) = conditions {
-            // For ZSet, only pushdown conditions on the member column conditions are left to PostgreSQL's post-filter
+            // Prioritize member equality lookups (ZSCORE is O(1)) over score-range (ZRANGEBYSCORE is O(log N + M))
             let target_idx = self.pushdown_column_index;
             let member_conditions: Vec<PushableCondition> = conditions
                 .iter()
@@ -229,9 +333,25 @@ impl RedisTableOperations for RedisZSetTable {
                                 Ok(LoadDataResult::FullyLoaded)
                             };
                         }
-                        _ => {} // Fall back to full scan
+                        _ => {} // Fall through to score-range check
                     }
                 }
+            }
+
+            // Fallback: score-range conditions (ZRANGEBYSCORE is O(log N + M))
+            let score_idx = self.score_column_index;
+            let score_conditions: Vec<&PushableCondition> = conditions
+                .iter()
+                .filter(|c| c.column_index == score_idx)
+                .collect();
+
+            if !score_conditions.is_empty() {
+                return self.load_with_score_range(
+                    conn,
+                    key_prefix,
+                    &score_conditions,
+                    limit_offset,
+                );
             }
         }
 
@@ -399,7 +519,13 @@ impl RedisTableOperations for RedisZSetTable {
     fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
         matches!(
             operator,
-            ComparisonOperator::Equal | ComparisonOperator::In | ComparisonOperator::Like
+            ComparisonOperator::Equal
+                | ComparisonOperator::In
+                | ComparisonOperator::Like
+                | ComparisonOperator::GreaterThan
+                | ComparisonOperator::GreaterThanOrEqual
+                | ComparisonOperator::LessThan
+                | ComparisonOperator::LessThanOrEqual
         )
     }
 
