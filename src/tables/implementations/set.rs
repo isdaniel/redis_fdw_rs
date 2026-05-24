@@ -365,7 +365,7 @@ impl RedisTableOperations for RedisSetTable {
             pipe.cmd("SMEMBERS").arg(key);
         }
         let results: Vec<Vec<String>> = pipe.query(conn)?;
-        let mut all_rows = Vec::with_capacity(keys.len() * 2);
+        let mut all_rows = Vec::with_capacity(keys.len() * self.multi_key_columns_per_row());
         for (key, members) in keys.iter().zip(results) {
             pgrx::check_for_interrupts!();
             if members.len() > PER_KEY_WARN_THRESHOLD {
