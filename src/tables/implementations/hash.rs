@@ -402,7 +402,7 @@ impl RedisTableOperations for RedisHashTable {
             pipe.cmd("HGETALL").arg(key);
         }
         let results: Vec<Vec<(String, String)>> = pipe.query(conn)?;
-        let mut all_rows = Vec::with_capacity(keys.len() * 3);
+        let mut all_rows = Vec::with_capacity(keys.len() * self.multi_key_columns_per_row());
         for (key, pairs) in keys.iter().zip(results) {
             pgrx::check_for_interrupts!();
             if pairs.len() > PER_KEY_WARN_THRESHOLD {

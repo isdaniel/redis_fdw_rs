@@ -253,7 +253,7 @@ impl RedisTableOperations for RedisStringTable {
         keys: &[String],
     ) -> Result<Vec<String>, redis::RedisError> {
         let values: Vec<Option<String>> = redis::cmd("MGET").arg(keys).query(conn)?;
-        let mut all_rows = Vec::with_capacity(keys.len() * 2);
+        let mut all_rows = Vec::with_capacity(keys.len() * self.multi_key_columns_per_row());
         for (key, value) in keys.iter().zip(values) {
             if let Some(v) = value {
                 all_rows.push(key.clone());
