@@ -348,4 +348,54 @@ impl RedisTableOperations for RedisListTable {
         };
         Ok((new_cursor, filtered_count))
     }
+
+    fn configure(
+        &mut self,
+        column_names: &[String],
+        _pushdown_column_index: usize,
+        _score_column_index: Option<usize>,
+    ) {
+        self.include_index = column_names.len() >= 2;
+    }
+
+    fn load_multi_key_data(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        keys: &[String],
+    ) -> Result<Vec<String>, redis::RedisError> {
+        const PER_KEY_WARN_THRESHOLD: usize = 200_000;
+        let mut pipe = redis::pipe();
+        for key in keys {
+            pipe.cmd("LRANGE").arg(key).arg(0i64).arg(-1i64);
+        }
+        let results: Vec<Vec<String>> = pipe.query(conn)?;
+        let mut all_rows = Vec::with_capacity(keys.len() * 2);
+        for (key, items) in keys.iter().zip(results) {
+            pgrx::check_for_interrupts!();
+            if items.len() > PER_KEY_WARN_THRESHOLD {
+                pgrx::warning!(
+                    "Redis FDW: key '{}' contains {} elements, consider using LIMIT",
+                    key,
+                    items.len()
+                );
+            }
+            for item in items {
+                all_rows.push(key.clone());
+                all_rows.push(item);
+            }
+        }
+        Ok(all_rows)
+    }
+
+    fn clear(&mut self) {
+        self.dataset = DataSet::default();
+    }
+
+    fn redis_type_name(&self) -> &'static str {
+        "list"
+    }
+
+    fn set_filtered_data(&mut self, data: Vec<String>) {
+        self.dataset = DataSet::Filtered(data);
+    }
 }

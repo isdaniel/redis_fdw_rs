@@ -509,142 +509,12 @@ impl RedisFdwState {
         conn: &mut dyn redis::ConnectionLike,
         keys: &[String],
     ) -> usize {
-        const PER_KEY_WARN_THRESHOLD: usize = 200_000;
-
-        let mut all_rows: Vec<String> =
-            Vec::with_capacity(keys.len() * self.multi_key_columns_per_row());
-
-        match &self.table_type {
-            RedisTableType::String(_) => {
-                let values: Vec<Option<String>> = match redis::cmd("MGET").arg(keys).query(conn) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        pgrx::error!("Redis MGET error: {}", e);
-                    }
-                };
-                for (key, value) in keys.iter().zip(values) {
-                    if let Some(v) = value {
-                        all_rows.push(key.clone());
-                        all_rows.push(v);
-                    }
-                }
+        let all_rows = match self.table_type.load_multi_key_data(conn, keys) {
+            Ok(rows) => rows,
+            Err(e) => {
+                pgrx::error!("Redis multi-key load error: {}", e);
             }
-            RedisTableType::Hash(_) => {
-                let mut pipe = redis::pipe();
-                for key in keys {
-                    pipe.cmd("HGETALL").arg(key);
-                }
-                let results: Vec<Vec<(String, String)>> = match pipe.query(conn) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        pgrx::error!("Redis pipeline HGETALL error: {}", e);
-                    }
-                };
-                for (key, pairs) in keys.iter().zip(results) {
-                    pgrx::check_for_interrupts!();
-                    if pairs.len() > PER_KEY_WARN_THRESHOLD {
-                        pgrx::warning!(
-                            "Redis FDW: key '{}' contains {} elements, consider using LIMIT",
-                            key,
-                            pairs.len()
-                        );
-                    }
-                    for (field, value) in pairs {
-                        all_rows.push(key.clone());
-                        all_rows.push(field);
-                        all_rows.push(value);
-                    }
-                }
-            }
-            RedisTableType::List(_) => {
-                let mut pipe = redis::pipe();
-                for key in keys {
-                    pipe.cmd("LRANGE").arg(key).arg(0i64).arg(-1i64);
-                }
-                let results: Vec<Vec<String>> = match pipe.query(conn) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        pgrx::error!("Redis pipeline LRANGE error: {}", e);
-                    }
-                };
-                for (key, items) in keys.iter().zip(results) {
-                    pgrx::check_for_interrupts!();
-                    if items.len() > PER_KEY_WARN_THRESHOLD {
-                        pgrx::warning!(
-                            "Redis FDW: key '{}' contains {} elements, consider using LIMIT",
-                            key,
-                            items.len()
-                        );
-                    }
-                    for item in items {
-                        all_rows.push(key.clone());
-                        all_rows.push(item);
-                    }
-                }
-            }
-            RedisTableType::Set(_) => {
-                let mut pipe = redis::pipe();
-                for key in keys {
-                    pipe.cmd("SMEMBERS").arg(key);
-                }
-                let results: Vec<Vec<String>> = match pipe.query(conn) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        pgrx::error!("Redis pipeline SMEMBERS error: {}", e);
-                    }
-                };
-                for (key, members) in keys.iter().zip(results) {
-                    pgrx::check_for_interrupts!();
-                    if members.len() > PER_KEY_WARN_THRESHOLD {
-                        pgrx::warning!(
-                            "Redis FDW: key '{}' contains {} elements, consider using LIMIT",
-                            key,
-                            members.len()
-                        );
-                    }
-                    for member in members {
-                        all_rows.push(key.clone());
-                        all_rows.push(member);
-                    }
-                }
-            }
-            RedisTableType::ZSet(_) => {
-                let mut pipe = redis::pipe();
-                for key in keys {
-                    pipe.cmd("ZRANGE")
-                        .arg(key)
-                        .arg(0i64)
-                        .arg(-1i64)
-                        .arg("WITHSCORES");
-                }
-                let results: Vec<Vec<(String, f64)>> = match pipe.query(conn) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        pgrx::error!("Redis pipeline ZRANGE error: {}", e);
-                    }
-                };
-                for (key, items) in keys.iter().zip(results) {
-                    pgrx::check_for_interrupts!();
-                    if items.len() > PER_KEY_WARN_THRESHOLD {
-                        pgrx::warning!(
-                            "Redis FDW: key '{}' contains {} elements, consider using LIMIT",
-                            key,
-                            items.len()
-                        );
-                    }
-                    for (member, score) in items {
-                        all_rows.push(key.clone());
-                        all_rows.push(member);
-                        all_rows.push(score.to_string());
-                    }
-                }
-            }
-            RedisTableType::Stream(_) => {
-                log!("WARNING: multi-key mode is not supported for stream tables");
-                return 0;
-            }
-            RedisTableType::None => {}
-        }
+        };
 
         const MULTI_KEY_WARN_THRESHOLD: usize = 1_000_000;
         if all_rows.len() > MULTI_KEY_WARN_THRESHOLD {
@@ -665,15 +535,7 @@ impl RedisFdwState {
 
     /// Number of columns per row in multi-key mode (including the key column)
     pub fn multi_key_columns_per_row(&self) -> usize {
-        match &self.table_type {
-            RedisTableType::String(_) => 2,
-            RedisTableType::Hash(_) => 3,
-            RedisTableType::List(_) => 2,
-            RedisTableType::Set(_) => 2,
-            RedisTableType::ZSet(_) => 3,
-            RedisTableType::Stream(_) => 4,
-            RedisTableType::None => 0,
-        }
+        self.table_type.multi_key_columns_per_row()
     }
 
     /// Apply TTL to a Redis key based on per-row value or table default.

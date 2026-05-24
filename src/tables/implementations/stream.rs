@@ -506,4 +506,43 @@ impl RedisTableOperations for RedisStreamTable {
         self.dataset = DataSet::Filtered(flat_data);
         Ok((new_cursor, filtered_count))
     }
+
+    fn configure(
+        &mut self,
+        column_names: &[String],
+        pushdown_column_index: usize,
+        _score_column_index: Option<usize>,
+    ) {
+        self.column_names = column_names.to_vec();
+        self.pushdown_column_index = pushdown_column_index;
+    }
+
+    fn load_multi_key_data(
+        &mut self,
+        _conn: &mut dyn redis::ConnectionLike,
+        _keys: &[String],
+    ) -> Result<Vec<String>, redis::RedisError> {
+        Err(redis::RedisError::from((
+            redis::ErrorKind::InvalidClientConfig,
+            "Multi-key mode is not supported for Redis Stream",
+        )))
+    }
+
+    fn clear(&mut self) {
+        self.dataset = DataSet::default();
+        self.entries = Vec::new();
+        self.last_id = None;
+    }
+
+    fn redis_type_name(&self) -> &'static str {
+        "stream"
+    }
+
+    fn set_filtered_data(&mut self, data: Vec<String>) {
+        self.dataset = DataSet::Filtered(data);
+    }
+
+    fn multi_key_columns_per_row(&self) -> usize {
+        4
+    }
 }

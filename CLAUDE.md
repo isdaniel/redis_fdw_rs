@@ -66,11 +66,12 @@ cargo fmt
 
 ### Trait Pattern
 All Redis types implement `RedisTableOperations` (in `src/tables/interface.rs`):
-- `load_data()`, `get_dataset()`, `data_len()`, `get_row()`
+- `load_data()`, `load_batch()`, `get_dataset()`, `data_len()`, `get_row()`
 - `insert()`, `delete()`, `update()`
-- `supports_pushdown()`
+- `supports_pushdown()`, `configure()`
+- `load_multi_key_data()`, `clear()`, `redis_type_name()`, `set_filtered_data()`, `multi_key_columns_per_row()`
 
-Dispatch from `RedisTableType` enum uses macros in `src/tables/macros.rs`.
+Dispatch from `RedisTableType` enum uses macros in `src/tables/macros.rs` (`table_dispatch!`, `table_dispatch_mut_result!`, `table_dispatch_mut_void!`).
 
 ### Supported Operations
 

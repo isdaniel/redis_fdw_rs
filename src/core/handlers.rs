@@ -376,35 +376,29 @@ extern "C-unwind" fn begin_foreign_scan(
             state.is_multi_key,
         );
 
-        if let RedisTableType::List(ref mut list) = state.table_type {
-            list.include_index = state.column_names.len() >= 2;
-        }
-        if let RedisTableType::Stream(ref mut stream) = state.table_type {
-            stream.column_names = state.column_names.clone();
-        }
-
         let pushdown_idx =
             compute_pushdown_column_index(state.ttl_column_index, state.is_multi_key);
-        match &mut state.table_type {
-            RedisTableType::Hash(ref mut h) => h.pushdown_column_index = pushdown_idx,
-            RedisTableType::ZSet(ref mut z) => {
-                z.pushdown_column_index = pushdown_idx;
-                // Find the next active (non-dropped, non-TTL) column after pushdown_idx
-                let mut score_idx = pushdown_idx + 1;
-                let natts = (*tupdesc).natts as usize;
-                while score_idx < natts {
-                    let attr = tuple_desc_attr(tupdesc, score_idx);
-                    if (*attr).attisdropped || Some(score_idx) == state.ttl_column_index {
-                        score_idx += 1;
-                        continue;
-                    }
-                    break;
+
+        // Compute score column index for ZSet (next active non-dropped, non-TTL column)
+        let score_column_index = if matches!(state.table_type, RedisTableType::ZSet(_)) {
+            let mut score_idx = pushdown_idx + 1;
+            let natts = (*tupdesc).natts as usize;
+            while score_idx < natts {
+                let attr = tuple_desc_attr(tupdesc, score_idx);
+                if (*attr).attisdropped || Some(score_idx) == state.ttl_column_index {
+                    score_idx += 1;
+                    continue;
                 }
-                z.score_column_index = score_idx;
+                break;
             }
-            RedisTableType::Stream(ref mut s) => s.pushdown_column_index = pushdown_idx,
-            _ => {}
-        }
+            Some(score_idx)
+        } else {
+            None
+        };
+
+        state
+            .table_type
+            .configure(&state.column_names, pushdown_idx, score_column_index);
 
         if state.ttl_column_index.is_some() && !state.is_multi_key {
             let key = state.table_key_prefix.clone();
@@ -806,12 +800,25 @@ unsafe extern "C-unwind" fn begin_foreign_modify(
         state.is_multi_key,
     );
 
-    if let RedisTableType::List(ref mut list) = state.table_type {
-        list.include_index = state.column_names.len() >= 2;
-    }
-    if let RedisTableType::Stream(ref mut stream) = state.table_type {
-        stream.column_names = state.column_names.clone();
-    }
+    let pushdown_idx = compute_pushdown_column_index(state.ttl_column_index, state.is_multi_key);
+    let score_column_index = if matches!(state.table_type, RedisTableType::ZSet(_)) {
+        let mut score_idx = pushdown_idx + 1;
+        let natts = (*tupdesc).natts as usize;
+        while score_idx < natts {
+            let attr = tuple_desc_attr(tupdesc, score_idx);
+            if (*attr).attisdropped || Some(score_idx) == state.ttl_column_index {
+                score_idx += 1;
+                continue;
+            }
+            break;
+        }
+        Some(score_idx)
+    } else {
+        None
+    };
+    state
+        .table_type
+        .configure(&state.column_names, pushdown_idx, score_column_index);
 
     (*rinfo).ri_FdwState = state_ptr;
 }
@@ -1058,12 +1065,25 @@ unsafe extern "C-unwind" fn begin_foreign_insert(
     }
     state.column_names = col_names;
 
-    if let RedisTableType::List(ref mut list) = state.table_type {
-        list.include_index = state.column_names.len() >= 2;
-    }
-    if let RedisTableType::Stream(ref mut stream) = state.table_type {
-        stream.column_names = state.column_names.clone();
-    }
+    let pushdown_idx = compute_pushdown_column_index(state.ttl_column_index, state.is_multi_key);
+    let score_column_index = if matches!(state.table_type, RedisTableType::ZSet(_)) {
+        let mut score_idx = pushdown_idx + 1;
+        let natts = (*tupdesc).natts as usize;
+        while score_idx < natts {
+            let attr = tuple_desc_attr(tupdesc, score_idx);
+            if (*attr).attisdropped || Some(score_idx) == state.ttl_column_index {
+                score_idx += 1;
+                continue;
+            }
+            break;
+        }
+        Some(score_idx)
+    } else {
+        None
+    };
+    state
+        .table_type
+        .configure(&state.column_names, pushdown_idx, score_column_index);
 
     let state_ptr = PgMemoryContexts::For(ctx).leak_and_drop_on_delete(state);
     (*rinfo).ri_FdwState = state_ptr as *mut std::os::raw::c_void;
