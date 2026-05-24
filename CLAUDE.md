@@ -99,6 +99,27 @@ Stream is append-only; UPDATE returns an error at the trait level and `IsForeign
 - Data stored as flat `DataSet::Filtered(Vec<String>)` with N columns per row
 - First column is always the Redis key name
 - INSERT routes to specific key (first column); DELETE uses `DEL` on the full key
+- **Prefix validation**: On INSERT, the key is checked against the static prefix of `table_key_prefix`
+  - Default: `pgrx::warning!()` on mismatch (INSERT proceeds but key won't appear in SELECT)
+  - With table option `strict_key_prefix 'true'`: `pgrx::error!()` rejects the INSERT
+  - Implementation: `extract_static_prefix()` and `validate_key_prefix()` in state_manager.rs
+
+### Column Order (Position-Based Mapping)
+
+The FDW maps columns by **position**, not by name. Users MUST declare columns in this exact order:
+
+| Type    | Single-key columns      | Multi-key columns            |
+|---------|------------------------|------------------------------|
+| String  | value                  | key, value                   |
+| Hash    | field, value           | key, field, value            |
+| List    | element [, index]      | key, element                 |
+| Set     | member                 | key, member                  |
+| ZSet    | member, score          | key, member, score           |
+| Stream  | stream_id, field1...   | (not supported)              |
+
+- Column **names** are user-chosen (arbitrary) — only position matters
+- Optional `ttl bigint` column can be placed at **any position** (detected by name "ttl", case-insensitive)
+- The `pushdown_column_index` correctly accounts for TTL position and multi-key key column offset
 
 ### Column Validation
 - **DDL-time validation**: `object_access_hook` in `ddl_hook.rs` validates column count at `CREATE FOREIGN TABLE` time
