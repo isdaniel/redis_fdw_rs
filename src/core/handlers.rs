@@ -801,9 +801,24 @@ unsafe extern "C-unwind" fn begin_foreign_modify(
     );
 
     let pushdown_idx = compute_pushdown_column_index(state.ttl_column_index, state.is_multi_key);
+    let score_column_index = if matches!(state.table_type, RedisTableType::ZSet(_)) {
+        let mut score_idx = pushdown_idx + 1;
+        let natts = (*tupdesc).natts as usize;
+        while score_idx < natts {
+            let attr = tuple_desc_attr(tupdesc, score_idx);
+            if (*attr).attisdropped || Some(score_idx) == state.ttl_column_index {
+                score_idx += 1;
+                continue;
+            }
+            break;
+        }
+        Some(score_idx)
+    } else {
+        None
+    };
     state
         .table_type
-        .configure(&state.column_names, pushdown_idx, None);
+        .configure(&state.column_names, pushdown_idx, score_column_index);
 
     (*rinfo).ri_FdwState = state_ptr;
 }
@@ -1051,9 +1066,24 @@ unsafe extern "C-unwind" fn begin_foreign_insert(
     state.column_names = col_names;
 
     let pushdown_idx = compute_pushdown_column_index(state.ttl_column_index, state.is_multi_key);
+    let score_column_index = if matches!(state.table_type, RedisTableType::ZSet(_)) {
+        let mut score_idx = pushdown_idx + 1;
+        let natts = (*tupdesc).natts as usize;
+        while score_idx < natts {
+            let attr = tuple_desc_attr(tupdesc, score_idx);
+            if (*attr).attisdropped || Some(score_idx) == state.ttl_column_index {
+                score_idx += 1;
+                continue;
+            }
+            break;
+        }
+        Some(score_idx)
+    } else {
+        None
+    };
     state
         .table_type
-        .configure(&state.column_names, pushdown_idx, None);
+        .configure(&state.column_names, pushdown_idx, score_column_index);
 
     let state_ptr = PgMemoryContexts::For(ctx).leak_and_drop_on_delete(state);
     (*rinfo).ri_FdwState = state_ptr as *mut std::os::raw::c_void;

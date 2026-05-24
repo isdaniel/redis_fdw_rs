@@ -541,4 +541,8 @@ impl RedisTableOperations for RedisStreamTable {
     fn set_filtered_data(&mut self, data: Vec<String>) {
         self.dataset = DataSet::Filtered(data);
     }
+
+    fn multi_key_columns_per_row(&self) -> usize {
+        4
+    }
 }

@@ -148,7 +148,7 @@ impl RedisTableType {
 
     /// Get number of columns per row in multi-key flat format.
     pub fn multi_key_columns_per_row(&self) -> usize {
-        table_dispatch!(self, multi_key_columns_per_row() -> 2)
+        table_dispatch!(self, multi_key_columns_per_row() -> 0)
     }
 }
 
@@ -447,9 +447,9 @@ mod tests {
         );
         assert_eq!(
             RedisTableType::from_str("stream").multi_key_columns_per_row(),
-            2
+            4
         );
-        assert_eq!(RedisTableType::None.multi_key_columns_per_row(), 2);
+        assert_eq!(RedisTableType::None.multi_key_columns_per_row(), 0);
     }
 
     #[test]
