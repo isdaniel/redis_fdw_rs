@@ -171,6 +171,34 @@ Each Redis type enforces a specific number of data columns. The FDW validates th
 - **TTL column**: an optional `ttl bigint` column is automatically excluded from validation; can be placed at any position in the column list
 - Validation occurs at DDL time (`CREATE FOREIGN TABLE`) and as a safety net at first query
 
+### Multi-Key Pattern Queries
+
+When `table_key_prefix` contains glob characters (`*`, `?`, `[`), the FDW scans matching keys:
+
+```sql
+CREATE FOREIGN TABLE all_users (key text, value text)
+SERVER redis_server
+OPTIONS (table_type 'string', table_key_prefix 'user:*');
+
+SELECT * FROM all_users;
+-- key     | value
+-- user:1  | alice
+-- user:2  | bob
+
+INSERT INTO all_users VALUES ('user:3', 'charlie');
+DELETE FROM all_users WHERE key = 'user:2';
+```
+
+**Multi-key columns per type (position-based — column names are user-chosen):**
+
+| Table Type | Columns |
+|-----------|---------|
+| String | key, value |
+| Hash | key, field, value |
+| List | key, element |
+| Set | key, member |
+| ZSet | key, member, score |
+
 ### Operations
 
 ```sql
@@ -286,35 +314,6 @@ INSERT INTO cached_items VALUES ('short-lived', 60);   -- expires in 60s
 UPDATE cached_items SET value = 'permanent', ttl = -1; -- persist forever
 SELECT value, ttl FROM cached_items;                   -- shows remaining TTL
 ```
-
-### Multi-Key Pattern Queries
-
-When `table_key_prefix` contains glob characters (`*`, `?`, `[`), the FDW scans matching keys:
-
-```sql
-CREATE FOREIGN TABLE all_users (key text, value text)
-SERVER redis_server
-OPTIONS (table_type 'string', table_key_prefix 'user:*');
-
-SELECT * FROM all_users;
--- key     | value
--- user:1  | alice
--- user:2  | bob
-
-INSERT INTO all_users VALUES ('user:3', 'charlie');
-DELETE FROM all_users WHERE key = 'user:2';
-```
-
-**Multi-key columns per type:**
-
-| Table Type | Columns |
-|-----------|---------|
-| String | key, value |
-| Hash | key, field, value |
-| List | key, element |
-| Set | key, member |
-| ZSet | key, score, member |
-
 ## EXPLAIN Support
 
 The FDW provides detailed information in `EXPLAIN` output for both scan and modify operations:

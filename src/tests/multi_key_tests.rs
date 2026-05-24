@@ -254,4 +254,112 @@ mod tests {
         assert!(!is_multi_key_pattern("simple:prefix:"));
         assert!(!is_multi_key_pattern("no_glob_here"));
     }
+
+    #[pg_test]
+    fn test_multi_key_prefix_mismatch_warning() {
+        setup_fdw();
+        let prefix = "mk_prefix_warn";
+
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE mk_prefix_warn_tbl (key text, value text) SERVER {} OPTIONS (
+                database '{}', table_type 'string', table_key_prefix '{}:*'
+            );",
+            SERVER_NAME, TEST_DATABASE, prefix
+        ))
+        .unwrap();
+
+        // Insert with matching prefix — should work without issue
+        Spi::run(&format!(
+            "INSERT INTO mk_prefix_warn_tbl VALUES ('{}:1', 'correct');",
+            prefix
+        ))
+        .unwrap();
+
+        // Insert with mismatching prefix — should still succeed (warning only)
+        Spi::run("INSERT INTO mk_prefix_warn_tbl VALUES ('wrong:1', 'mismatch');").unwrap();
+
+        // Only the matching key shows up in SELECT (SCAN pattern won't find 'wrong:1')
+        let count = Spi::get_one::<i64>("SELECT COUNT(*) FROM mk_prefix_warn_tbl;")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "Only the matching-prefix key should appear in SELECT"
+        );
+
+        // Cleanup
+        Spi::run(&format!(
+            "DELETE FROM mk_prefix_warn_tbl WHERE key = '{}:1';",
+            prefix
+        ))
+        .unwrap();
+        let mut conn = redis::Client::open("redis://127.0.0.1:8899/15")
+            .unwrap()
+            .get_connection()
+            .unwrap();
+        let _: Result<(), _> = redis::cmd("DEL").arg("wrong:1").query(&mut conn);
+        Spi::run("DROP FOREIGN TABLE mk_prefix_warn_tbl;").unwrap();
+        cleanup();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "does not match table pattern")]
+    fn test_multi_key_strict_prefix_error() {
+        setup_fdw();
+        let prefix = "mk_strict";
+
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE mk_strict_tbl (key text, value text) SERVER {} OPTIONS (
+                database '{}', table_type 'string', table_key_prefix '{}:*', strict_key_prefix 'true'
+            );",
+            SERVER_NAME, TEST_DATABASE, prefix
+        ))
+        .unwrap();
+
+        // This should error because strict_key_prefix is true
+        Spi::run("INSERT INTO mk_strict_tbl VALUES ('wrong:1', 'should_fail');").unwrap();
+    }
+
+    #[pg_test]
+    fn test_multi_key_hash_prefix_mismatch_warning() {
+        setup_fdw();
+        let prefix = "mk_hash_warn";
+
+        let mut conn = redis::Client::open("redis://127.0.0.1:8899/15")
+            .unwrap()
+            .get_connection()
+            .unwrap();
+
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE mk_hash_warn_tbl (key text, field text, value text) SERVER {} OPTIONS (
+                database '{}', table_type 'hash', table_key_prefix '{}:*'
+            );",
+            SERVER_NAME, TEST_DATABASE, prefix
+        ))
+        .unwrap();
+
+        // Insert with correct prefix
+        Spi::run(&format!(
+            "INSERT INTO mk_hash_warn_tbl VALUES ('{}:1', 'name', 'Alice');",
+            prefix
+        ))
+        .unwrap();
+
+        // Insert with wrong prefix — should succeed with warning
+        Spi::run("INSERT INTO mk_hash_warn_tbl VALUES ('other:1', 'name', 'Bob');").unwrap();
+
+        // Only the matching key shows up in SELECT
+        let count = Spi::get_one::<i64>("SELECT COUNT(*) FROM mk_hash_warn_tbl;")
+            .unwrap()
+            .unwrap();
+        assert_eq!(count, 1, "Only matching-prefix key visible in SELECT");
+
+        // Cleanup
+        let _: Result<(), _> = redis::cmd("DEL")
+            .arg(format!("{}:1", prefix))
+            .query(&mut conn);
+        let _: Result<(), _> = redis::cmd("DEL").arg("other:1").query(&mut conn);
+        Spi::run("DROP FOREIGN TABLE mk_hash_warn_tbl;").unwrap();
+        cleanup();
+    }
 }

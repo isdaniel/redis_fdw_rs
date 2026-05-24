@@ -7,7 +7,7 @@ use crate::{
         },
         explain::{explain_foreign_modify, explain_foreign_scan},
         schema_import::{analyze_foreign_table, import_foreign_schema},
-        state_manager::RedisFdwState,
+        state_manager::{extract_static_prefix, validate_key_prefix, RedisFdwState},
         truncate::exec_foreign_truncate,
     },
     join::{
@@ -860,6 +860,12 @@ unsafe extern "C-unwind" fn exec_foreign_insert(
             error!("Multi-key INSERT requires at least a key column");
         }
         let key = data[0].clone();
+        validate_key_prefix(
+            &key,
+            extract_static_prefix(&state.table_key_prefix),
+            &state.table_key_prefix,
+            state.strict_key_prefix,
+        );
         let row_data = &data[1..];
         let required_cols = state.multi_key_columns_per_row() - 1;
         if row_data.len() < required_cols {
@@ -934,6 +940,12 @@ unsafe extern "C-unwind" fn exec_foreign_update(
             error!("Multi-key UPDATE requires at least a key column");
         }
         let key = new_data[0].clone();
+        validate_key_prefix(
+            &key,
+            extract_static_prefix(&state.table_key_prefix),
+            &state.table_key_prefix,
+            state.strict_key_prefix,
+        );
         let row_data = &new_data[1..];
         let required_cols = state.multi_key_columns_per_row() - 1;
         if row_data.len() < required_cols {

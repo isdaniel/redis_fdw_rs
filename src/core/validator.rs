@@ -11,6 +11,7 @@ const KNOWN_TABLE_OPTIONS: &[&str] = &[
     "database",
     "ttl",
     "batch_size",
+    "strict_key_prefix",
 ];
 
 // Register the validator function with text[] SQL type so PostgreSQL can find it
@@ -141,6 +142,15 @@ fn validate_table_options(opts: &HashMap<String, String>) {
     if let Some(bs) = opts.get("batch_size") {
         if !validation_rules::is_valid_batch_size(bs) {
             error!("batch_size must be between 100 and 100000, got '{}'", bs);
+        }
+    }
+
+    if let Some(skp) = opts.get("strict_key_prefix") {
+        if skp != "true" && skp != "false" {
+            error!(
+                "strict_key_prefix must be \"true\" or \"false\", got '{}'",
+                skp
+            );
         }
     }
 
