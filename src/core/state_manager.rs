@@ -808,13 +808,19 @@ impl RedisFdwState {
     ) -> Result<(), String> {
         let mut pipe = redis::pipe();
         let mut has_cmds = false;
+        let static_prefix = extract_static_prefix(table_key_prefix);
 
         for (data, row_ttl) in rows {
             let (key, row_data) = if is_multi_key {
                 if data.is_empty() {
                     continue;
                 }
-                validate_key_prefix(data[0].as_str(), table_key_prefix, strict_key_prefix);
+                validate_key_prefix(
+                    data[0].as_str(),
+                    static_prefix,
+                    table_key_prefix,
+                    strict_key_prefix,
+                );
                 (data[0].as_str(), &data[1..])
             } else {
                 (table_key_prefix, data.as_slice())
@@ -844,13 +850,19 @@ impl RedisFdwState {
     ) -> Result<(), String> {
         let mut pipe = redis::cluster::cluster_pipe();
         let mut has_cmds = false;
+        let static_prefix = extract_static_prefix(table_key_prefix);
 
         for (data, row_ttl) in rows {
             let (key, row_data) = if is_multi_key {
                 if data.is_empty() {
                     continue;
                 }
-                validate_key_prefix(data[0].as_str(), table_key_prefix, strict_key_prefix);
+                validate_key_prefix(
+                    data[0].as_str(),
+                    static_prefix,
+                    table_key_prefix,
+                    strict_key_prefix,
+                );
                 (data[0].as_str(), &data[1..])
             } else {
                 (table_key_prefix, data.as_slice())
@@ -1184,24 +1196,20 @@ impl RedisFdwState {
 }
 
 pub fn is_multi_key_pattern(prefix: &str) -> bool {
-    prefix.contains('*') || prefix.contains('?') || prefix.contains('[')
+    prefix.contains(['*', '?', '['])
 }
 
 /// Extract the static (non-glob) prefix from a multi-key pattern.
 /// E.g. "user:*" → "user:", "session:?:data" → "session:", "key:[abc]" → "key:"
 pub fn extract_static_prefix(pattern: &str) -> &str {
-    let glob_pos = pattern
-        .find('*')
-        .unwrap_or(pattern.len())
-        .min(pattern.find('?').unwrap_or(pattern.len()))
-        .min(pattern.find('[').unwrap_or(pattern.len()));
+    let glob_pos = pattern.find(['*', '?', '[']).unwrap_or(pattern.len());
     &pattern[..glob_pos]
 }
 
 /// Validate that a key matches the table's key prefix pattern.
+/// Accepts pre-calculated `static_prefix` to avoid redundant computation in batch loops.
 /// Emits warning or error depending on `strict` flag.
-pub fn validate_key_prefix(key: &str, pattern: &str, strict: bool) {
-    let static_prefix = extract_static_prefix(pattern);
+pub fn validate_key_prefix(key: &str, static_prefix: &str, pattern: &str, strict: bool) {
     if !static_prefix.is_empty() && !key.starts_with(static_prefix) {
         let msg = format!(
             "redis_fdw: inserted key '{}' does not match table pattern '{}'. This key won't appear in SELECT results.",
