@@ -808,7 +808,11 @@ impl RedisFdwState {
     ) -> Result<(), String> {
         let mut pipe = redis::pipe();
         let mut has_cmds = false;
-        let static_prefix = extract_static_prefix(table_key_prefix);
+        let static_prefix = if is_multi_key {
+            extract_static_prefix(table_key_prefix)
+        } else {
+            ""
+        };
 
         for (data, row_ttl) in rows {
             let (key, row_data) = if is_multi_key {
@@ -850,7 +854,11 @@ impl RedisFdwState {
     ) -> Result<(), String> {
         let mut pipe = redis::cluster::cluster_pipe();
         let mut has_cmds = false;
-        let static_prefix = extract_static_prefix(table_key_prefix);
+        let static_prefix = if is_multi_key {
+            extract_static_prefix(table_key_prefix)
+        } else {
+            ""
+        };
 
         for (data, row_ttl) in rows {
             let (key, row_data) = if is_multi_key {
