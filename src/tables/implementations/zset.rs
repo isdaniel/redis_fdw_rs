@@ -660,4 +660,64 @@ impl RedisTableOperations for RedisZSetTable {
         };
         Ok((new_cursor, row_count))
     }
+
+    fn configure(
+        &mut self,
+        _column_names: &[String],
+        pushdown_column_index: usize,
+        score_column_index: Option<usize>,
+    ) {
+        self.pushdown_column_index = pushdown_column_index;
+        self.score_column_index = score_column_index.unwrap_or(pushdown_column_index + 1);
+    }
+
+    fn load_multi_key_data(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        keys: &[String],
+    ) -> Result<Vec<String>, redis::RedisError> {
+        const PER_KEY_WARN_THRESHOLD: usize = 200_000;
+        let mut pipe = redis::pipe();
+        for key in keys {
+            pipe.cmd("ZRANGE")
+                .arg(key)
+                .arg(0i64)
+                .arg(-1i64)
+                .arg("WITHSCORES");
+        }
+        let results: Vec<Vec<(String, f64)>> = pipe.query(conn)?;
+        let mut all_rows = Vec::with_capacity(keys.len() * 3);
+        for (key, members) in keys.iter().zip(results) {
+            pgrx::check_for_interrupts!();
+            if members.len() > PER_KEY_WARN_THRESHOLD {
+                pgrx::warning!(
+                    "Redis FDW: key '{}' contains {} elements, consider using LIMIT",
+                    key,
+                    members.len()
+                );
+            }
+            for (member, score) in members {
+                all_rows.push(key.clone());
+                all_rows.push(member);
+                all_rows.push(score.to_string());
+            }
+        }
+        Ok(all_rows)
+    }
+
+    fn clear(&mut self) {
+        self.dataset = DataSet::default();
+    }
+
+    fn redis_type_name(&self) -> &'static str {
+        "zset"
+    }
+
+    fn set_filtered_data(&mut self, data: Vec<String>) {
+        self.dataset = DataSet::Filtered(data);
+    }
+
+    fn multi_key_columns_per_row(&self) -> usize {
+        3
+    }
 }

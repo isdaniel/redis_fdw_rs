@@ -11,7 +11,7 @@ use crate::{
             RedisZSetTable,
         },
         interface::RedisTableOperations,
-        macros::{table_dispatch, table_dispatch_mut_result},
+        macros::{table_dispatch, table_dispatch_mut_result, table_dispatch_mut_void},
     },
 };
 use std::borrow::Cow;
@@ -67,19 +67,7 @@ impl RedisTableType {
     }
 
     pub fn clear_data(&mut self) {
-        match self {
-            RedisTableType::String(t) => t.dataset = DataSet::default(),
-            RedisTableType::Hash(t) => t.dataset = DataSet::default(),
-            RedisTableType::List(t) => t.dataset = DataSet::default(),
-            RedisTableType::Set(t) => t.dataset = DataSet::default(),
-            RedisTableType::ZSet(t) => t.dataset = DataSet::default(),
-            RedisTableType::Stream(t) => {
-                t.dataset = DataSet::default();
-                t.entries.clear();
-                t.last_id = None;
-            }
-            RedisTableType::None => {}
-        }
+        table_dispatch_mut_void!(self, clear());
     }
 
     /// Get a row at the specified index
@@ -123,41 +111,44 @@ impl RedisTableType {
 
     /// Store flat multi-key data (used by multi-key mode)
     pub fn set_multi_key_data(&mut self, data: Vec<String>) {
-        match self {
-            RedisTableType::String(t) => t.dataset = DataSet::Filtered(data),
-            RedisTableType::Hash(t) => t.dataset = DataSet::Filtered(data),
-            RedisTableType::List(t) => t.dataset = DataSet::Filtered(data),
-            RedisTableType::Set(t) => t.dataset = DataSet::Filtered(data),
-            RedisTableType::ZSet(t) => t.dataset = DataSet::Filtered(data),
-            RedisTableType::Stream(t) => t.dataset = DataSet::Filtered(data),
-            RedisTableType::None => {}
-        }
+        table_dispatch_mut_void!(self, set_filtered_data(data));
     }
 
     /// Redis TYPE name for SCAN TYPE filter (Redis 6.0+)
     pub fn redis_type_name(&self) -> &'static str {
-        match self {
-            RedisTableType::String(_) => "string",
-            RedisTableType::Hash(_) => "hash",
-            RedisTableType::List(_) => "list",
-            RedisTableType::Set(_) => "set",
-            RedisTableType::ZSet(_) => "zset",
-            RedisTableType::Stream(_) => "stream",
-            RedisTableType::None => "",
-        }
+        table_dispatch!(self, redis_type_name() -> "")
     }
 
     /// Get a reference to the dataset (for multi-key mode)
     pub fn get_dataset_ref(&self) -> &DataSet {
-        match self {
-            RedisTableType::String(t) => &t.dataset,
-            RedisTableType::Hash(t) => &t.dataset,
-            RedisTableType::List(t) => &t.dataset,
-            RedisTableType::Set(t) => &t.dataset,
-            RedisTableType::ZSet(t) => &t.dataset,
-            RedisTableType::Stream(t) => &t.dataset,
-            RedisTableType::None => &DataSet::Empty,
-        }
+        table_dispatch!(self, get_dataset() -> &DataSet::Empty)
+    }
+
+    /// Configure type-specific state after column information is known.
+    pub fn configure(
+        &mut self,
+        column_names: &[String],
+        pushdown_column_index: usize,
+        score_column_index: Option<usize>,
+    ) {
+        table_dispatch_mut_void!(
+            self,
+            configure(column_names, pushdown_column_index, score_column_index)
+        );
+    }
+
+    /// Load data for multiple keys in multi-key mode.
+    pub fn load_multi_key_data(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        keys: &[String],
+    ) -> Result<Vec<String>, redis::RedisError> {
+        table_dispatch_mut_result!(self, load_multi_key_data(conn, keys) -> Result<Vec<String>, redis::RedisError>, Ok(Vec::new()))
+    }
+
+    /// Get number of columns per row in multi-key flat format.
+    pub fn multi_key_columns_per_row(&self) -> usize {
+        table_dispatch!(self, multi_key_columns_per_row() -> 2)
     }
 }
 
@@ -413,5 +404,95 @@ mod tests {
         assert!(matches!(loaded, LoadDataResult::FullyLoaded));
         let empty = LoadDataResult::Empty;
         assert!(matches!(empty, LoadDataResult::Empty));
+    }
+
+    #[test]
+    fn test_redis_type_name() {
+        assert_eq!(
+            RedisTableType::from_str("string").redis_type_name(),
+            "string"
+        );
+        assert_eq!(RedisTableType::from_str("hash").redis_type_name(), "hash");
+        assert_eq!(RedisTableType::from_str("list").redis_type_name(), "list");
+        assert_eq!(RedisTableType::from_str("set").redis_type_name(), "set");
+        assert_eq!(RedisTableType::from_str("zset").redis_type_name(), "zset");
+        assert_eq!(
+            RedisTableType::from_str("stream").redis_type_name(),
+            "stream"
+        );
+        assert_eq!(RedisTableType::None.redis_type_name(), "");
+    }
+
+    #[test]
+    fn test_multi_key_columns_per_row() {
+        assert_eq!(
+            RedisTableType::from_str("string").multi_key_columns_per_row(),
+            2
+        );
+        assert_eq!(
+            RedisTableType::from_str("hash").multi_key_columns_per_row(),
+            3
+        );
+        assert_eq!(
+            RedisTableType::from_str("list").multi_key_columns_per_row(),
+            2
+        );
+        assert_eq!(
+            RedisTableType::from_str("set").multi_key_columns_per_row(),
+            2
+        );
+        assert_eq!(
+            RedisTableType::from_str("zset").multi_key_columns_per_row(),
+            3
+        );
+        assert_eq!(
+            RedisTableType::from_str("stream").multi_key_columns_per_row(),
+            2
+        );
+        assert_eq!(RedisTableType::None.multi_key_columns_per_row(), 2);
+    }
+
+    #[test]
+    fn test_clear_data() {
+        let mut table = RedisTableType::from_str("set");
+        table.set_multi_key_data(vec!["a".to_string(), "b".to_string()]);
+        assert!(table.data_len() > 0);
+        table.clear_data();
+        assert_eq!(table.data_len(), 0);
+    }
+
+    #[test]
+    fn test_configure_hash_pushdown_index() {
+        let mut table = RedisTableType::from_str("hash");
+        let cols = vec!["field".to_string(), "value".to_string()];
+        table.configure(&cols, 0, None);
+        if let RedisTableType::Hash(ref h) = table {
+            assert_eq!(h.pushdown_column_index, 0);
+        } else {
+            panic!("expected Hash variant");
+        }
+    }
+
+    #[test]
+    fn test_configure_zset_score_index() {
+        let mut table = RedisTableType::from_str("zset");
+        let cols = vec!["member".to_string(), "score".to_string()];
+        table.configure(&cols, 0, Some(1));
+        if let RedisTableType::ZSet(ref z) = table {
+            assert_eq!(z.pushdown_column_index, 0);
+            assert_eq!(z.score_column_index, 1);
+        } else {
+            panic!("expected ZSet variant");
+        }
+    }
+
+    #[test]
+    fn test_set_multi_key_data_and_get_dataset_ref() {
+        let mut table = RedisTableType::from_str("set");
+        table.set_multi_key_data(vec!["k1".to_string(), "m1".to_string()]);
+        match table.get_dataset_ref() {
+            DataSet::Filtered(data) => assert_eq!(data.len(), 2),
+            _ => panic!("expected Filtered dataset"),
+        }
     }
 }

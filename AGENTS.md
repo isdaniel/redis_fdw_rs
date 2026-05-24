@@ -112,7 +112,7 @@ JOIN tests create temporary local tables + Redis foreign tables and verify:
 
 1. If it's a new Redis operation, implement it on `RedisTableOperations` trait in `src/tables/interface.rs`
 2. Add implementation for each type in `src/tables/implementations/{type}.rs`
-3. Add dispatch in `src/tables/types.rs` (use existing macro pattern)
+3. Add dispatch in `src/tables/types.rs` (use `table_dispatch!`, `table_dispatch_mut_result!`, or `table_dispatch_mut_void!` macros from `src/tables/macros.rs`)
 4. Wire the FDW callback in `src/core/handlers.rs` (registration) — implementation logic goes in the appropriate submodule (`join_handlers.rs`, `explain.rs`, `schema_import.rs`, `truncate.rs`)
 5. Shared column/TTL utilities go in `src/core/column_utils.rs`
 6. Add state management method in `src/core/state_manager.rs` if needed
@@ -131,6 +131,7 @@ JOIN tests create temporary local tables + Redis foreign tables and verify:
 | `src/core/ddl_hook.rs` | DDL-time column count validation via `object_access_hook` |
 | `src/tables/interface.rs` | The `RedisTableOperations` trait — defines what each type must implement |
 | `src/tables/types.rs` | `RedisTableType` enum + dispatch methods |
+| `src/tables/macros.rs` | Dispatch macros: `table_dispatch!`, `table_dispatch_mut_result!`, `table_dispatch_mut_void!` |
 | `src/core/state_manager.rs` | `RedisFdwState` — holds connection, table type, scan state, TTL, multi-key |
 | `src/query/pushdown.rs` | WHERE clause analysis and optimization |
 
