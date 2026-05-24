@@ -43,6 +43,8 @@ pub struct RedisFdwState {
     pub default_ttl: Option<i64>,
     /// Whether this table operates in multi-key mode (glob pattern in table_key_prefix)
     pub is_multi_key: bool,
+    /// Whether to error (true) or warn (false) on multi-key prefix mismatch
+    pub strict_key_prefix: bool,
     /// Cached TTL value for single-key mode (avoids repeated TTL calls per row)
     pub cached_ttl: Option<i64>,
     /// Cached TTL values for multi-key mode (batch-fetched via pipeline)
@@ -87,6 +89,7 @@ impl RedisFdwState {
             ttl_column_index: None,
             default_ttl: None,
             is_multi_key: false,
+            strict_key_prefix: false,
             cached_ttl: None,
             multi_key_ttl_cache: HashMap::new(),
             is_join_scan: false,
@@ -156,6 +159,10 @@ impl RedisFdwState {
         }
 
         self.is_multi_key = is_multi_key_pattern(&self.table_key_prefix);
+
+        if let Some(skp) = self.opts.get("strict_key_prefix") {
+            self.strict_key_prefix = skp == "true";
+        }
     }
 
     /// Set table type and prepare for streaming iteration
@@ -769,6 +776,7 @@ impl RedisFdwState {
                     &self.table_type,
                     &self.table_key_prefix,
                     self.is_multi_key,
+                    self.strict_key_prefix,
                     self.default_ttl,
                     rows,
                 )
@@ -779,6 +787,7 @@ impl RedisFdwState {
                     &self.table_type,
                     &self.table_key_prefix,
                     self.is_multi_key,
+                    self.strict_key_prefix,
                     self.default_ttl,
                     rows,
                 )
@@ -793,6 +802,7 @@ impl RedisFdwState {
         table_type: &RedisTableType,
         table_key_prefix: &str,
         is_multi_key: bool,
+        strict_key_prefix: bool,
         default_ttl: Option<i64>,
         rows: &[(Vec<String>, Option<i64>)],
     ) -> Result<(), String> {
@@ -804,6 +814,7 @@ impl RedisFdwState {
                 if data.is_empty() {
                     continue;
                 }
+                validate_key_prefix(data[0].as_str(), table_key_prefix, strict_key_prefix);
                 (data[0].as_str(), &data[1..])
             } else {
                 (table_key_prefix, data.as_slice())
@@ -827,6 +838,7 @@ impl RedisFdwState {
         table_type: &RedisTableType,
         table_key_prefix: &str,
         is_multi_key: bool,
+        strict_key_prefix: bool,
         default_ttl: Option<i64>,
         rows: &[(Vec<String>, Option<i64>)],
     ) -> Result<(), String> {
@@ -838,6 +850,7 @@ impl RedisFdwState {
                 if data.is_empty() {
                     continue;
                 }
+                validate_key_prefix(data[0].as_str(), table_key_prefix, strict_key_prefix);
                 (data[0].as_str(), &data[1..])
             } else {
                 (table_key_prefix, data.as_slice())
@@ -1172,4 +1185,56 @@ impl RedisFdwState {
 
 pub fn is_multi_key_pattern(prefix: &str) -> bool {
     prefix.contains('*') || prefix.contains('?') || prefix.contains('[')
+}
+
+/// Extract the static (non-glob) prefix from a multi-key pattern.
+/// E.g. "user:*" → "user:", "session:?:data" → "session:", "key:[abc]" → "key:"
+pub fn extract_static_prefix(pattern: &str) -> &str {
+    let glob_pos = pattern
+        .find('*')
+        .unwrap_or(pattern.len())
+        .min(pattern.find('?').unwrap_or(pattern.len()))
+        .min(pattern.find('[').unwrap_or(pattern.len()));
+    &pattern[..glob_pos]
+}
+
+/// Validate that a key matches the table's key prefix pattern.
+/// Emits warning or error depending on `strict` flag.
+pub fn validate_key_prefix(key: &str, pattern: &str, strict: bool) {
+    let static_prefix = extract_static_prefix(pattern);
+    if !static_prefix.is_empty() && !key.starts_with(static_prefix) {
+        let msg = format!(
+            "redis_fdw: inserted key '{}' does not match table pattern '{}'. This key won't appear in SELECT results.",
+            key, pattern
+        );
+        if strict {
+            pgrx::error!("{}", msg);
+        } else {
+            pgrx::warning!("{}", msg);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_static_prefix() {
+        assert_eq!(extract_static_prefix("user:*"), "user:");
+        assert_eq!(extract_static_prefix("session:?:data"), "session:");
+        assert_eq!(extract_static_prefix("key:[abc]"), "key:");
+        assert_eq!(extract_static_prefix("*"), "");
+        assert_eq!(extract_static_prefix("no_glob_here"), "no_glob_here");
+        assert_eq!(extract_static_prefix("prefix:sub:*"), "prefix:sub:");
+    }
+
+    #[test]
+    fn test_is_multi_key_pattern() {
+        assert!(is_multi_key_pattern("prefix:*"));
+        assert!(is_multi_key_pattern("user:?:name"));
+        assert!(is_multi_key_pattern("key:[abc]"));
+        assert!(!is_multi_key_pattern("simple:prefix:"));
+        assert!(!is_multi_key_pattern("no_glob_here"));
+    }
 }
