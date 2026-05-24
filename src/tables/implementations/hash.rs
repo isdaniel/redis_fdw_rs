@@ -381,4 +381,59 @@ impl RedisTableOperations for RedisHashTable {
         };
         Ok((new_cursor, row_count))
     }
+
+    fn configure(
+        &mut self,
+        _column_names: &[String],
+        pushdown_column_index: usize,
+        _score_column_index: Option<usize>,
+    ) {
+        self.pushdown_column_index = pushdown_column_index;
+    }
+
+    fn load_multi_key_data(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        keys: &[String],
+    ) -> Result<Vec<String>, redis::RedisError> {
+        const PER_KEY_WARN_THRESHOLD: usize = 200_000;
+        let mut pipe = redis::pipe();
+        for key in keys {
+            pipe.cmd("HGETALL").arg(key);
+        }
+        let results: Vec<Vec<(String, String)>> = pipe.query(conn)?;
+        let mut all_rows = Vec::with_capacity(keys.len() * 3);
+        for (key, pairs) in keys.iter().zip(results) {
+            pgrx::check_for_interrupts!();
+            if pairs.len() > PER_KEY_WARN_THRESHOLD {
+                pgrx::warning!(
+                    "Redis FDW: key '{}' contains {} elements, consider using LIMIT",
+                    key,
+                    pairs.len()
+                );
+            }
+            for (field, value) in pairs {
+                all_rows.push(key.clone());
+                all_rows.push(field);
+                all_rows.push(value);
+            }
+        }
+        Ok(all_rows)
+    }
+
+    fn clear(&mut self) {
+        self.dataset = DataSet::default();
+    }
+
+    fn redis_type_name(&self) -> &'static str {
+        "hash"
+    }
+
+    fn set_filtered_data(&mut self, data: Vec<String>) {
+        self.dataset = DataSet::Filtered(data);
+    }
+
+    fn multi_key_columns_per_row(&self) -> usize {
+        3
+    }
 }

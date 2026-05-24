@@ -353,4 +353,45 @@ impl RedisTableOperations for RedisSetTable {
         };
         Ok((new_cursor, row_count))
     }
+
+    fn load_multi_key_data(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        keys: &[String],
+    ) -> Result<Vec<String>, redis::RedisError> {
+        const PER_KEY_WARN_THRESHOLD: usize = 200_000;
+        let mut pipe = redis::pipe();
+        for key in keys {
+            pipe.cmd("SMEMBERS").arg(key);
+        }
+        let results: Vec<Vec<String>> = pipe.query(conn)?;
+        let mut all_rows = Vec::with_capacity(keys.len() * 2);
+        for (key, members) in keys.iter().zip(results) {
+            pgrx::check_for_interrupts!();
+            if members.len() > PER_KEY_WARN_THRESHOLD {
+                pgrx::warning!(
+                    "Redis FDW: key '{}' contains {} elements, consider using LIMIT",
+                    key,
+                    members.len()
+                );
+            }
+            for member in members {
+                all_rows.push(key.clone());
+                all_rows.push(member);
+            }
+        }
+        Ok(all_rows)
+    }
+
+    fn clear(&mut self) {
+        self.dataset = DataSet::default();
+    }
+
+    fn redis_type_name(&self) -> &'static str {
+        "set"
+    }
+
+    fn set_filtered_data(&mut self, data: Vec<String>) {
+        self.dataset = DataSet::Filtered(data);
+    }
 }

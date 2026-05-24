@@ -246,4 +246,32 @@ impl RedisTableOperations for RedisStringTable {
         self.dataset = DataSet::Complete(DataContainer::String(value));
         Ok((0, row_count)) // cursor=0 means done
     }
+
+    fn load_multi_key_data(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        keys: &[String],
+    ) -> Result<Vec<String>, redis::RedisError> {
+        let values: Vec<Option<String>> = redis::cmd("MGET").arg(keys).query(conn)?;
+        let mut all_rows = Vec::with_capacity(keys.len() * 2);
+        for (key, value) in keys.iter().zip(values) {
+            if let Some(v) = value {
+                all_rows.push(key.clone());
+                all_rows.push(v);
+            }
+        }
+        Ok(all_rows)
+    }
+
+    fn clear(&mut self) {
+        self.dataset = DataSet::default();
+    }
+
+    fn redis_type_name(&self) -> &'static str {
+        "string"
+    }
+
+    fn set_filtered_data(&mut self, data: Vec<String>) {
+        self.dataset = DataSet::Filtered(data);
+    }
 }
