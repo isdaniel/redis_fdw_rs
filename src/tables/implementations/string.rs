@@ -206,7 +206,7 @@ impl RedisTableOperations for RedisStringTable {
     fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
         matches!(
             operator,
-            ComparisonOperator::Equal | ComparisonOperator::Like
+            ComparisonOperator::Equal | ComparisonOperator::Like | ComparisonOperator::In
         )
     }
 
@@ -237,6 +237,7 @@ impl RedisTableOperations for RedisStringTable {
                         .iter()
                         .find(|(idx, _)| *idx == i)
                         .is_some_and(|(_, m)| m.matches(v)),
+                    ComparisonOperator::In => c.value.split(',').any(|s| s == v),
                     _ => true,
                 })
             })

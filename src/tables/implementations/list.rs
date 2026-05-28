@@ -288,7 +288,7 @@ impl RedisTableOperations for RedisListTable {
     fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
         matches!(
             operator,
-            ComparisonOperator::Equal | ComparisonOperator::Like
+            ComparisonOperator::Equal | ComparisonOperator::Like | ComparisonOperator::In
         )
     }
 
@@ -323,6 +323,12 @@ impl RedisTableOperations for RedisListTable {
                 .filter(|(_, c)| c.operator == ComparisonOperator::Like)
                 .map(|(i, c)| (i, PatternMatcher::from_like_pattern(&c.value)))
                 .collect();
+            let in_sets: Vec<(usize, std::collections::HashSet<&str>)> = conds
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.operator == ComparisonOperator::In)
+                .map(|(i, c)| (i, c.value.split(',').collect()))
+                .collect();
             data.into_iter()
                 .filter(|item| {
                     conds.iter().enumerate().all(|(i, c)| match c.operator {
@@ -332,6 +338,10 @@ impl RedisTableOperations for RedisListTable {
                             .iter()
                             .find(|(idx, _)| *idx == i)
                             .is_some_and(|(_, m)| m.matches(item)),
+                        ComparisonOperator::In => in_sets
+                            .iter()
+                            .find(|(idx, _)| *idx == i)
+                            .is_some_and(|(_, set)| set.contains(item.as_str())),
                         _ => true,
                     })
                 })
