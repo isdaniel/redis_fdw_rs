@@ -332,6 +332,7 @@ impl RedisTableOperations for RedisListTable {
                             .iter()
                             .find(|(idx, _)| *idx == i)
                             .is_some_and(|(_, m)| m.matches(item)),
+                        ComparisonOperator::In => c.value.split(',').any(|s| s == item),
                         _ => true,
                     })
                 })

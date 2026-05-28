@@ -237,6 +237,7 @@ impl RedisTableOperations for RedisStringTable {
                         .iter()
                         .find(|(idx, _)| *idx == i)
                         .is_some_and(|(_, m)| m.matches(v)),
+                    ComparisonOperator::In => c.value.split(',').any(|s| s == v),
                     _ => true,
                 })
             })
