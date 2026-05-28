@@ -9,6 +9,8 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 **Feature-complete for all CRUD operations plus EXPLAIN, batch INSERT, TRUNCATE, IMPORT FOREIGN SCHEMA, ANALYZE, and COPY FROM.** All Redis types (String, Hash, List, Set, ZSet) support SELECT, INSERT, UPDATE, DELETE, TRUNCATE. Stream supports SELECT, INSERT, DELETE, TRUNCATE only (append-only by design).
 
 ### Recent Work
+- Multi-key pushdown optimization: WHERE conditions on the key column (`=`, `IN`, `LIKE`) bypass full SCAN — direct GET for `=`, pipelined batch for `IN`, narrowed `SCAN MATCH` for `LIKE`
+- `compute_key_column_index()` in `column_utils.rs`: determines key column position accounting for TTL column placement
 - TTL-position-aware modify path: `add_foreign_update_targets` now skips TTL column at position 0, fixing DELETE/UPDATE crashes on TTL-first tables
 - TTL-aware parameterized JOIN paths: `add_parameterized_paths` uses `compute_pushdown_column_index()` instead of hardcoded column 0
 - TTL-aware FDW-to-FDW join columns: `get_foreign_join_paths` adjusts join column indices for TTL stripping via `adjust_column_for_ttl_strip()`
@@ -65,6 +67,21 @@ cargo pgrx test pg14           # run all tests (needs Redis)
 cargo clippy --features pg14   # lint
 cargo fmt                      # format
 ```
+
+### Testing Multi-Key Pushdown
+
+```bash
+# Run multi-key pushdown tests
+cargo pgrx test pg16 multi_key_pushdown_tests
+```
+
+Multi-key pushdown tests verify:
+- `=` on key column → direct key lookup (no SCAN)
+- `IN` on key column → batch pipeline fetch
+- `LIKE` on key column → narrowed SCAN MATCH pattern
+- All Redis types (String, Hash, Set, ZSet)
+- TTL column at any position (start, end)
+- Non-existent key returns 0 rows
 
 ### Testing JOINs
 

@@ -105,6 +105,17 @@ Stream is append-only; UPDATE returns an error at the trait level and `IsForeign
   - With table option `strict_key_prefix 'true'`: `pgrx::error!()` rejects the INSERT
   - Implementation: `extract_static_prefix()` and `validate_key_prefix()` in state_manager.rs
 
+### Multi-Key Pushdown
+- In multi-key mode, WHERE conditions on the **key column** are pushed down to narrow or bypass the Redis SCAN
+- Key column detection: `compute_key_column_index(ttl_column_index)` in `column_utils.rs` — position 0 unless TTL is at position 0 (then position 1)
+- Optimization paths:
+  - `WHERE key = 'exact:key'` → direct type-specific lookup (GET/HGETALL/SMEMBERS/ZRANGE/LRANGE), no SCAN
+  - `WHERE key IN ('k1', 'k2', ...)` → batch pipeline lookup for listed keys, no SCAN
+  - `WHERE key LIKE 'prefix:%'` → narrowed `SCAN MATCH prefix:*` (SQL LIKE converted to Redis glob)
+- Client-side glob verification after narrowed SCAN (Redis MATCH can return false positives)
+- Non-key-column conditions in multi-key mode are not pushed to Redis (filtered by PostgreSQL post-scan)
+- Implementation: `fetch_multi_key_optimized()` and `scan_keys_with_pattern()` in `state_manager.rs`
+
 ### Column Order (Position-Based Mapping)
 
 The FDW maps columns by **position**, not by name. Users MUST declare columns in this exact order:

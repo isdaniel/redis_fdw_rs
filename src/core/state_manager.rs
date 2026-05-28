@@ -4,12 +4,14 @@
 /// configuration, connection status, and coordination between components.
 use crate::{
     core::{
+        column_utils::compute_key_column_index,
         connection_factory::{RedisConnectionConfig, RedisConnectionFactory},
         pool_manager::PooledConnection,
     },
     query::{
         cost_estimation::{CostEstimate, CostEstimator},
         pushdown_types::{ComparisonOperator, PushdownAnalysis},
+        scan_ops::PatternMatcher,
     },
     tables::types::{DataContainer, DataSet, RedisTableType},
 };
@@ -420,8 +422,32 @@ impl RedisFdwState {
     }
 
     /// Fetch next batch in multi-key mode using top-level SCAN.
+    /// If pushdown conditions target the key column, use optimized paths.
     fn fetch_next_batch_multi_key(&mut self) -> bool {
-        // Take connection out temporarily to avoid borrow conflicts
+        let key_col_idx = compute_key_column_index(self.ttl_column_index);
+        let key_condition = self.pushdown_analysis.as_ref().and_then(|a| {
+            a.pushable_conditions
+                .iter()
+                .find(|c| c.column_index == key_col_idx)
+                .cloned()
+        });
+
+        if let Some(condition) = key_condition {
+            let mut conn = match self.redis_connection.take() {
+                Some(c) => c,
+                None => {
+                    self.scan_complete = true;
+                    return false;
+                }
+            };
+
+            let result = self.fetch_multi_key_optimized(conn.as_connection_like_mut(), &condition);
+
+            self.redis_connection = Some(conn);
+            return result;
+        }
+
+        // No key-column pushdown: fall through to existing full-scan behavior
         let mut conn = match self.redis_connection.take() {
             Some(c) => c,
             None => {
@@ -432,9 +458,149 @@ impl RedisFdwState {
 
         let result = self.fetch_multi_key_with_conn(conn.as_connection_like_mut());
 
-        // Put connection back
         self.redis_connection = Some(conn);
         result
+    }
+
+    /// Optimized multi-key fetch when pushdown conditions target the key column.
+    fn fetch_multi_key_optimized(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        condition: &crate::query::pushdown_types::PushableCondition,
+    ) -> bool {
+        self.scan_complete = true;
+
+        let static_prefix = extract_static_prefix(&self.table_key_prefix);
+        let mut keys: Vec<String> = match &condition.operator {
+            ComparisonOperator::Equal => {
+                if !static_prefix.is_empty() && !condition.value.starts_with(static_prefix) {
+                    vec![]
+                } else {
+                    vec![condition.value.clone()]
+                }
+            }
+            ComparisonOperator::In => {
+                let mut keys: Vec<String> = condition
+                    .value
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .filter(|s| static_prefix.is_empty() || s.starts_with(static_prefix))
+                    .map(|s| s.to_string())
+                    .collect();
+                keys.sort();
+                keys.dedup();
+                keys
+            }
+            ComparisonOperator::Like => {
+                let matcher = PatternMatcher::from_like_pattern(&condition.value);
+                let pattern = matcher.get_pattern();
+                let scan_pattern = if static_prefix.is_empty() || pattern.starts_with(static_prefix)
+                {
+                    Some(pattern.to_string())
+                } else if pattern.starts_with(['*', '?', '[']) {
+                    Some(format!("{}{}", static_prefix, pattern))
+                } else {
+                    let pattern_static = extract_static_prefix(pattern);
+                    if static_prefix.starts_with(pattern_static) {
+                        Some(self.table_key_prefix.clone())
+                    } else {
+                        None
+                    }
+                };
+                match scan_pattern {
+                    Some(sp) => {
+                        let keys = self.scan_keys_with_pattern(conn, &sp);
+                        keys.into_iter()
+                            .filter(|k| matcher.matches(k))
+                            .filter(|k| static_prefix.is_empty() || k.starts_with(static_prefix))
+                            .collect()
+                    }
+                    None => vec![],
+                }
+            }
+            _ => {
+                self.scan_complete = false;
+                return self.fetch_multi_key_with_conn(conn);
+            }
+        };
+
+        if !keys.is_empty() && is_multi_key_pattern(&self.table_key_prefix) {
+            let like_pattern = self.table_key_prefix.replace('*', "%").replace('?', "_");
+            let table_matcher = PatternMatcher::from_like_pattern(&like_pattern);
+            keys.retain(|k| table_matcher.matches(k));
+        }
+
+        if keys.is_empty() {
+            return false;
+        }
+
+        // Batch-fetch TTLs if TTL column is present
+        if self.ttl_column_index.is_some() {
+            self.multi_key_ttl_cache.clear();
+            for chunk in keys.chunks(1000) {
+                let mut pipe = redis::pipe();
+                for key in chunk {
+                    pipe.cmd("TTL").arg(key);
+                }
+                let ttls: Vec<i64> = match pipe.query(conn) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log!("WARNING: Redis pipeline TTL error: {}", e);
+                        vec![-2; chunk.len()]
+                    }
+                };
+                for (key, ttl) in chunk.iter().zip(ttls) {
+                    self.multi_key_ttl_cache.insert(key.clone(), ttl);
+                }
+            }
+        }
+
+        let rows = self.load_multi_key_data(conn, &keys);
+        rows > 0
+    }
+
+    /// SCAN Redis with a specific MATCH pattern, collecting all matching keys.
+    fn scan_keys_with_pattern(
+        &self,
+        conn: &mut dyn redis::ConnectionLike,
+        pattern: &str,
+    ) -> Vec<String> {
+        let mut all_keys = Vec::new();
+        let mut cursor: u64 = 0;
+        let scan_type = self.table_type.redis_type_name();
+
+        loop {
+            pgrx::check_for_interrupts!();
+
+            let mut cmd = redis::cmd("SCAN");
+            cmd.arg(cursor)
+                .arg("MATCH")
+                .arg(pattern)
+                .arg("COUNT")
+                .arg(self.batch_size);
+
+            if !scan_type.is_empty() {
+                cmd.arg("TYPE").arg(scan_type);
+            }
+
+            let (new_cursor, keys): (u64, Vec<String>) = match cmd.query(conn) {
+                Ok(result) => result,
+                Err(e) => {
+                    pgrx::error!("Redis error during narrowed SCAN: {}", e);
+                }
+            };
+
+            all_keys.extend(keys);
+            cursor = new_cursor;
+
+            if cursor == 0 {
+                break;
+            }
+        }
+
+        all_keys.sort();
+        all_keys.dedup();
+        all_keys
     }
 
     fn fetch_multi_key_with_conn(&mut self, conn: &mut dyn redis::ConnectionLike) -> bool {
@@ -509,12 +675,18 @@ impl RedisFdwState {
         conn: &mut dyn redis::ConnectionLike,
         keys: &[String],
     ) -> usize {
-        let all_rows = match self.table_type.load_multi_key_data(conn, keys) {
-            Ok(rows) => rows,
-            Err(e) => {
-                pgrx::error!("Redis multi-key load error: {}", e);
+        const CHUNK_SIZE: usize = 1000;
+
+        let mut all_rows = Vec::new();
+        for chunk in keys.chunks(CHUNK_SIZE) {
+            pgrx::check_for_interrupts!();
+            match self.table_type.load_multi_key_data(conn, chunk) {
+                Ok(rows) => all_rows.extend(rows),
+                Err(e) => {
+                    pgrx::error!("Redis multi-key load error: {}", e);
+                }
             }
-        };
+        }
 
         const MULTI_KEY_WARN_THRESHOLD: usize = 1_000_000;
         if all_rows.len() > MULTI_KEY_WARN_THRESHOLD {
