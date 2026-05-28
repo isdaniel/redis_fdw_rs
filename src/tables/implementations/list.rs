@@ -121,10 +121,13 @@ impl RedisTableOperations for RedisListTable {
                 );
             }
 
-            // Handle simple Equal conditions efficiently
+            // Handle simple Equal/In conditions efficiently
             if !conditions.is_empty() {
                 for condition in conditions {
-                    if let ComparisonOperator::Equal = condition.operator {
+                    if matches!(
+                        condition.operator,
+                        ComparisonOperator::Equal | ComparisonOperator::In
+                    ) {
                         // For lists, we need to load all data and filter
                         let all_data: Vec<String> = if limit_offset.has_constraints() {
                             // Apply LIMIT/OFFSET directly with LRANGE for better performance
@@ -149,10 +152,21 @@ impl RedisTableOperations for RedisListTable {
                                 .query(conn)?
                         };
 
-                        let filtered: Vec<String> = all_data
-                            .into_iter()
-                            .filter(|item| item == &condition.value)
-                            .collect();
+                        let filtered: Vec<String> = match condition.operator {
+                            ComparisonOperator::Equal => all_data
+                                .into_iter()
+                                .filter(|item| item == &condition.value)
+                                .collect(),
+                            ComparisonOperator::In => {
+                                let values: std::collections::HashSet<&str> =
+                                    condition.value.split(',').collect();
+                                all_data
+                                    .into_iter()
+                                    .filter(|item| values.contains(item.as_str()))
+                                    .collect()
+                            }
+                            _ => all_data,
+                        };
 
                         return if filtered.is_empty() {
                             self.dataset = DataSet::Empty;
@@ -288,7 +302,7 @@ impl RedisTableOperations for RedisListTable {
     fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
         matches!(
             operator,
-            ComparisonOperator::Equal | ComparisonOperator::Like
+            ComparisonOperator::Equal | ComparisonOperator::Like | ComparisonOperator::In
         )
     }
 
@@ -323,6 +337,12 @@ impl RedisTableOperations for RedisListTable {
                 .filter(|(_, c)| c.operator == ComparisonOperator::Like)
                 .map(|(i, c)| (i, PatternMatcher::from_like_pattern(&c.value)))
                 .collect();
+            let in_sets: Vec<(usize, std::collections::HashSet<&str>)> = conds
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.operator == ComparisonOperator::In)
+                .map(|(i, c)| (i, c.value.split(',').collect()))
+                .collect();
             data.into_iter()
                 .filter(|item| {
                     conds.iter().enumerate().all(|(i, c)| match c.operator {
@@ -332,6 +352,10 @@ impl RedisTableOperations for RedisListTable {
                             .iter()
                             .find(|(idx, _)| *idx == i)
                             .is_some_and(|(_, m)| m.matches(item)),
+                        ComparisonOperator::In => in_sets
+                            .iter()
+                            .find(|(idx, _)| *idx == i)
+                            .is_some_and(|(_, set)| set.contains(item.as_str())),
                         _ => true,
                     })
                 })

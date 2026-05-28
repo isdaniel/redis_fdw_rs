@@ -51,17 +51,25 @@ pub(crate) unsafe extern "C-unwind" fn import_foreign_schema(
 
     let conn_like = conn.as_connection_like_mut();
 
+    let remote_schema = string_from_cstr((*stmt).remote_schema);
+    let scan_pattern = if is_multi_key_pattern(&remote_schema) {
+        Some(remote_schema)
+    } else {
+        None
+    };
+
     let mut all_keys: Vec<String> = Vec::new();
     let mut cursor: u64 = 0;
     let max_keys: usize = 10_000;
     loop {
         pgrx::check_for_interrupts!();
-        let (new_cursor, keys): (u64, Vec<String>) = match redis::cmd("SCAN")
-            .arg(cursor)
-            .arg("COUNT")
-            .arg(1000u32)
-            .query(conn_like)
-        {
+        let mut cmd = redis::cmd("SCAN");
+        cmd.arg(cursor);
+        if let Some(ref pattern) = scan_pattern {
+            cmd.arg("MATCH").arg(pattern.as_str());
+        }
+        cmd.arg("COUNT").arg(1000u32);
+        let (new_cursor, keys): (u64, Vec<String>) = match cmd.query(conn_like) {
             Ok(r) => r,
             Err(e) => {
                 error!("Redis SCAN error during import: {}", e);

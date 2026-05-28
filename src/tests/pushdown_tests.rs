@@ -486,10 +486,10 @@ mod tests {
         assert!(set_type.supports_pushdown(&ComparisonOperator::Equal));
         assert!(string_type.supports_pushdown(&ComparisonOperator::Equal));
 
-        // Test In operator (should be supported by hash and set)
+        // Test In operator (should be supported by hash, set, and string)
         assert!(hash_type.supports_pushdown(&ComparisonOperator::In));
         assert!(set_type.supports_pushdown(&ComparisonOperator::In));
-        assert!(!string_type.supports_pushdown(&ComparisonOperator::In));
+        assert!(string_type.supports_pushdown(&ComparisonOperator::In));
 
         // Test Like operator (should be supported by string and set)
         assert!(string_type.supports_pushdown(&ComparisonOperator::Like));
