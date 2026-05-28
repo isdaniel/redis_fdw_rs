@@ -475,8 +475,12 @@ impl RedisFdwState {
                 vec![condition.value.clone()]
             }
             ComparisonOperator::In => {
-                let mut keys: Vec<String> =
-                    condition.value.split(',').map(|s| s.to_string()).collect();
+                let mut keys: Vec<String> = condition
+                    .value
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect();
                 keys.sort();
                 keys.dedup();
                 keys
@@ -500,19 +504,21 @@ impl RedisFdwState {
         // Batch-fetch TTLs if TTL column is present
         if self.ttl_column_index.is_some() {
             self.multi_key_ttl_cache.clear();
-            let mut pipe = redis::pipe();
-            for key in &keys {
-                pipe.cmd("TTL").arg(key);
-            }
-            let ttls: Vec<i64> = match pipe.query(conn) {
-                Ok(v) => v,
-                Err(e) => {
-                    log!("WARNING: Redis pipeline TTL error: {}", e);
-                    vec![-2; keys.len()]
+            for chunk in keys.chunks(1000) {
+                let mut pipe = redis::pipe();
+                for key in chunk {
+                    pipe.cmd("TTL").arg(key);
                 }
-            };
-            for (key, ttl) in keys.iter().zip(ttls) {
-                self.multi_key_ttl_cache.insert(key.clone(), ttl);
+                let ttls: Vec<i64> = match pipe.query(conn) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log!("WARNING: Redis pipeline TTL error: {}", e);
+                        vec![-2; chunk.len()]
+                    }
+                };
+                for (key, ttl) in chunk.iter().zip(ttls) {
+                    self.multi_key_ttl_cache.insert(key.clone(), ttl);
+                }
             }
         }
 
