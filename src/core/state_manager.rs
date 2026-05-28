@@ -474,7 +474,13 @@ impl RedisFdwState {
             ComparisonOperator::Equal => {
                 vec![condition.value.clone()]
             }
-            ComparisonOperator::In => condition.value.split(',').map(|s| s.to_string()).collect(),
+            ComparisonOperator::In => {
+                let mut keys: Vec<String> =
+                    condition.value.split(',').map(|s| s.to_string()).collect();
+                keys.sort();
+                keys.dedup();
+                keys
+            }
             ComparisonOperator::Like => {
                 let matcher = PatternMatcher::from_like_pattern(&condition.value);
                 let pattern = matcher.get_pattern();
@@ -553,6 +559,8 @@ impl RedisFdwState {
             }
         }
 
+        all_keys.sort();
+        all_keys.dedup();
         all_keys
     }
 
