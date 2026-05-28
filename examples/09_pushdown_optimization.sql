@@ -84,7 +84,7 @@ SELECT COUNT(*) AS total_sessions FROM demo_sessions;
 EXPLAIN (ANALYZE, VERBOSE) SELECT * FROM demo_sessions LIMIT 5;
 
 -- PG-side LIKE filter on the key column (scans all keys, filters in PG)
-EXPLAIN (ANALYZE, VERBOSE) SELECT key, value FROM demo_sessions WHERE key LIKE 'user101%';
+EXPLAIN (ANALYZE, VERBOSE) SELECT key, value FROM demo_sessions WHERE key LIKE 'session:user101%';
 
 -- Single-key INSERT through the pattern table
 -- redis-cli> SET session:user99999 '{"logged_in": true, "ip": "10.0.0.99"}'

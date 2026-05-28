@@ -470,15 +470,21 @@ impl RedisFdwState {
     ) -> bool {
         self.scan_complete = true;
 
+        let static_prefix = extract_static_prefix(&self.table_key_prefix);
         let keys: Vec<String> = match &condition.operator {
             ComparisonOperator::Equal => {
-                vec![condition.value.clone()]
+                if !static_prefix.is_empty() && !condition.value.starts_with(static_prefix) {
+                    vec![]
+                } else {
+                    vec![condition.value.clone()]
+                }
             }
             ComparisonOperator::In => {
                 let mut keys: Vec<String> = condition
                     .value
                     .split(',')
                     .filter(|s| !s.is_empty())
+                    .filter(|s| static_prefix.is_empty() || s.starts_with(static_prefix))
                     .map(|s| s.to_string())
                     .collect();
                 keys.sort();
@@ -489,7 +495,10 @@ impl RedisFdwState {
                 let matcher = PatternMatcher::from_like_pattern(&condition.value);
                 let pattern = matcher.get_pattern();
                 let keys = self.scan_keys_with_pattern(conn, pattern);
-                keys.into_iter().filter(|k| matcher.matches(k)).collect()
+                keys.into_iter()
+                    .filter(|k| matcher.matches(k))
+                    .filter(|k| static_prefix.is_empty() || k.starts_with(static_prefix))
+                    .collect()
             }
             _ => {
                 self.scan_complete = false;
