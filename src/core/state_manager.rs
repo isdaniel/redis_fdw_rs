@@ -494,11 +494,29 @@ impl RedisFdwState {
             ComparisonOperator::Like => {
                 let matcher = PatternMatcher::from_like_pattern(&condition.value);
                 let pattern = matcher.get_pattern();
-                let keys = self.scan_keys_with_pattern(conn, pattern);
-                keys.into_iter()
-                    .filter(|k| matcher.matches(k))
-                    .filter(|k| static_prefix.is_empty() || k.starts_with(static_prefix))
-                    .collect()
+                let scan_pattern = if static_prefix.is_empty() || pattern.starts_with(static_prefix)
+                {
+                    Some(pattern.to_string())
+                } else if pattern.starts_with(['*', '?', '[']) {
+                    Some(format!("{}{}", static_prefix, pattern))
+                } else {
+                    let pattern_static = extract_static_prefix(pattern);
+                    if static_prefix.starts_with(pattern_static) {
+                        Some(self.table_key_prefix.clone())
+                    } else {
+                        None
+                    }
+                };
+                match scan_pattern {
+                    Some(sp) => {
+                        let keys = self.scan_keys_with_pattern(conn, &sp);
+                        keys.into_iter()
+                            .filter(|k| matcher.matches(k))
+                            .filter(|k| static_prefix.is_empty() || k.starts_with(static_prefix))
+                            .collect()
+                    }
+                    None => vec![],
+                }
             }
             _ => {
                 self.scan_complete = false;
