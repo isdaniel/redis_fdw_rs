@@ -23,20 +23,26 @@ CREATE FOREIGN TABLE demo_import_s3 (field text, value text)
     SERVER redis_server
     OPTIONS (database '0', table_type 'hash', table_key_prefix 'import:user:1001');
 
+CREATE FOREIGN TABLE demo_import_s4 (field text, value text)
+    SERVER redis_server
+    OPTIONS (database '0', table_type 'hash', table_key_prefix 'import:user:1002');
+
 INSERT INTO demo_import_s1 VALUES ('v1.0');
 INSERT INTO demo_import_s2 VALUES ('production');
 INSERT INTO demo_import_s3 VALUES ('name', 'Alice');
+INSERT INTO demo_import_s4 VALUES ('name', 'Bob');
 
 -- Drop the seeding tables; the keys remain in Redis
 DROP FOREIGN TABLE demo_import_s1;
 DROP FOREIGN TABLE demo_import_s2;
 DROP FOREIGN TABLE demo_import_s3;
+DROP FOREIGN TABLE demo_import_s4;
 
 -- ------------------------------------------------------------
 -- Step 2: IMPORT - the FDW discovers the keys and types
 -- Keys with same prefix group into one multi-key table:
 --   import:config:version + import:config:env → import_config (string, multi-key)
---   import:user:1001 → import_user (hash, single-key)
+--   import:user:1001 + import:user:1002 → import_user (hash, multi-key)
 -- ------------------------------------------------------------
 IMPORT FOREIGN SCHEMA "import:*"
     FROM SERVER redis_server

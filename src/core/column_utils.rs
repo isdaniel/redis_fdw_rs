@@ -56,6 +56,17 @@ pub(crate) fn compute_pushdown_column_index(
     }
 }
 
+/// Compute the raw attribute index of the key column in multi-key mode.
+///
+/// In multi-key mode, the first data column is always the Redis key.
+/// If TTL is at position 0, the key shifts to position 1.
+pub(crate) fn compute_key_column_index(ttl_column_index: Option<usize>) -> usize {
+    match ttl_column_index {
+        Some(0) => 1,
+        _ => 0,
+    }
+}
+
 /// Convert a raw PostgreSQL attribute index to a data-row index after TTL column stripping.
 ///
 /// `fetch_dataset` in join execution returns rows without the TTL column.
@@ -244,6 +255,14 @@ mod tests {
         assert_eq!(compute_pushdown_column_index(Some(1), true), 2);
         // Multi-key, TTL after data columns
         assert_eq!(compute_pushdown_column_index(Some(3), true), 1);
+    }
+
+    #[test]
+    fn test_compute_key_column_index() {
+        assert_eq!(compute_key_column_index(None), 0);
+        assert_eq!(compute_key_column_index(Some(0)), 1);
+        assert_eq!(compute_key_column_index(Some(1)), 0);
+        assert_eq!(compute_key_column_index(Some(2)), 0);
     }
 
     #[test]

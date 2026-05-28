@@ -199,6 +199,28 @@ DELETE FROM all_users WHERE key = 'user:2';
 | Set | key, member |
 | ZSet | key, member, score |
 
+#### Multi-Key WHERE Pushdown
+
+WHERE conditions on the **key column** are pushed down to Redis, avoiding a full `SCAN *` when possible:
+
+```sql
+-- Equal: direct GET/HGETALL/SMEMBERS (single key, no SCAN)
+SELECT * FROM all_users WHERE key = 'user:42';
+
+-- IN: batch pipeline of GET/HGETALL/etc. (multiple specific keys, no SCAN)
+SELECT * FROM all_users WHERE key IN ('user:1', 'user:2', 'user:3');
+
+-- LIKE: narrowed SCAN MATCH with converted glob pattern
+SELECT * FROM all_users WHERE key LIKE 'user:101%';
+```
+
+| Operator | Redis Strategy | Performance |
+|----------|---------------|-------------|
+| `=` | Direct key lookup (GET, HGETALL, etc.) | O(1) |
+| `IN` | Pipelined batch of direct lookups | O(N) where N = list size |
+| `LIKE` | `SCAN MATCH` with narrowed glob pattern | O(scan) but filtered server-side |
+| No condition | Full `SCAN MATCH` with original prefix | O(full scan) |
+
 ### Operations
 
 ```sql
@@ -391,6 +413,11 @@ SELECT EXISTS(SELECT 1 FROM user_roles WHERE member = 'admin');
 -- ZSet: uses ZRANGEBYSCORE for score range queries (O(log N + M) instead of full scan)
 SELECT * FROM leaderboard WHERE score >= 1000 AND score <= 2000;
 SELECT * FROM leaderboard WHERE score > 99000 ORDER BY score DESC;
+
+-- Multi-key: direct key lookup instead of full SCAN
+SELECT * FROM all_users WHERE key = 'user:42';
+SELECT * FROM all_users WHERE key IN ('user:1', 'user:2');
+SELECT * FROM all_users WHERE key LIKE 'user:101%';
 ```
 
 ### Bulk Insert Example

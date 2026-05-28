@@ -41,7 +41,7 @@ SELECT
     '{"name":"u_' || g::text || '","score":' || (random() * 1000)::int::text || '}'
 FROM generate_series(1, :ROWS) g;
 
-SELECT COUNT(*) AS loaded_slow FROM bulk_user_profiles_slow;
+--SELECT COUNT(*) FROM bulk_user_profiles_slow;
 
 -- 1B. Tuned - large batch_size (fewer round-trips, faster)
 --     This is the table the JOIN demos run against.
@@ -60,7 +60,7 @@ SELECT
     '{"name":"u_' || g::text || '","score":' || (random() * 1000)::int::text || '}'
 FROM generate_series(1, :ROWS) g;
 
-SELECT COUNT(*) AS loaded_fast FROM bulk_user_profiles;
+--SELECT COUNT(*) FROM bulk_user_profiles;
 
 -- Companion: active users (Redis SET, 50K subset)
 CREATE FOREIGN TABLE bulk_active_users (member text)
@@ -76,7 +76,7 @@ INSERT INTO bulk_active_users
 SELECT 'user:' || g::text
 FROM generate_series(1, 50000) g;
 
-SELECT COUNT(*) AS active_users FROM bulk_active_users;
+--SELECT COUNT(*) FROM bulk_active_users;
 
 -- ============================================================
 -- PART 2: Pushdown JOIN — local PG table × Redis FDW
@@ -187,8 +187,8 @@ SELECT 'player:' || g::text, (random() * 100000)::int
 FROM generate_series(1, :ROWS) g;
 
 -- Full scan baseline
-EXPLAIN (ANALYZE, VERBOSE)
-SELECT COUNT(*) FROM bulk_leaderboard;
+-- EXPLAIN (ANALYZE, VERBOSE)
+-- SELECT COUNT(*) FROM bulk_leaderboard;
 
 -- Pushed score range — ZRANGEBYSCORE, fetches only top ~1%
 EXPLAIN (ANALYZE, VERBOSE)
