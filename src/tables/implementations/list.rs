@@ -288,7 +288,7 @@ impl RedisTableOperations for RedisListTable {
     fn supports_pushdown(&self, operator: &ComparisonOperator) -> bool {
         matches!(
             operator,
-            ComparisonOperator::Equal | ComparisonOperator::Like
+            ComparisonOperator::Equal | ComparisonOperator::Like | ComparisonOperator::In
         )
     }
 

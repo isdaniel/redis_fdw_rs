@@ -59,6 +59,43 @@ INSERT INTO demo_scores VALUES ('e', 50);
 EXPLAIN (VERBOSE) SELECT * FROM demo_scores WHERE score >= 25 AND score <= 45;
 SELECT * FROM demo_scores WHERE score >= 25 AND score <= 45;
 
+CREATE FOREIGN TABLE demo_sessions (key text, value text)
+    SERVER redis_server
+    OPTIONS (
+        database '0',
+        table_type 'string',
+        table_key_prefix 'session:*',
+        batch_size '10000'
+    );
+
+-- Bulk-seed 20000 session keys via generate_series
+-- redis-cli equivalent: SET session:user1 '{...}' ... × 20000  (batched, 10000/req)
+INSERT INTO demo_sessions
+SELECT
+    'session:user' || g::text,
+    '{"logged_in":' || CASE WHEN g % 5 = 0 THEN 'false' ELSE 'true' END
+        || ',"ip":"10.0.' || ((g / 256) % 256)::text || '.' || (g % 256)::text || '"}'
+FROM generate_series(1, 20000) g;
+
+-- redis-cli> SCAN 0 MATCH session:* COUNT 100   →   GET each key
+SELECT COUNT(*) AS total_sessions FROM demo_sessions;
+
+-- Spot-check a few rows
+EXPLAIN (ANALYZE, VERBOSE) SELECT * FROM demo_sessions LIMIT 5;
+
+-- PG-side LIKE filter on the key column (scans all keys, filters in PG)
+EXPLAIN (ANALYZE, VERBOSE) SELECT key, value FROM demo_sessions WHERE key LIKE 'user101%';
+
+-- Single-key INSERT through the pattern table
+-- redis-cli> SET session:user99999 '{"logged_in": true, "ip": "10.0.0.99"}'
+INSERT INTO demo_sessions VALUES ('session:user99999', '{"logged_in": true, "ip": "10.0.0.99"}');
+EXPLAIN (ANALYZE, VERBOSE) SELECT * FROM demo_sessions WHERE key = 'session:user99999';
+
+-- Single-key DELETE through the pattern table
+-- redis-cli> DEL session:user99999
+DELETE FROM demo_sessions WHERE key = 'session:user99999';
+SELECT COUNT(*) AS total_after_delete FROM demo_sessions;
+
 -- Cleanup
 DROP FOREIGN TABLE demo_product;
 DROP FOREIGN TABLE demo_scores;

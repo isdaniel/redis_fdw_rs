@@ -54,6 +54,9 @@ pub mod ttl_tests;
 pub mod multi_key_tests;
 
 #[cfg(any(test, feature = "pg_test"))]
+pub mod multi_key_pushdown_tests;
+
+#[cfg(any(test, feature = "pg_test"))]
 pub mod tls_tests;
 
 #[cfg(any(test, feature = "pg_test"))]

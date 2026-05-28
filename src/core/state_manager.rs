@@ -4,12 +4,14 @@
 /// configuration, connection status, and coordination between components.
 use crate::{
     core::{
+        column_utils::compute_key_column_index,
         connection_factory::{RedisConnectionConfig, RedisConnectionFactory},
         pool_manager::PooledConnection,
     },
     query::{
         cost_estimation::{CostEstimate, CostEstimator},
         pushdown_types::{ComparisonOperator, PushdownAnalysis},
+        scan_ops::PatternMatcher,
     },
     tables::types::{DataContainer, DataSet, RedisTableType},
 };
@@ -420,8 +422,32 @@ impl RedisFdwState {
     }
 
     /// Fetch next batch in multi-key mode using top-level SCAN.
+    /// If pushdown conditions target the key column, use optimized paths.
     fn fetch_next_batch_multi_key(&mut self) -> bool {
-        // Take connection out temporarily to avoid borrow conflicts
+        let key_col_idx = compute_key_column_index(self.ttl_column_index);
+        let key_condition = self.pushdown_analysis.as_ref().and_then(|a| {
+            a.pushable_conditions
+                .iter()
+                .find(|c| c.column_index == key_col_idx)
+                .cloned()
+        });
+
+        if let Some(condition) = key_condition {
+            let mut conn = match self.redis_connection.take() {
+                Some(c) => c,
+                None => {
+                    self.scan_complete = true;
+                    return false;
+                }
+            };
+
+            let result = self.fetch_multi_key_optimized(conn.as_connection_like_mut(), &condition);
+
+            self.redis_connection = Some(conn);
+            return result;
+        }
+
+        // No key-column pushdown: fall through to existing full-scan behavior
         let mut conn = match self.redis_connection.take() {
             Some(c) => c,
             None => {
@@ -432,9 +458,102 @@ impl RedisFdwState {
 
         let result = self.fetch_multi_key_with_conn(conn.as_connection_like_mut());
 
-        // Put connection back
         self.redis_connection = Some(conn);
         result
+    }
+
+    /// Optimized multi-key fetch when pushdown conditions target the key column.
+    fn fetch_multi_key_optimized(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        condition: &crate::query::pushdown_types::PushableCondition,
+    ) -> bool {
+        self.scan_complete = true;
+
+        let keys: Vec<String> = match &condition.operator {
+            ComparisonOperator::Equal => {
+                vec![condition.value.clone()]
+            }
+            ComparisonOperator::In => condition.value.split(',').map(|s| s.to_string()).collect(),
+            ComparisonOperator::Like => {
+                let matcher = PatternMatcher::from_like_pattern(&condition.value);
+                let pattern = matcher.get_pattern();
+                let keys = self.scan_keys_with_pattern(conn, pattern);
+                keys.into_iter().filter(|k| matcher.matches(k)).collect()
+            }
+            _ => {
+                self.scan_complete = false;
+                return self.fetch_multi_key_with_conn(conn);
+            }
+        };
+
+        if keys.is_empty() {
+            return false;
+        }
+
+        // Batch-fetch TTLs if TTL column is present
+        if self.ttl_column_index.is_some() {
+            self.multi_key_ttl_cache.clear();
+            let mut pipe = redis::pipe();
+            for key in &keys {
+                pipe.cmd("TTL").arg(key);
+            }
+            let ttls: Vec<i64> = match pipe.query(conn) {
+                Ok(v) => v,
+                Err(e) => {
+                    log!("WARNING: Redis pipeline TTL error: {}", e);
+                    vec![-2; keys.len()]
+                }
+            };
+            for (key, ttl) in keys.iter().zip(ttls) {
+                self.multi_key_ttl_cache.insert(key.clone(), ttl);
+            }
+        }
+
+        let rows = self.load_multi_key_data(conn, &keys);
+        rows > 0
+    }
+
+    /// SCAN Redis with a specific MATCH pattern, collecting all matching keys.
+    fn scan_keys_with_pattern(
+        &self,
+        conn: &mut dyn redis::ConnectionLike,
+        pattern: &str,
+    ) -> Vec<String> {
+        let mut all_keys = Vec::new();
+        let mut cursor: u64 = 0;
+        let scan_type = self.table_type.redis_type_name();
+
+        loop {
+            pgrx::check_for_interrupts!();
+
+            let mut cmd = redis::cmd("SCAN");
+            cmd.arg(cursor)
+                .arg("MATCH")
+                .arg(pattern)
+                .arg("COUNT")
+                .arg(self.batch_size);
+
+            if !scan_type.is_empty() {
+                cmd.arg("TYPE").arg(scan_type);
+            }
+
+            let (new_cursor, keys): (u64, Vec<String>) = match cmd.query(conn) {
+                Ok(result) => result,
+                Err(e) => {
+                    pgrx::error!("Redis error during narrowed SCAN: {}", e);
+                }
+            };
+
+            all_keys.extend(keys);
+            cursor = new_cursor;
+
+            if cursor == 0 {
+                break;
+            }
+        }
+
+        all_keys
     }
 
     fn fetch_multi_key_with_conn(&mut self, conn: &mut dyn redis::ConnectionLike) -> bool {
