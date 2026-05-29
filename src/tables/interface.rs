@@ -3,9 +3,8 @@ use crate::{
         limit::LimitOffsetInfo,
         pushdown_types::{ComparisonOperator, PushableCondition},
     },
-    tables::types::{DataSet, LoadDataResult},
+    tables::types::{DataSet, LoadDataResult, RowVec},
 };
-use std::borrow::Cow;
 
 /// Trait defining common operations for Redis table types
 pub trait RedisTableOperations {
@@ -41,7 +40,7 @@ pub trait RedisTableOperations {
 
     /// Get a row at the specified index for iteration - returns borrowed strings to avoid cloning
     #[inline]
-    fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
+    fn get_row(&self, index: usize) -> Option<RowVec<'_>> {
         self.get_dataset().get_row(index)
     }
 

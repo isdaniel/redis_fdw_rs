@@ -113,6 +113,16 @@ extern "C-unwind" fn get_foreign_rel_size(
 
         let rel = pg_sys::relation_open(foreigntableid, pg_sys::AccessShareLock as i32);
         state.ttl_column_index = detect_ttl_column((*rel).rd_att);
+        let mut col_names = extract_column_names((*rel).rd_att);
+        if let Some(ttl_idx) = state.ttl_column_index {
+            if ttl_idx < col_names.len() {
+                col_names.remove(ttl_idx);
+            }
+        }
+        let data_cols = col_names.len();
+        if let RedisTableType::List(ref mut list) = state.table_type {
+            list.include_index = data_cols >= 2;
+        }
         pg_sys::relation_close(rel, pg_sys::AccessShareLock as i32);
 
         if let Err(e) = state.init_redis_connection_from_options() {
@@ -440,19 +450,46 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
                 execute_foreign_join(join_state);
                 state.join_executed = true;
             }
-            if join_state.current_row < join_state.result_data.len() {
-                let row = &join_state.result_data[join_state.current_row];
+            if join_state.current_row < join_state.result_indices.len() {
                 let natts = (*tupdesc).natts as usize;
-                for (col_idx, value) in row.iter().enumerate().take(natts) {
-                    match value {
-                        None => {
-                            (*slot).tts_isnull.add(col_idx).write(true);
+                let outer_cols = crate::join::foreign_join::expected_columns_for_type(
+                    &join_state.outer_table_type,
+                );
+
+                let (outer_row, inner_row) =
+                    match &join_state.result_indices[join_state.current_row] {
+                        crate::join::types::JoinResultRow::Matched {
+                            outer_idx,
+                            inner_idx,
+                        } => (
+                            &join_state.outer_data[*outer_idx],
+                            Some(&join_state.inner_data[*inner_idx]),
+                        ),
+                        crate::join::types::JoinResultRow::OuterOnly { outer_idx } => {
+                            (&join_state.outer_data[*outer_idx], None)
                         }
-                        Some(v) => {
-                            write_datum_to_slot(slot, tupdesc, col_idx, v);
-                        }
+                    };
+
+                let limit = std::cmp::min(natts, outer_cols);
+                for col_idx in 0..limit {
+                    if let Some(v) = outer_row.get(col_idx) {
+                        write_datum_to_slot(slot, tupdesc, col_idx, v);
+                    } else {
+                        (*slot).tts_isnull.add(col_idx).write(true);
                     }
                 }
+
+                for col_idx in limit..natts {
+                    let inner_col = col_idx - outer_cols;
+                    if let Some(inner) = inner_row {
+                        if let Some(v) = inner.get(inner_col) {
+                            write_datum_to_slot(slot, tupdesc, col_idx, v);
+                            continue;
+                        }
+                    }
+                    (*slot).tts_isnull.add(col_idx).write(true);
+                }
+
                 join_state.current_row += 1;
                 pgrx::pg_sys::ExecStoreVirtualTuple(slot);
                 return slot;
@@ -652,7 +689,9 @@ extern "C-unwind" fn shutdown_foreign_scan(node: *mut pgrx::pg_sys::ForeignScanS
         state.redis_connection = None;
         if let Some(ref mut join_state) = state.join_state {
             join_state.connection = None;
-            join_state.result_data = Vec::new();
+            join_state.outer_data = Vec::new();
+            join_state.inner_data = Vec::new();
+            join_state.result_indices = Vec::new();
         }
     }
 }

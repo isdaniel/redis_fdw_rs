@@ -8,7 +8,7 @@ use crate::{
     },
     tables::{
         interface::RedisTableOperations,
-        types::{DataSet, LoadDataResult},
+        types::{DataSet, LoadDataResult, RowVec},
     },
 };
 
@@ -290,12 +290,12 @@ impl RedisTableOperations for RedisStreamTable {
     }
 
     #[inline]
-    fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
+    fn get_row(&self, index: usize) -> Option<RowVec<'_>> {
         if !self.entries.is_empty() {
             self.entries.get(index).map(|row| {
                 // row = [stream_id, field1, val1, field2, val2, ...]
                 if self.column_names.len() > 1 {
-                    let mut result = Vec::with_capacity(self.column_names.len());
+                    let mut result = RowVec::with_capacity(self.column_names.len());
                     result.push(Cow::Borrowed(row[0].as_str()));
 
                     for col_name in &self.column_names[1..] {

@@ -8,9 +8,10 @@ use crate::{
     },
     tables::{
         interface::RedisTableOperations,
-        types::{DataContainer, DataSet, LoadDataResult},
+        types::{DataContainer, DataSet, LoadDataResult, RowVec},
     },
 };
+use smallvec::smallvec;
 
 /// Redis Hash table type
 #[derive(Debug, Clone, Default)]
@@ -163,13 +164,13 @@ impl RedisTableOperations for RedisHashTable {
 
     /// Override the default get_row implementation to handle hash-specific filtered data format
     #[inline]
-    fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
+    fn get_row(&self, index: usize) -> Option<RowVec<'_>> {
         match &self.dataset {
             DataSet::Filtered(data) => {
                 // Hash filtered data is stored as [key1, value1, key2, value2, ...]
                 let data_index = index * 2;
                 if data_index + 1 < data.len() {
-                    Some(vec![
+                    Some(smallvec![
                         Cow::Borrowed(data[data_index].as_str()),
                         Cow::Borrowed(data[data_index + 1].as_str()),
                     ])
