@@ -201,7 +201,7 @@ fn fetch_dataset(
                 items
                     .into_iter()
                     .enumerate()
-                    .map(|(idx, v)| smallvec![v, idx.to_string()])
+                    .map(|(idx, v)| smallvec![idx.to_string(), v])
                     .collect()
             } else {
                 items.into_iter().map(|v| smallvec![v]).collect()
