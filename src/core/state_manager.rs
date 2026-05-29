@@ -229,6 +229,10 @@ impl RedisFdwState {
                             .arg(&self.table_key_prefix)
                             .query(conn_like)
                             .unwrap_or(0),
+                        RedisTableType::Stream(_) => redis::cmd("XLEN")
+                            .arg(&self.table_key_prefix)
+                            .query(conn_like)
+                            .unwrap_or(0),
                         _ => 0,
                     };
                     if cardinality > SINGLE_KEY_WARN_THRESHOLD as u64 {

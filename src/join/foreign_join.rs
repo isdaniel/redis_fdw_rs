@@ -84,8 +84,10 @@ pub(crate) fn perform_hash_join(
     };
 
     for (probe_idx, probe_row) in probe_data.iter().enumerate() {
+        let mut matched = false;
         if let Some(probe_key) = probe_row.get(probe_col) {
             if let Some(build_indices) = hash_table.get(probe_key.as_str()) {
+                matched = true;
                 for &build_idx in build_indices {
                     if needs_build_tracking {
                         matched_build[build_idx] = true;
@@ -103,12 +105,9 @@ pub(crate) fn perform_hash_join(
                     };
                     result.push(row);
                 }
-            } else if *join_type == RedisJoinType::Left && !build_is_outer {
-                result.push(JoinResultRow::OuterOnly {
-                    outer_idx: probe_idx,
-                });
             }
-        } else if *join_type == RedisJoinType::Left && !build_is_outer {
+        }
+        if !matched && *join_type == RedisJoinType::Left && !build_is_outer {
             result.push(JoinResultRow::OuterOnly {
                 outer_idx: probe_idx,
             });
