@@ -113,12 +113,13 @@ extern "C-unwind" fn get_foreign_rel_size(
 
         let rel = pg_sys::relation_open(foreigntableid, pg_sys::AccessShareLock as i32);
         state.ttl_column_index = detect_ttl_column((*rel).rd_att);
-        let natts = (*(*rel).rd_att).natts as usize;
-        let data_cols = if state.ttl_column_index.is_some() {
-            natts.saturating_sub(1)
-        } else {
-            natts
-        };
+        let mut col_names = extract_column_names((*rel).rd_att);
+        if let Some(ttl_idx) = state.ttl_column_index {
+            if ttl_idx < col_names.len() {
+                col_names.remove(ttl_idx);
+            }
+        }
+        let data_cols = col_names.len();
         if let RedisTableType::List(ref mut list) = state.table_type {
             list.include_index = data_cols >= 2;
         }
