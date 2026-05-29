@@ -188,7 +188,7 @@ fn fetch_dataset(
                 .map(|(member, score)| smallvec![member, score.to_string()])
                 .collect()
         }
-        RedisTableType::List(_) => {
+        RedisTableType::List(list) => {
             let items: Vec<String> = redis::cmd("LRANGE")
                 .arg(key_prefix)
                 .arg(0i64)
@@ -197,7 +197,15 @@ fn fetch_dataset(
                 .unwrap_or_else(|e| {
                     pgrx::error!("Redis FDW: LRANGE '{}' failed: {}", key_prefix, e);
                 });
-            items.into_iter().map(|v| smallvec![v]).collect()
+            if list.include_index {
+                items
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, v)| smallvec![v, idx.to_string()])
+                    .collect()
+            } else {
+                items.into_iter().map(|v| smallvec![v]).collect()
+            }
         }
         RedisTableType::String(_) => {
             let val: Option<String> = redis::cmd("GET")
@@ -220,7 +228,13 @@ pub fn expected_columns_for_type(table_type: &RedisTableType) -> usize {
         RedisTableType::Hash(_) => 2,
         RedisTableType::Set(_) => 1,
         RedisTableType::ZSet(_) => 2,
-        RedisTableType::List(_) => 1,
+        RedisTableType::List(list) => {
+            if list.include_index {
+                2
+            } else {
+                1
+            }
+        }
         RedisTableType::String(_) => 2,
         RedisTableType::Stream(_) => 3,
         RedisTableType::None => 0,
