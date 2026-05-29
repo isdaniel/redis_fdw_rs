@@ -326,6 +326,23 @@ impl RedisFdwState {
         self.row_count >= self.data_len() as u32
     }
 
+    /// Returns the maximum number of rows needed to satisfy LIMIT + OFFSET, if known.
+    fn multi_key_limit_hint(&self) -> Option<usize> {
+        self.pushdown_analysis
+            .as_ref()
+            .and_then(|a| a.limit_offset.as_ref())
+            .and_then(|lo| lo.limit)
+            .map(|limit| {
+                limit
+                    + self
+                        .pushdown_analysis
+                        .as_ref()
+                        .and_then(|a| a.limit_offset.as_ref())
+                        .and_then(|lo| lo.offset)
+                        .unwrap_or(0)
+            })
+    }
+
     /// Get the total number of data items
     pub fn data_len(&self) -> usize {
         if self.is_multi_key {
@@ -532,6 +549,11 @@ impl RedisFdwState {
             return false;
         }
 
+        // Truncate keys to LIMIT+OFFSET for early-exit (avoid fetching more than needed)
+        if let Some(needed) = self.multi_key_limit_hint() {
+            keys.truncate(needed);
+        }
+
         // Batch-fetch TTLs if TTL column is present
         if self.ttl_column_index.is_some() {
             self.multi_key_ttl_cache.clear();
@@ -603,6 +625,12 @@ impl RedisFdwState {
 
     fn fetch_multi_key_with_conn(&mut self, conn: &mut dyn redis::ConnectionLike) -> bool {
         self.multi_key_ttl_cache.clear();
+        let needed_rows = self.multi_key_limit_hint();
+        let scan_count = match needed_rows {
+            Some(n) if n < self.batch_size => n,
+            _ => self.batch_size,
+        };
+
         loop {
             pgrx::check_for_interrupts!();
 
@@ -611,7 +639,7 @@ impl RedisFdwState {
                 .arg("MATCH")
                 .arg(&self.table_key_prefix)
                 .arg("COUNT")
-                .arg(self.batch_size);
+                .arg(scan_count);
 
             let scan_type = self.table_type.redis_type_name();
             if !scan_type.is_empty() {
@@ -657,6 +685,11 @@ impl RedisFdwState {
 
             let rows = self.load_multi_key_data(conn, &keys);
             if rows > 0 {
+                if let Some(needed) = needed_rows {
+                    if rows >= needed {
+                        self.scan_complete = true;
+                    }
+                }
                 return true;
             }
 
