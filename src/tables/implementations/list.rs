@@ -121,10 +121,13 @@ impl RedisTableOperations for RedisListTable {
                 );
             }
 
-            // Handle simple Equal conditions efficiently
+            // Handle simple Equal/In conditions efficiently
             if !conditions.is_empty() {
                 for condition in conditions {
-                    if let ComparisonOperator::Equal = condition.operator {
+                    if matches!(
+                        condition.operator,
+                        ComparisonOperator::Equal | ComparisonOperator::In
+                    ) {
                         // For lists, we need to load all data and filter
                         let all_data: Vec<String> = if limit_offset.has_constraints() {
                             // Apply LIMIT/OFFSET directly with LRANGE for better performance
@@ -149,10 +152,21 @@ impl RedisTableOperations for RedisListTable {
                                 .query(conn)?
                         };
 
-                        let filtered: Vec<String> = all_data
-                            .into_iter()
-                            .filter(|item| item == &condition.value)
-                            .collect();
+                        let filtered: Vec<String> = match condition.operator {
+                            ComparisonOperator::Equal => all_data
+                                .into_iter()
+                                .filter(|item| item == &condition.value)
+                                .collect(),
+                            ComparisonOperator::In => {
+                                let values: std::collections::HashSet<&str> =
+                                    condition.value.split(',').collect();
+                                all_data
+                                    .into_iter()
+                                    .filter(|item| values.contains(item.as_str()))
+                                    .collect()
+                            }
+                            _ => all_data,
+                        };
 
                         return if filtered.is_empty() {
                             self.dataset = DataSet::Empty;

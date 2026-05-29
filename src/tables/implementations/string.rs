@@ -116,6 +116,18 @@ impl RedisTableOperations for RedisStringTable {
         // Fallback: Load single key without optimization
         let value: Option<String> = redis::cmd("GET").arg(key_prefix).query(conn)?;
 
+        // Apply pushdown conditions client-side for the fallback path
+        let value = value.filter(|v| {
+            conditions.is_none_or(|conds| {
+                conds.iter().all(|c| match c.operator {
+                    ComparisonOperator::Equal => v == &c.value,
+                    ComparisonOperator::NotEqual => v != &c.value,
+                    ComparisonOperator::In => c.value.split(',').any(|s| s == v),
+                    _ => true,
+                })
+            })
+        });
+
         // Apply LIMIT/OFFSET constraints - for string tables, OFFSET > 0 means no results
         if let Some(offset) = limit_offset.offset {
             if offset > 0 {
