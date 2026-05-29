@@ -669,12 +669,18 @@ impl RedisFdwState {
         conn: &mut dyn redis::ConnectionLike,
         keys: &[String],
     ) -> usize {
-        let all_rows = match self.table_type.load_multi_key_data(conn, keys) {
-            Ok(rows) => rows,
-            Err(e) => {
-                pgrx::error!("Redis multi-key load error: {}", e);
+        const CHUNK_SIZE: usize = 1000;
+
+        let mut all_rows = Vec::new();
+        for chunk in keys.chunks(CHUNK_SIZE) {
+            pgrx::check_for_interrupts!();
+            match self.table_type.load_multi_key_data(conn, chunk) {
+                Ok(rows) => all_rows.extend(rows),
+                Err(e) => {
+                    pgrx::error!("Redis multi-key load error: {}", e);
+                }
             }
-        };
+        }
 
         const MULTI_KEY_WARN_THRESHOLD: usize = 1_000_000;
         if all_rows.len() > MULTI_KEY_WARN_THRESHOLD {
