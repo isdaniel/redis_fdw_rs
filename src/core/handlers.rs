@@ -457,11 +457,15 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
                             if col_idx < outer_cols {
                                 if let Some(v) = outer_row.get(col_idx) {
                                     write_datum_to_slot(slot, tupdesc, col_idx, v);
+                                } else {
+                                    (*slot).tts_isnull.add(col_idx).write(true);
                                 }
                             } else {
                                 let inner_col = col_idx - outer_cols;
                                 if let Some(v) = inner_row.get(inner_col) {
                                     write_datum_to_slot(slot, tupdesc, col_idx, v);
+                                } else {
+                                    (*slot).tts_isnull.add(col_idx).write(true);
                                 }
                             }
                         }
@@ -472,6 +476,8 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
                             if col_idx < outer_cols {
                                 if let Some(v) = outer_row.get(col_idx) {
                                     write_datum_to_slot(slot, tupdesc, col_idx, v);
+                                } else {
+                                    (*slot).tts_isnull.add(col_idx).write(true);
                                 }
                             } else {
                                 (*slot).tts_isnull.add(col_idx).write(true);
