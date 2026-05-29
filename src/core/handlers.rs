@@ -440,19 +440,46 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
                 execute_foreign_join(join_state);
                 state.join_executed = true;
             }
-            if join_state.current_row < join_state.result_data.len() {
-                let row = &join_state.result_data[join_state.current_row];
+            if join_state.current_row < join_state.result_indices.len() {
                 let natts = (*tupdesc).natts as usize;
-                for (col_idx, value) in row.iter().enumerate().take(natts) {
-                    match value {
-                        None => {
-                            (*slot).tts_isnull.add(col_idx).write(true);
+                let outer_cols = crate::join::foreign_join::expected_columns_for_type(
+                    &join_state.outer_table_type,
+                );
+
+                match &join_state.result_indices[join_state.current_row] {
+                    crate::join::types::JoinResultRow::Matched {
+                        outer_idx,
+                        inner_idx,
+                    } => {
+                        let outer_row = &join_state.outer_data[*outer_idx];
+                        let inner_row = &join_state.inner_data[*inner_idx];
+                        for col_idx in 0..natts {
+                            if col_idx < outer_cols {
+                                if let Some(v) = outer_row.get(col_idx) {
+                                    write_datum_to_slot(slot, tupdesc, col_idx, v);
+                                }
+                            } else {
+                                let inner_col = col_idx - outer_cols;
+                                if let Some(v) = inner_row.get(inner_col) {
+                                    write_datum_to_slot(slot, tupdesc, col_idx, v);
+                                }
+                            }
                         }
-                        Some(v) => {
-                            write_datum_to_slot(slot, tupdesc, col_idx, v);
+                    }
+                    crate::join::types::JoinResultRow::OuterOnly { outer_idx } => {
+                        let outer_row = &join_state.outer_data[*outer_idx];
+                        for col_idx in 0..natts {
+                            if col_idx < outer_cols {
+                                if let Some(v) = outer_row.get(col_idx) {
+                                    write_datum_to_slot(slot, tupdesc, col_idx, v);
+                                }
+                            } else {
+                                (*slot).tts_isnull.add(col_idx).write(true);
+                            }
                         }
                     }
                 }
+
                 join_state.current_row += 1;
                 pgrx::pg_sys::ExecStoreVirtualTuple(slot);
                 return slot;
@@ -652,7 +679,9 @@ extern "C-unwind" fn shutdown_foreign_scan(node: *mut pgrx::pg_sys::ForeignScanS
         state.redis_connection = None;
         if let Some(ref mut join_state) = state.join_state {
             join_state.connection = None;
-            join_state.result_data = Vec::new();
+            join_state.outer_data = Vec::new();
+            join_state.inner_data = Vec::new();
+            join_state.result_indices = Vec::new();
         }
     }
 }

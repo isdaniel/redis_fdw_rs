@@ -1,10 +1,23 @@
 use crate::core::pool_manager::PooledConnection;
 use crate::tables::types::RedisTableType;
+use smallvec::SmallVec;
+
+pub type JoinRow = SmallVec<[String; 3]>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RedisJoinType {
     Inner,
     Left,
+}
+
+/// Compact representation of a join result row.
+/// Instead of cloning all strings, we store indices into the source data vectors.
+#[derive(Debug, Clone)]
+pub enum JoinResultRow {
+    /// Both outer and inner matched (INNER JOIN or matched LEFT JOIN row)
+    Matched { outer_idx: usize, inner_idx: usize },
+    /// Outer row with no inner match (LEFT JOIN unmatched row)
+    OuterOnly { outer_idx: usize },
 }
 
 pub struct RedisJoinState {
@@ -16,7 +29,12 @@ pub struct RedisJoinState {
     pub join_type: RedisJoinType,
     pub join_column_outer: usize,
     pub join_column_inner: usize,
-    pub result_data: Vec<Vec<Option<String>>>,
+    /// Source data from outer relation (retained for index-based iteration)
+    pub outer_data: Vec<JoinRow>,
+    /// Source data from inner relation (retained for index-based iteration)
+    pub inner_data: Vec<JoinRow>,
+    /// Compact join result: indices into outer_data/inner_data
+    pub result_indices: Vec<JoinResultRow>,
     pub current_row: usize,
     pub result_columns: usize,
 }
@@ -40,7 +58,9 @@ impl RedisJoinState {
             join_type,
             join_column_outer,
             join_column_inner,
-            result_data: Vec::new(),
+            outer_data: Vec::new(),
+            inner_data: Vec::new(),
+            result_indices: Vec::new(),
             current_row: 0,
             result_columns: 0,
         }

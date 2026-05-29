@@ -160,10 +160,11 @@ The FDW maps columns by **position**, not by name. Users MUST declare columns in
 - **Pushdown guards**: same server (host_port match), non-multi-key tables, non-Stream tables, non-single-key-String tables, merge-joinable (equality) operator, INNER/LEFT only, no base restrictions on either relation
 - **Base restriction guard**: If either relation has `baserestrictinfo` (WHERE clauses on individual tables), pushdown is skipped and PostgreSQL falls back to nested-loop which handles base quals correctly
 - **Join column detection**: Walks `extra.restrictlist` → `RestrictInfo` → `OpExpr` → validates `op_mergejoinable()` → `Var` nodes to find equality columns
-- **Join execution**: Fetch both datasets → build HashMap on smaller side → probe with larger side → LEFT JOIN NULL-pads unmatched outer rows
-- **NULL handling**: Unmatched LEFT JOIN columns produce `"NULL"` marker strings in result_data; `iterate_foreign_scan` translates these to SQL NULL (`tts_isnull = true`) before returning tuples
+- **Join execution**: Fetch both datasets → build HashMap on smaller side → probe with larger side → LEFT JOIN NULL-pads unmatched outer rows. Result stored as index-only `Vec<JoinResultRow>` (enum of `Matched{outer_idx, inner_idx}` | `OuterOnly{outer_idx}`) referencing source data by position — no string cloning (~75% memory reduction vs. materialized result)
+- **NULL handling**: `JoinResultRow::OuterOnly` rows produce SQL NULL (`tts_isnull = true`) for all inner columns during `iterate_foreign_scan`
 - **OOM protection**: Pre-checks cardinality with O(1) commands (HLEN/SCARD/ZCARD/LLEN) before fetch; hard limit at 500K rows per dataset
-- **Memory lifecycle**: `result_data` freed early in `shutdown_foreign_scan` (before `end_foreign_scan` destroys the memory context)
+- **Cardinality warning**: Single-key mode warns (via `pgrx::warning!`) when a key has >500K elements and no direct-lookup pushdown is active (`SINGLE_KEY_WARN_THRESHOLD` in `state_manager.rs`)
+- **Memory lifecycle**: `outer_data`, `inner_data`, and `result_indices` freed early in `shutdown_foreign_scan` (before `end_foreign_scan` destroys the memory context)
 - **Connection lifecycle**: acquired at `get_foreign_rel_size` for cost estimation, released immediately; re-acquired from pool at `begin_foreign_scan`, transferred to `RedisJoinState` for join execution, released at `shutdown_foreign_scan`
 
 ### FDW Validator

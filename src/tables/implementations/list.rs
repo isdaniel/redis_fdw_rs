@@ -6,9 +6,10 @@ use crate::{
     },
     tables::{
         interface::RedisTableOperations,
-        types::{DataContainer, DataSet, LoadDataResult},
+        types::{DataContainer, DataSet, LoadDataResult, RowVec},
     },
 };
+use smallvec::smallvec;
 use std::borrow::Cow;
 
 /// Redis List table type
@@ -209,15 +210,15 @@ impl RedisTableOperations for RedisListTable {
         &self.dataset
     }
 
-    fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
+    fn get_row(&self, index: usize) -> Option<RowVec<'_>> {
         if self.include_index {
             match &self.dataset {
-                DataSet::Complete(DataContainer::List(items)) => items
-                    .get(index)
-                    .map(|item| vec![Cow::Owned(index.to_string()), Cow::Borrowed(item.as_str())]),
-                DataSet::Filtered(items) => items
-                    .get(index)
-                    .map(|item| vec![Cow::Owned(index.to_string()), Cow::Borrowed(item.as_str())]),
+                DataSet::Complete(DataContainer::List(items)) => items.get(index).map(|item| {
+                    smallvec![Cow::Owned(index.to_string()), Cow::Borrowed(item.as_str())]
+                }),
+                DataSet::Filtered(items) => items.get(index).map(|item| {
+                    smallvec![Cow::Owned(index.to_string()), Cow::Borrowed(item.as_str())]
+                }),
                 _ => None,
             }
         } else {

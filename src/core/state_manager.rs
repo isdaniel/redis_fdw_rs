@@ -13,11 +13,12 @@ use crate::{
         pushdown_types::{ComparisonOperator, PushdownAnalysis},
         scan_ops::PatternMatcher,
     },
-    tables::types::{DataContainer, DataSet, RedisTableType},
+    tables::types::{DataContainer, DataSet, RedisTableType, RowVec},
 };
 use pgrx::{pg_sys, pg_sys::MemoryContext, prelude::*};
-use std::borrow::Cow;
 use std::collections::HashMap;
+
+const SINGLE_KEY_WARN_THRESHOLD: usize = 500_000;
 
 /// Simplified Redis FDW state focused on state management
 pub struct RedisFdwState {
@@ -194,6 +195,51 @@ impl RedisFdwState {
 
         if let Some(ref mut conn) = self.redis_connection {
             let conn_like = conn.as_connection_like_mut();
+
+            // Warn if single-key structure is very large (potential OOM)
+            if use_direct_load {
+                let has_direct_lookup = self
+                    .pushdown_analysis
+                    .as_ref()
+                    .map(|a| {
+                        a.pushable_conditions.iter().any(|c| {
+                            matches!(
+                                c.operator,
+                                ComparisonOperator::Equal | ComparisonOperator::In
+                            )
+                        })
+                    })
+                    .unwrap_or(false);
+
+                if !has_direct_lookup {
+                    let cardinality: u64 = match &self.table_type {
+                        RedisTableType::Hash(_) => redis::cmd("HLEN")
+                            .arg(&self.table_key_prefix)
+                            .query(conn_like)
+                            .unwrap_or(0),
+                        RedisTableType::Set(_) => redis::cmd("SCARD")
+                            .arg(&self.table_key_prefix)
+                            .query(conn_like)
+                            .unwrap_or(0),
+                        RedisTableType::ZSet(_) => redis::cmd("ZCARD")
+                            .arg(&self.table_key_prefix)
+                            .query(conn_like)
+                            .unwrap_or(0),
+                        RedisTableType::List(_) => redis::cmd("LLEN")
+                            .arg(&self.table_key_prefix)
+                            .query(conn_like)
+                            .unwrap_or(0),
+                        _ => 0,
+                    };
+                    if cardinality > SINGLE_KEY_WARN_THRESHOLD as u64 {
+                        pgrx::warning!(
+                            "Redis FDW: key '{}' has {} elements, query may use significant memory. Consider using WHERE pushdown or LIMIT.",
+                            self.table_key_prefix,
+                            cardinality
+                        );
+                    }
+                }
+            }
 
             // On first call, use optimized direct-load path when conditions support it
             // (Equal → HGET/SISMEMBER/ZSCORE, In → HMGET/SMISMEMBER, Like+LIMIT → SCAN with limit)
@@ -407,7 +453,7 @@ impl RedisFdwState {
 
     /// Get a row at the specified index
     #[inline]
-    pub fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
+    pub fn get_row(&self, index: usize) -> Option<RowVec<'_>> {
         self.table_type.get_row(index)
     }
 

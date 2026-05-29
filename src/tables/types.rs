@@ -14,7 +14,10 @@ use crate::{
         macros::{table_dispatch, table_dispatch_mut_result, table_dispatch_mut_void},
     },
 };
+use smallvec::{smallvec, SmallVec};
 use std::borrow::Cow;
+
+pub type RowVec<'a> = SmallVec<[Cow<'a, str>; 4]>;
 
 /// Enum representing different Redis table types with their implementations
 #[derive(Debug, Clone)]
@@ -72,7 +75,7 @@ impl RedisTableType {
 
     /// Get a row at the specified index
     #[inline]
-    pub fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
+    pub fn get_row(&self, index: usize) -> Option<RowVec<'_>> {
         table_dispatch!(self, get_row(index) -> None)
     }
 
@@ -205,13 +208,13 @@ impl DataSet {
     /// Note: For filtered data, this is a generic implementation
     /// Table types should override get_row to handle their specific data format
     #[inline]
-    pub fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
+    pub fn get_row(&self, index: usize) -> Option<RowVec<'_>> {
         match self {
             DataSet::Empty => None,
             DataSet::Filtered(data) => {
                 // Generic implementation - each element is a row
                 data.get(index)
-                    .map(|item| vec![Cow::Borrowed(item.as_str())])
+                    .map(|item| smallvec![Cow::Borrowed(item.as_str())])
             }
             DataSet::Complete(container) => container.get_row(index),
         }
@@ -245,23 +248,23 @@ impl DataContainer {
 
     /// Get a row at the specified index - returns borrowed strings to avoid cloning
     #[inline]
-    pub fn get_row(&self, index: usize) -> Option<Vec<Cow<'_, str>>> {
+    pub fn get_row(&self, index: usize) -> Option<RowVec<'_>> {
         match self {
             DataContainer::String(opt) => {
                 if index == 0 && opt.is_some() {
-                    opt.as_ref().map(|s| vec![Cow::Borrowed(s.as_str())])
+                    opt.as_ref().map(|s| smallvec![Cow::Borrowed(s.as_str())])
                 } else {
                     None
                 }
             }
             DataContainer::Hash(pairs) => pairs
                 .get(index)
-                .map(|(k, v)| vec![Cow::Borrowed(k.as_str()), Cow::Borrowed(v.as_str())]),
+                .map(|(k, v)| smallvec![Cow::Borrowed(k.as_str()), Cow::Borrowed(v.as_str())]),
             DataContainer::List(items) => items
                 .get(index)
-                .map(|item| vec![Cow::Borrowed(item.as_str())]),
+                .map(|item| smallvec![Cow::Borrowed(item.as_str())]),
             DataContainer::ZSet(items) => items.get(index).map(|(member, score)| {
-                vec![
+                smallvec![
                     Cow::Borrowed(member.as_str()),
                     Cow::Owned(score.to_string()),
                 ]
@@ -326,9 +329,9 @@ mod tests {
         let ds = DataSet::Filtered(vec!["a".to_string(), "b".to_string(), "c".to_string()]);
         assert_eq!(ds.len(), 3);
         let row = ds.get_row(0).unwrap();
-        assert_eq!(row, vec![Cow::Borrowed("a")]);
+        assert_eq!(row.as_slice(), &[Cow::Borrowed("a")]);
         let row2 = ds.get_row(2).unwrap();
-        assert_eq!(row2, vec![Cow::Borrowed("c")]);
+        assert_eq!(row2.as_slice(), &[Cow::Borrowed("c")]);
         assert!(ds.get_row(3).is_none());
     }
 
@@ -337,7 +340,7 @@ mod tests {
         let ds = DataSet::Complete(DataContainer::String(Some("hello".to_string())));
         assert_eq!(ds.len(), 1);
         let row = ds.get_row(0).unwrap();
-        assert_eq!(row, vec![Cow::Borrowed("hello")]);
+        assert_eq!(row.as_slice(), &[Cow::Borrowed("hello")]);
         assert!(ds.get_row(1).is_none());
     }
 
@@ -356,9 +359,15 @@ mod tests {
         ]);
         assert_eq!(container.len(), 2);
         let row = container.get_row(0).unwrap();
-        assert_eq!(row, vec![Cow::Borrowed("key1"), Cow::Borrowed("val1")]);
+        assert_eq!(
+            row.as_slice(),
+            &[Cow::Borrowed("key1"), Cow::Borrowed("val1")]
+        );
         let row2 = container.get_row(1).unwrap();
-        assert_eq!(row2, vec![Cow::Borrowed("key2"), Cow::Borrowed("val2")]);
+        assert_eq!(
+            row2.as_slice(),
+            &[Cow::Borrowed("key2"), Cow::Borrowed("val2")]
+        );
         assert!(container.get_row(2).is_none());
     }
 
@@ -371,7 +380,7 @@ mod tests {
         ]);
         assert_eq!(container.len(), 3);
         let row = container.get_row(1).unwrap();
-        assert_eq!(row, vec![Cow::Borrowed("item2")]);
+        assert_eq!(row.as_slice(), &[Cow::Borrowed("item2")]);
     }
 
     #[test]
