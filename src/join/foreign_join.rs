@@ -16,14 +16,6 @@ pub fn execute_foreign_join(state: &mut RedisJoinState) -> usize {
     let outer_data = fetch_dataset(conn, &state.outer_table_type, &state.outer_key_prefix);
     let inner_data = fetch_dataset(conn, &state.inner_table_type, &state.inner_key_prefix);
 
-    if outer_data.len() > MAX_JOIN_DATASET_ROWS || inner_data.len() > MAX_JOIN_DATASET_ROWS {
-        pgrx::warning!(
-            "Redis FDW: join materializing large datasets (outer={}, inner={})",
-            outer_data.len(),
-            inner_data.len()
-        );
-    }
-
     let result = perform_hash_join(
         &outer_data,
         &inner_data,
