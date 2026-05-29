@@ -453,35 +453,35 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
                     } => {
                         let outer_row = &join_state.outer_data[*outer_idx];
                         let inner_row = &join_state.inner_data[*inner_idx];
-                        for col_idx in 0..natts {
-                            if col_idx < outer_cols {
-                                if let Some(v) = outer_row.get(col_idx) {
-                                    write_datum_to_slot(slot, tupdesc, col_idx, v);
-                                } else {
-                                    (*slot).tts_isnull.add(col_idx).write(true);
-                                }
+                        let limit = std::cmp::min(natts, outer_cols);
+                        for col_idx in 0..limit {
+                            if let Some(v) = outer_row.get(col_idx) {
+                                write_datum_to_slot(slot, tupdesc, col_idx, v);
                             } else {
-                                let inner_col = col_idx - outer_cols;
-                                if let Some(v) = inner_row.get(inner_col) {
-                                    write_datum_to_slot(slot, tupdesc, col_idx, v);
-                                } else {
-                                    (*slot).tts_isnull.add(col_idx).write(true);
-                                }
+                                (*slot).tts_isnull.add(col_idx).write(true);
+                            }
+                        }
+                        for col_idx in limit..natts {
+                            let inner_col = col_idx - outer_cols;
+                            if let Some(v) = inner_row.get(inner_col) {
+                                write_datum_to_slot(slot, tupdesc, col_idx, v);
+                            } else {
+                                (*slot).tts_isnull.add(col_idx).write(true);
                             }
                         }
                     }
                     crate::join::types::JoinResultRow::OuterOnly { outer_idx } => {
                         let outer_row = &join_state.outer_data[*outer_idx];
-                        for col_idx in 0..natts {
-                            if col_idx < outer_cols {
-                                if let Some(v) = outer_row.get(col_idx) {
-                                    write_datum_to_slot(slot, tupdesc, col_idx, v);
-                                } else {
-                                    (*slot).tts_isnull.add(col_idx).write(true);
-                                }
+                        let limit = std::cmp::min(natts, outer_cols);
+                        for col_idx in 0..limit {
+                            if let Some(v) = outer_row.get(col_idx) {
+                                write_datum_to_slot(slot, tupdesc, col_idx, v);
                             } else {
                                 (*slot).tts_isnull.add(col_idx).write(true);
                             }
+                        }
+                        for col_idx in limit..natts {
+                            (*slot).tts_isnull.add(col_idx).write(true);
                         }
                     }
                 }

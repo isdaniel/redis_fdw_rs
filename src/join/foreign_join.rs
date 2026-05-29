@@ -75,7 +75,7 @@ pub(crate) fn perform_hash_join(
         }
     }
 
-    let mut result: Vec<JoinResultRow> = Vec::new();
+    let mut result: Vec<JoinResultRow> = Vec::with_capacity(probe_data.len());
     let needs_build_tracking = *join_type == RedisJoinType::Left && build_is_outer;
     let mut matched_build: Vec<bool> = if needs_build_tracking {
         vec![false; build_data.len()]
