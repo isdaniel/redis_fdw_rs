@@ -11,10 +11,10 @@ mod tests {
             RedisHashTable, RedisListTable, RedisSetTable, RedisStringTable, RedisZSetTable,
         },
         interface::RedisTableOperations,
-        types::{DataContainer, DataSet, RedisTableType},
+        types::{DataContainer, DataSet, RedisTableType, RowVec},
     };
 
-    fn cow_vec_to_string_vec(row: Option<Vec<Cow<'_, str>>>) -> Option<Vec<String>> {
+    fn cow_vec_to_string_vec(row: Option<RowVec<'_>>) -> Option<Vec<String>> {
         row.map(|v| v.into_iter().map(|c| c.into_owned()).collect())
     }
 
