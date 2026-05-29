@@ -211,7 +211,13 @@ impl RedisFdwState {
                     })
                     .unwrap_or(false);
 
-                if !has_direct_lookup {
+                let has_limit = self
+                    .pushdown_analysis
+                    .as_ref()
+                    .map(|a| a.has_limit_pushdown())
+                    .unwrap_or(false);
+
+                if !has_direct_lookup && !has_limit {
                     let cardinality: u64 = match &self.table_type {
                         RedisTableType::Hash(_) => redis::cmd("HLEN")
                             .arg(&self.table_key_prefix)
