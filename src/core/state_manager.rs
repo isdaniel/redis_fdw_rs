@@ -471,7 +471,7 @@ impl RedisFdwState {
         self.scan_complete = true;
 
         let static_prefix = extract_static_prefix(&self.table_key_prefix);
-        let keys: Vec<String> = match &condition.operator {
+        let mut keys: Vec<String> = match &condition.operator {
             ComparisonOperator::Equal => {
                 if !static_prefix.is_empty() && !condition.value.starts_with(static_prefix) {
                     vec![]
@@ -523,6 +523,12 @@ impl RedisFdwState {
                 return self.fetch_multi_key_with_conn(conn);
             }
         };
+
+        if !keys.is_empty() && is_multi_key_pattern(&self.table_key_prefix) {
+            let like_pattern = self.table_key_prefix.replace('*', "%").replace('?', "_");
+            let table_matcher = PatternMatcher::from_like_pattern(&like_pattern);
+            keys.retain(|k| table_matcher.matches(k));
+        }
 
         if keys.is_empty() {
             return false;
