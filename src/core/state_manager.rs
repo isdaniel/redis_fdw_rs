@@ -487,7 +487,7 @@ impl RedisFdwState {
                     .filter(|s| static_prefix.is_empty() || s.starts_with(static_prefix))
                     .map(|s| s.to_string())
                     .collect();
-                keys.sort();
+                keys.sort_unstable();
                 keys.dedup();
                 keys
             }
@@ -525,9 +525,7 @@ impl RedisFdwState {
         };
 
         if !keys.is_empty() && is_multi_key_pattern(&self.table_key_prefix) {
-            let like_pattern = self.table_key_prefix.replace('*', "%").replace('?', "_");
-            let table_matcher = PatternMatcher::from_like_pattern(&like_pattern);
-            keys.retain(|k| table_matcher.matches(k));
+            keys.retain(|k| crate::query::scan_ops::glob_match(&self.table_key_prefix, k));
         }
 
         if keys.is_empty() {
@@ -598,7 +596,7 @@ impl RedisFdwState {
             }
         }
 
-        all_keys.sort();
+        all_keys.sort_unstable();
         all_keys.dedup();
         all_keys
     }

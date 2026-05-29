@@ -298,7 +298,7 @@ impl ScanConditions {
 
 /// Iterative glob pattern matching — supports `*` (any sequence) and `?` (any single char).
 /// O(n*m) worst case, O(1) stack space — no recursion, no stack overflow risk.
-fn glob_match(pattern: &str, text: &str) -> bool {
+pub(crate) fn glob_match(pattern: &str, text: &str) -> bool {
     let pattern = pattern.as_bytes();
     let text = text.as_bytes();
 
