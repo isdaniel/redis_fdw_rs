@@ -99,3 +99,4 @@ SELECT COUNT(*) AS total_after_delete FROM demo_sessions;
 -- Cleanup
 DROP FOREIGN TABLE demo_product;
 DROP FOREIGN TABLE demo_scores;
+DROP FOREIGN TABLE demo_sessions;
