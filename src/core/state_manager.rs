@@ -359,11 +359,6 @@ impl RedisFdwState {
                     return true;
                 }
             }
-
-            // Use direct load if we have LIMIT/OFFSET (load_data handles it efficiently)
-            if analysis.has_limit_pushdown() {
-                return true;
-            }
         }
         false
     }
