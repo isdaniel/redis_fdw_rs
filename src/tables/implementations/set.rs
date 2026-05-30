@@ -9,7 +9,6 @@ use crate::{
         types::{DataSet, LoadDataResult},
     },
 };
-
 /// Redis Set table type
 #[derive(Debug, Clone, Default)]
 pub struct RedisSetTable {
@@ -168,7 +167,7 @@ impl RedisTableOperations for RedisSetTable {
         conditions: Option<&[PushableCondition]>,
         limit_offset: &LimitOffsetInfo,
     ) -> redis::RedisResult<LoadDataResult> {
-        let members = if let Some(conds) = conditions {
+        let members = if let Some(conds) = conditions.filter(|c| !c.is_empty()) {
             let scan_conditions = extract_scan_conditions(conds);
 
             if !scan_conditions.pattern_conditions.is_empty() {
@@ -360,11 +359,27 @@ impl RedisTableOperations for RedisSetTable {
         keys: &[String],
     ) -> Result<Vec<String>, redis::RedisError> {
         const PER_KEY_WARN_THRESHOLD: usize = 200_000;
-        let mut pipe = redis::pipe();
-        for key in keys {
-            pipe.cmd("SMEMBERS").arg(key);
-        }
-        let results: Vec<Vec<String>> = pipe.query(conn)?;
+
+        let pipe_result: Result<Vec<Vec<String>>, _> = {
+            let mut pipe = redis::pipe();
+            for key in keys {
+                pipe.cmd("SMEMBERS").arg(key);
+            }
+            pipe.query(conn)
+        };
+
+        let results = match pipe_result {
+            Ok(r) => r,
+            Err(_) => {
+                let mut results = Vec::with_capacity(keys.len());
+                for key in keys {
+                    let r: Vec<String> = redis::cmd("SMEMBERS").arg(key).query(conn)?;
+                    results.push(r);
+                }
+                results
+            }
+        };
+
         let mut all_rows = Vec::with_capacity(keys.len() * self.multi_key_columns_per_row());
         for (key, members) in keys.iter().zip(results) {
             pgrx::check_for_interrupts!();

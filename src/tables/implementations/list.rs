@@ -32,7 +32,7 @@ impl RedisListTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         scan_conditions: &ScanConditions,
-        limit_offset: &LimitOffsetInfo,
+        _limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         // Load all list data first since Redis doesn't have LSCAN
         let all_data: Vec<String> = redis::cmd("LRANGE")
@@ -86,11 +86,6 @@ impl RedisListTable {
             }
         }
 
-        // Apply LIMIT/OFFSET to filtered results
-        if limit_offset.has_constraints() {
-            filtered_data = limit_offset.apply_to_vec(filtered_data);
-        }
-
         if filtered_data.is_empty() {
             self.dataset = DataSet::Empty;
             Ok(LoadDataResult::Empty)
@@ -129,29 +124,12 @@ impl RedisTableOperations for RedisListTable {
                         condition.operator,
                         ComparisonOperator::Equal | ComparisonOperator::In
                     ) {
-                        // For lists, we need to load all data and filter
-                        let all_data: Vec<String> = if limit_offset.has_constraints() {
-                            // Apply LIMIT/OFFSET directly with LRANGE for better performance
-                            let offset = limit_offset.offset.unwrap_or(0);
-                            let limit = limit_offset.limit.unwrap_or(usize::MAX);
-                            let start = offset as isize;
-                            let end = if limit == usize::MAX {
-                                -1isize
-                            } else {
-                                (offset + limit - 1) as isize
-                            };
-                            redis::cmd("LRANGE")
-                                .arg(key_prefix)
-                                .arg(start)
-                                .arg(end)
-                                .query(conn)?
-                        } else {
-                            redis::cmd("LRANGE")
-                                .arg(key_prefix)
-                                .arg(0)
-                                .arg(-1)
-                                .query(conn)?
-                        };
+                        // For lists, load all data and filter by value
+                        let all_data: Vec<String> = redis::cmd("LRANGE")
+                            .arg(key_prefix)
+                            .arg(0)
+                            .arg(-1)
+                            .query(conn)?;
 
                         let filtered: Vec<String> = match condition.operator {
                             ComparisonOperator::Equal => all_data
@@ -181,20 +159,35 @@ impl RedisTableOperations for RedisListTable {
             }
         }
 
-        // Lists don't have efficient filtering in Redis
-        // Fall back to loading all data, but apply LIMIT/OFFSET directly with LRANGE
-        let (start, end) = if limit_offset.has_constraints() {
+        if limit_offset.limit == Some(0) {
+            self.dataset = DataSet::Empty;
+            return Ok(LoadDataResult::Empty);
+        }
+
+        // No conditions — safe to push LIMIT/OFFSET to Redis via LRANGE indices
+        // But NOT when include_index is true: the index column must reflect actual
+        // Redis list positions, which requires the full dataset for correct offset
+        let (start, end) = if limit_offset.has_constraints() && !self.include_index {
             let offset = limit_offset.offset.unwrap_or(0);
             let limit = limit_offset.limit.unwrap_or(usize::MAX);
-            let start = offset as isize;
-            let end = if limit == usize::MAX {
-                -1isize // Redis LRANGE end=-1 means to the end of list
+            let start = if offset > isize::MAX as usize {
+                isize::MAX
             } else {
-                (offset + limit - 1) as isize
+                offset as isize
+            };
+            let end = if limit == usize::MAX {
+                -1isize
+            } else {
+                let end_val = offset.saturating_add(limit).saturating_sub(1);
+                if end_val > isize::MAX as usize {
+                    isize::MAX
+                } else {
+                    end_val as isize
+                }
             };
             (start, end)
         } else {
-            (0, -1) // Get all elements
+            (0, -1)
         };
 
         let data: Vec<String> = redis::cmd("LRANGE")
@@ -202,7 +195,12 @@ impl RedisTableOperations for RedisListTable {
             .arg(start)
             .arg(end)
             .query(conn)?;
-        self.dataset = DataSet::Complete(DataContainer::List(data));
+
+        if limit_offset.has_constraints() && !self.include_index {
+            self.dataset = DataSet::Filtered(data);
+        } else {
+            self.dataset = DataSet::Complete(DataContainer::List(data));
+        }
         Ok(LoadDataResult::FullyLoaded)
     }
 
@@ -389,11 +387,31 @@ impl RedisTableOperations for RedisListTable {
         keys: &[String],
     ) -> Result<Vec<String>, redis::RedisError> {
         const PER_KEY_WARN_THRESHOLD: usize = 200_000;
-        let mut pipe = redis::pipe();
-        for key in keys {
-            pipe.cmd("LRANGE").arg(key).arg(0i64).arg(-1i64);
-        }
-        let results: Vec<Vec<String>> = pipe.query(conn)?;
+
+        let pipe_result: Result<Vec<Vec<String>>, _> = {
+            let mut pipe = redis::pipe();
+            for key in keys {
+                pipe.cmd("LRANGE").arg(key).arg(0i64).arg(-1i64);
+            }
+            pipe.query(conn)
+        };
+
+        let results = match pipe_result {
+            Ok(r) => r,
+            Err(_) => {
+                let mut results = Vec::with_capacity(keys.len());
+                for key in keys {
+                    let r: Vec<String> = redis::cmd("LRANGE")
+                        .arg(key)
+                        .arg(0i64)
+                        .arg(-1i64)
+                        .query(conn)?;
+                    results.push(r);
+                }
+                results
+            }
+        };
+
         let mut all_rows = Vec::with_capacity(keys.len() * self.multi_key_columns_per_row());
         for (key, items) in keys.iter().zip(results) {
             pgrx::check_for_interrupts!();

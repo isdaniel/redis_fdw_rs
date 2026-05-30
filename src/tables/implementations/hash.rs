@@ -398,11 +398,27 @@ impl RedisTableOperations for RedisHashTable {
         keys: &[String],
     ) -> Result<Vec<String>, redis::RedisError> {
         const PER_KEY_WARN_THRESHOLD: usize = 200_000;
-        let mut pipe = redis::pipe();
-        for key in keys {
-            pipe.cmd("HGETALL").arg(key);
-        }
-        let results: Vec<Vec<(String, String)>> = pipe.query(conn)?;
+
+        let pipe_result: Result<Vec<Vec<(String, String)>>, _> = {
+            let mut pipe = redis::pipe();
+            for key in keys {
+                pipe.cmd("HGETALL").arg(key);
+            }
+            pipe.query(conn)
+        };
+
+        let results = match pipe_result {
+            Ok(r) => r,
+            Err(_) => {
+                let mut results = Vec::with_capacity(keys.len());
+                for key in keys {
+                    let r: Vec<(String, String)> = redis::cmd("HGETALL").arg(key).query(conn)?;
+                    results.push(r);
+                }
+                results
+            }
+        };
+
         let mut all_rows = Vec::with_capacity(keys.len() * self.multi_key_columns_per_row());
         for (key, pairs) in keys.iter().zip(results) {
             pgrx::check_for_interrupts!();

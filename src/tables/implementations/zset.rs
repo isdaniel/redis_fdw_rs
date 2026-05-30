@@ -13,14 +13,6 @@ use crate::{
 };
 use smallvec::smallvec;
 
-/// Safe default limit for Redis LIMIT argument (works on both 32-bit and 64-bit).
-/// On 64-bit this equals i64::MAX; on 32-bit it equals u32::MAX (usize::MAX).
-const REDIS_LIMIT_MAX: usize = if (usize::MAX as u128) < (i64::MAX as u128) {
-    usize::MAX
-} else {
-    i64::MAX as usize
-};
-
 /// Parse a ZRANGEBYSCORE bound string into f64 for comparison.
 fn parse_bound(s: &str, default: f64) -> f64 {
     let trimmed = s.strip_prefix('(').unwrap_or(s);
@@ -132,7 +124,7 @@ impl RedisZSetTable {
 
         if limit_offset.has_constraints() {
             let offset = limit_offset.offset.unwrap_or(0);
-            let limit = limit_offset.limit.unwrap_or(REDIS_LIMIT_MAX);
+            let limit = limit_offset.limit.unwrap_or(usize::MAX);
             cmd.arg("LIMIT").arg(offset).arg(limit);
         }
 
@@ -204,24 +196,6 @@ impl RedisZSetTable {
                     filtered_data.push(member.clone());
                     filtered_data.push(score.clone());
                 }
-            }
-        }
-
-        // Apply LIMIT/OFFSET to filtered results at the pair level
-        if limit_offset.has_constraints() {
-            let offset = limit_offset.offset.unwrap_or(0);
-            let limit = limit_offset.limit.unwrap_or(REDIS_LIMIT_MAX);
-
-            // filtered_data is [member1, score1, member2, score2, ...]
-            // Apply offset/limit at pair granularity (2 elements per pair)
-            let pair_start = offset * 2;
-            let pair_count = limit * 2;
-
-            if pair_start >= filtered_data.len() {
-                filtered_data.clear();
-            } else {
-                let pair_end = (pair_start + pair_count).min(filtered_data.len());
-                filtered_data = filtered_data[pair_start..pair_end].to_vec();
             }
         }
 
@@ -371,18 +345,33 @@ impl RedisTableOperations for RedisZSetTable {
             }
         }
 
-        // ZSets support efficient range queries with LIMIT/OFFSET using ZRANGE
+        if limit_offset.limit == Some(0) {
+            self.dataset = DataSet::Empty;
+            return Ok(LoadDataResult::Empty);
+        }
+
+        // No conditions — safe to push LIMIT/OFFSET to Redis via ZRANGE indices
         let (start, end) = if limit_offset.has_constraints() {
-            let offset = limit_offset.offset.unwrap_or(0) as isize;
-            let limit = limit_offset.limit.unwrap_or(REDIS_LIMIT_MAX);
-            let end_idx = if limit == REDIS_LIMIT_MAX {
-                -1isize // Redis ZRANGE end=-1 means to the end of sorted set
+            let offset = limit_offset.offset.unwrap_or(0);
+            let limit = limit_offset.limit.unwrap_or(usize::MAX);
+            let start = if offset > isize::MAX as usize {
+                isize::MAX
             } else {
-                offset + (limit as isize) - 1
+                offset as isize
             };
-            (offset, end_idx)
+            let end = if limit == usize::MAX {
+                -1isize
+            } else {
+                let end_val = offset.saturating_add(limit).saturating_sub(1);
+                if end_val > isize::MAX as usize {
+                    isize::MAX
+                } else {
+                    end_val as isize
+                }
+            };
+            (start, end)
         } else {
-            (0, -1) // Get all elements
+            (0, -1)
         };
 
         let result: Vec<(String, f64)> = redis::cmd("ZRANGE")
@@ -678,15 +667,36 @@ impl RedisTableOperations for RedisZSetTable {
         keys: &[String],
     ) -> Result<Vec<String>, redis::RedisError> {
         const PER_KEY_WARN_THRESHOLD: usize = 200_000;
-        let mut pipe = redis::pipe();
-        for key in keys {
-            pipe.cmd("ZRANGE")
-                .arg(key)
-                .arg(0i64)
-                .arg(-1i64)
-                .arg("WITHSCORES");
-        }
-        let results: Vec<Vec<(String, f64)>> = pipe.query(conn)?;
+
+        let pipe_result: Result<Vec<Vec<(String, f64)>>, _> = {
+            let mut pipe = redis::pipe();
+            for key in keys {
+                pipe.cmd("ZRANGE")
+                    .arg(key)
+                    .arg(0i64)
+                    .arg(-1i64)
+                    .arg("WITHSCORES");
+            }
+            pipe.query(conn)
+        };
+
+        let results = match pipe_result {
+            Ok(r) => r,
+            Err(_) => {
+                let mut results = Vec::with_capacity(keys.len());
+                for key in keys {
+                    let r: Vec<(String, f64)> = redis::cmd("ZRANGE")
+                        .arg(key)
+                        .arg(0i64)
+                        .arg(-1i64)
+                        .arg("WITHSCORES")
+                        .query(conn)?;
+                    results.push(r);
+                }
+                results
+            }
+        };
+
         let mut all_rows = Vec::with_capacity(keys.len() * self.multi_key_columns_per_row());
         for (key, members) in keys.iter().zip(results) {
             pgrx::check_for_interrupts!();
