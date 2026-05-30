@@ -624,7 +624,8 @@ impl RedisFdwState {
                 };
                 let ttls = match pipe_result {
                     Ok(v) => v,
-                    Err(_) => {
+                    Err(e) => {
+                        log!("Redis pipeline for TTL failed (likely cluster mode), falling back to individual commands: {}", e);
                         let mut ttls = Vec::with_capacity(chunk.len());
                         for key in chunk {
                             let ttl: i64 = redis::cmd("TTL").arg(key).query(conn).unwrap_or(-2);
@@ -740,7 +741,8 @@ impl RedisFdwState {
                 };
                 let ttls = match pipe_result {
                     Ok(v) => v,
-                    Err(_) => {
+                    Err(e) => {
+                        log!("Redis pipeline for TTL failed (likely cluster mode), falling back to individual commands: {}", e);
                         let mut ttls = Vec::with_capacity(keys.len());
                         for key in &keys {
                             let ttl: i64 = redis::cmd("TTL").arg(key).query(conn).unwrap_or(-2);
