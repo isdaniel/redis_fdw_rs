@@ -161,14 +161,19 @@ impl RedisTableOperations for RedisListTable {
 
         // No conditions — safe to push LIMIT/OFFSET to Redis via LRANGE indices
         let (start, end) = if limit_offset.has_constraints() {
-            let offset = limit_offset.offset.unwrap_or(0) as isize;
+            let offset = limit_offset.offset.unwrap_or(0);
             let limit = limit_offset.limit.unwrap_or(usize::MAX);
             let end = if limit == usize::MAX {
                 -1isize
             } else {
-                offset + limit as isize - 1
+                let end_val = offset.saturating_add(limit).saturating_sub(1);
+                if end_val > isize::MAX as usize {
+                    isize::MAX
+                } else {
+                    end_val as isize
+                }
             };
-            (offset, end)
+            (offset as isize, end)
         } else {
             (0, -1)
         };
