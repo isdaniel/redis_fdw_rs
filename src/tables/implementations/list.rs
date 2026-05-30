@@ -165,7 +165,9 @@ impl RedisTableOperations for RedisListTable {
         }
 
         // No conditions — safe to push LIMIT/OFFSET to Redis via LRANGE indices
-        let (start, end) = if limit_offset.has_constraints() {
+        // But NOT when include_index is true: the index column must reflect actual
+        // Redis list positions, which requires the full dataset for correct offset
+        let (start, end) = if limit_offset.has_constraints() && !self.include_index {
             let offset = limit_offset.offset.unwrap_or(0);
             let limit = limit_offset.limit.unwrap_or(usize::MAX);
             let start = if offset > isize::MAX as usize {
@@ -194,7 +196,7 @@ impl RedisTableOperations for RedisListTable {
             .arg(end)
             .query(conn)?;
 
-        if limit_offset.has_constraints() {
+        if limit_offset.has_constraints() && !self.include_index {
             self.dataset = DataSet::Filtered(data);
         } else {
             self.dataset = DataSet::Complete(DataContainer::List(data));
