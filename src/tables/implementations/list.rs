@@ -32,7 +32,7 @@ impl RedisListTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         scan_conditions: &ScanConditions,
-        limit_offset: &LimitOffsetInfo,
+        _limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         // Load all list data first since Redis doesn't have LSCAN
         let all_data: Vec<String> = redis::cmd("LRANGE")
@@ -84,11 +84,6 @@ impl RedisListTable {
             if matches {
                 filtered_data.push(item);
             }
-        }
-
-        // Apply LIMIT/OFFSET to filtered results
-        if limit_offset.has_constraints() {
-            filtered_data = limit_offset.apply_to_vec(filtered_data);
         }
 
         if filtered_data.is_empty() {
@@ -165,25 +160,13 @@ impl RedisTableOperations for RedisListTable {
         }
 
         // Lists don't have efficient filtering in Redis
-        // Apply LIMIT/OFFSET via LRANGE when safe (planner ensures no aggregates above)
-        let (start, end) = if limit_offset.has_constraints() {
-            let offset = limit_offset.offset.unwrap_or(0) as isize;
-            let limit = limit_offset.limit.unwrap_or(usize::MAX);
-            let start = offset;
-            let end = if limit == usize::MAX {
-                -1isize
-            } else {
-                offset + limit as isize - 1
-            };
-            (start, end)
-        } else {
-            (0, -1)
-        };
-
+        // Do NOT pre-apply LIMIT/OFFSET here — PG's executor always re-applies them
+        // on top of whatever the FDW returns, causing double-application.
+        // For large lists, the streaming load_batch path handles pagination efficiently.
         let data: Vec<String> = redis::cmd("LRANGE")
             .arg(key_prefix)
-            .arg(start)
-            .arg(end)
+            .arg(0)
+            .arg(-1)
             .query(conn)?;
         self.dataset = DataSet::Complete(DataContainer::List(data));
         Ok(LoadDataResult::FullyLoaded)

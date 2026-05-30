@@ -167,7 +167,7 @@ impl RedisTableOperations for RedisSetTable {
         conditions: Option<&[PushableCondition]>,
         limit_offset: &LimitOffsetInfo,
     ) -> redis::RedisResult<LoadDataResult> {
-        let members = if let Some(conds) = conditions {
+        let members = if let Some(conds) = conditions.filter(|c| !c.is_empty()) {
             let scan_conditions = extract_scan_conditions(conds);
 
             if !scan_conditions.pattern_conditions.is_empty() {

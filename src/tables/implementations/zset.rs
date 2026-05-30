@@ -13,14 +13,6 @@ use crate::{
 };
 use smallvec::smallvec;
 
-/// Safe default limit for Redis LIMIT argument (works on both 32-bit and 64-bit).
-/// On 64-bit this equals i64::MAX; on 32-bit it equals u32::MAX (usize::MAX).
-const REDIS_LIMIT_MAX: usize = if (usize::MAX as u128) < (i64::MAX as u128) {
-    usize::MAX
-} else {
-    i64::MAX as usize
-};
-
 /// Parse a ZRANGEBYSCORE bound string into f64 for comparison.
 fn parse_bound(s: &str, default: f64) -> f64 {
     let trimmed = s.strip_prefix('(').unwrap_or(s);
@@ -53,7 +45,7 @@ impl RedisZSetTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         score_conditions: &[&PushableCondition],
-        limit_offset: &LimitOffsetInfo,
+        _limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         let mut min_score = "-inf".to_string();
         let mut max_score = "+inf".to_string();
@@ -130,12 +122,6 @@ impl RedisZSetTable {
             .arg(&final_max)
             .arg("WITHSCORES");
 
-        if limit_offset.has_constraints() {
-            let offset = limit_offset.offset.unwrap_or(0);
-            let limit = limit_offset.limit.unwrap_or(REDIS_LIMIT_MAX);
-            cmd.arg("LIMIT").arg(offset).arg(limit);
-        }
-
         let result: Vec<String> = cmd.query(conn)?;
 
         if result.is_empty() {
@@ -204,24 +190,6 @@ impl RedisZSetTable {
                     filtered_data.push(member.clone());
                     filtered_data.push(score.clone());
                 }
-            }
-        }
-
-        // Apply LIMIT/OFFSET to filtered results at the pair level
-        if limit_offset.has_constraints() {
-            let offset = limit_offset.offset.unwrap_or(0);
-            let limit = limit_offset.limit.unwrap_or(REDIS_LIMIT_MAX);
-
-            // filtered_data is [member1, score1, member2, score2, ...]
-            // Apply offset/limit at pair granularity (2 elements per pair)
-            let pair_start = offset * 2;
-            let pair_count = limit * 2;
-
-            if pair_start >= filtered_data.len() {
-                filtered_data.clear();
-            } else {
-                let pair_end = (pair_start + pair_count).min(filtered_data.len());
-                filtered_data = filtered_data[pair_start..pair_end].to_vec();
             }
         }
 
@@ -371,24 +339,11 @@ impl RedisTableOperations for RedisZSetTable {
             }
         }
 
-        // ZSets support efficient range queries with LIMIT/OFFSET using ZRANGE
-        let (start, end) = if limit_offset.has_constraints() {
-            let offset = limit_offset.offset.unwrap_or(0) as isize;
-            let limit = limit_offset.limit.unwrap_or(REDIS_LIMIT_MAX);
-            let end_idx = if limit == REDIS_LIMIT_MAX {
-                -1isize // Redis ZRANGE end=-1 means to the end of sorted set
-            } else {
-                offset + (limit as isize) - 1
-            };
-            (offset, end_idx)
-        } else {
-            (0, -1) // Get all elements
-        };
-
+        // Load all members — let PostgreSQL handle LIMIT/OFFSET
         let result: Vec<(String, f64)> = redis::cmd("ZRANGE")
             .arg(key_prefix)
-            .arg(start)
-            .arg(end)
+            .arg(0)
+            .arg(-1)
             .arg("WITHSCORES")
             .query(conn)?;
 

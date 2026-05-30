@@ -257,7 +257,8 @@ impl RedisFdwState {
                 let conditions = self
                     .pushdown_analysis
                     .as_ref()
-                    .map(|a| a.pushable_conditions.as_slice());
+                    .map(|a| a.pushable_conditions.as_slice())
+                    .filter(|c| !c.is_empty());
                 let limit_offset = self
                     .pushdown_analysis
                     .as_ref()
