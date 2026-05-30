@@ -180,6 +180,22 @@ The FDW maps columns by **position**, not by name. Users MUST declare columns in
 - `apply_to_url()` in auth/mod.rs handles both `redis://` and `rediss://` schemes
 - Validator's `is_valid_host_port()` strips scheme and fragment before checking host:port format
 
+### Cluster Mode
+- **Connection**: Comma-separated `host_port` (e.g., `'127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003'`) auto-enables cluster via `RedisConnectionType::from_host_port()`
+- **Pool**: Uses `r2d2::Pool<ClusterClient>` (separate from standalone `Pool<Client>`)
+- **Pipeline fallback pattern**: `redis::pipe()` doesn't work with `ClusterConnection` — all multi-command operations use "try pipeline first (fast for standalone), fall back to individual commands on error (cluster compatible)"
+  - `load_multi_key_data()` in hash/set/zset/list implementations
+  - TTL batch fetch in `fetch_multi_key_optimized()` (`state_manager.rs`)
+  - `delete()` in list implementation (LREM per value)
+  - Fallback paths use `SmallVec` to avoid heap allocation for typical small key sets
+- **String multi-key**: Uses `MGET` which the cluster client handles natively (splits across slots)
+- **Key pushdown in cluster**: `WHERE key = 'x'` and `WHERE key IN (...)` work correctly — individual commands route to correct slot
+- **Known cluster limitations** (not yet implemented):
+  - `SCAN` cannot be routed in cluster (requires per-node iteration) — affects: full multi-key scan without key pushdown, `WHERE key LIKE` pushdown, `TRUNCATE` on multi-key patterns
+  - `IMPORT FOREIGN SCHEMA` uses SCAN internally — not cluster-compatible
+  - List multi-key INSERT misroutes key column as element (pre-existing design issue)
+- **Testing**: Cluster tests require 6-node cluster on ports 7001-7006 (`docker-compose.cluster-test.yml`); tests in `src/tests/cluster_integration_tests.rs`
+
 ## Code Conventions
 
 - Use `pgrx::error!()` for PostgreSQL-level errors (never `panic!`)
@@ -194,6 +210,7 @@ The FDW maps columns by **position**, not by name. Users MUST declare columns in
 - Tests require Redis running on `127.0.0.1:8899` (database 15 for most tests)
 - Cluster tests require 6-node cluster on ports 7001-7006 (use `docker-compose.cluster-test.yml`)
 - Start Redis: `docker run -d --name redis-server -p 8899:6379 redis`
+- Start cluster: `make setup-redis` (starts both standalone and cluster)
 - All tests use separate FDW/server names to avoid conflicts
 
 ## CI/CD

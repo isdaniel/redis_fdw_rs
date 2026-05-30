@@ -562,4 +562,221 @@ mod tests {
         drop_cluster_foreign_table("cluster_error_empty");
         cleanup_redis_cluster_fdw();
     }
+
+    /// Test hash multi-key with key = pushdown in cluster
+    #[pg_test]
+    fn test_cluster_multi_key_hash_pushdown() {
+        setup_redis_cluster_fdw();
+
+        create_cluster_foreign_table(
+            "cluster_mk_hash",
+            "key TEXT, field TEXT, value TEXT",
+            "hash",
+            "cmkh:*",
+        );
+
+        Spi::run("INSERT INTO cluster_mk_hash VALUES ('cmkh:user1', 'name', 'Alice');").unwrap();
+        Spi::run("INSERT INTO cluster_mk_hash VALUES ('cmkh:user1', 'role', 'admin');").unwrap();
+        Spi::run("INSERT INTO cluster_mk_hash VALUES ('cmkh:user2', 'name', 'Bob');").unwrap();
+        Spi::run("INSERT INTO cluster_mk_hash VALUES ('cmkh:user2', 'role', 'viewer');").unwrap();
+
+        // Exact key pushdown
+        let count =
+            Spi::get_one::<i64>("SELECT COUNT(*) FROM cluster_mk_hash WHERE key = 'cmkh:user1';")
+                .unwrap();
+        assert_eq!(count, Some(2));
+
+        let name = Spi::get_one::<String>(
+            "SELECT value FROM cluster_mk_hash WHERE key = 'cmkh:user1' AND field = 'name';",
+        )
+        .unwrap();
+        assert_eq!(name, Some("Alice".to_string()));
+
+        // IN pushdown
+        let count = Spi::get_one::<i64>(
+            "SELECT COUNT(*) FROM cluster_mk_hash WHERE key IN ('cmkh:user1', 'cmkh:user2');",
+        )
+        .unwrap();
+        assert_eq!(count, Some(4));
+
+        drop_cluster_foreign_table("cluster_mk_hash");
+        cleanup_redis_cluster_fdw();
+    }
+
+    /// Test set multi-key with key = pushdown in cluster
+    #[pg_test]
+    fn test_cluster_multi_key_set_pushdown() {
+        setup_redis_cluster_fdw();
+
+        create_cluster_foreign_table("cluster_mk_set", "key TEXT, member TEXT", "set", "cmks:*");
+
+        Spi::run("INSERT INTO cluster_mk_set VALUES ('cmks:tags:1', 'rust');").unwrap();
+        Spi::run("INSERT INTO cluster_mk_set VALUES ('cmks:tags:1', 'fdw');").unwrap();
+        Spi::run("INSERT INTO cluster_mk_set VALUES ('cmks:tags:1', 'pgrx');").unwrap();
+        Spi::run("INSERT INTO cluster_mk_set VALUES ('cmks:tags:2', 'docker');").unwrap();
+        Spi::run("INSERT INTO cluster_mk_set VALUES ('cmks:tags:2', 'redis');").unwrap();
+
+        // Exact key pushdown
+        let count =
+            Spi::get_one::<i64>("SELECT COUNT(*) FROM cluster_mk_set WHERE key = 'cmks:tags:1';")
+                .unwrap();
+        assert_eq!(count, Some(3));
+
+        // IN pushdown
+        let count = Spi::get_one::<i64>(
+            "SELECT COUNT(*) FROM cluster_mk_set WHERE key IN ('cmks:tags:1', 'cmks:tags:2');",
+        )
+        .unwrap();
+        assert_eq!(count, Some(5));
+
+        drop_cluster_foreign_table("cluster_mk_set");
+        cleanup_redis_cluster_fdw();
+    }
+
+    /// Test zset multi-key with key = pushdown in cluster
+    #[pg_test]
+    fn test_cluster_multi_key_zset_pushdown() {
+        setup_redis_cluster_fdw();
+
+        create_cluster_foreign_table(
+            "cluster_mk_zset",
+            "key TEXT, member TEXT, score FLOAT8",
+            "zset",
+            "cmkz:*",
+        );
+
+        Spi::run("INSERT INTO cluster_mk_zset VALUES ('cmkz:board:1', 'alice', 100);").unwrap();
+        Spi::run("INSERT INTO cluster_mk_zset VALUES ('cmkz:board:1', 'bob', 200);").unwrap();
+        Spi::run("INSERT INTO cluster_mk_zset VALUES ('cmkz:board:2', 'carol', 150);").unwrap();
+        Spi::run("INSERT INTO cluster_mk_zset VALUES ('cmkz:board:2', 'dave', 300);").unwrap();
+
+        // Exact key pushdown
+        let count =
+            Spi::get_one::<i64>("SELECT COUNT(*) FROM cluster_mk_zset WHERE key = 'cmkz:board:1';")
+                .unwrap();
+        assert_eq!(count, Some(2));
+
+        // IN pushdown
+        let count = Spi::get_one::<i64>(
+            "SELECT COUNT(*) FROM cluster_mk_zset WHERE key IN ('cmkz:board:1', 'cmkz:board:2');",
+        )
+        .unwrap();
+        assert_eq!(count, Some(4));
+
+        // Verify scores preserved
+        let score = Spi::get_one::<f64>(
+            "SELECT score FROM cluster_mk_zset WHERE key = 'cmkz:board:2' AND member = 'dave';",
+        )
+        .unwrap();
+        assert_eq!(score, Some(300.0));
+
+        drop_cluster_foreign_table("cluster_mk_zset");
+        cleanup_redis_cluster_fdw();
+    }
+
+    /// Test string multi-key with key = pushdown in cluster (uses MGET, no pipeline)
+    #[pg_test]
+    fn test_cluster_multi_key_string_pushdown() {
+        setup_redis_cluster_fdw();
+
+        create_cluster_foreign_table(
+            "cluster_mk_str",
+            "key TEXT, value TEXT",
+            "string",
+            "cmkstr:*",
+        );
+
+        Spi::run("INSERT INTO cluster_mk_str VALUES ('cmkstr:a', 'val_a');").unwrap();
+        Spi::run("INSERT INTO cluster_mk_str VALUES ('cmkstr:b', 'val_b');").unwrap();
+        Spi::run("INSERT INTO cluster_mk_str VALUES ('cmkstr:c', 'val_c');").unwrap();
+
+        // Exact key pushdown
+        let val =
+            Spi::get_one::<String>("SELECT value FROM cluster_mk_str WHERE key = 'cmkstr:b';")
+                .unwrap();
+        assert_eq!(val, Some("val_b".to_string()));
+
+        // IN pushdown
+        let count = Spi::get_one::<i64>(
+            "SELECT COUNT(*) FROM cluster_mk_str WHERE key IN ('cmkstr:a', 'cmkstr:c');",
+        )
+        .unwrap();
+        assert_eq!(count, Some(2));
+
+        drop_cluster_foreign_table("cluster_mk_str");
+        cleanup_redis_cluster_fdw();
+    }
+
+    /// Test TTL pipeline fallback in cluster mode
+    #[pg_test]
+    fn test_cluster_multi_key_ttl_fallback() {
+        setup_redis_cluster_fdw();
+
+        let sql = format!(
+            "CREATE FOREIGN TABLE cluster_mk_ttl (key TEXT, value TEXT, ttl BIGINT)
+             SERVER {SERVER_NAME} OPTIONS (
+                database '{TEST_DATABASE}',
+                table_type 'string',
+                table_key_prefix 'cmkttl:*',
+                ttl '600'
+             );",
+        );
+        Spi::run(&sql).unwrap();
+
+        Spi::run("INSERT INTO cluster_mk_ttl VALUES ('cmkttl:x', 'data_x', 120);").unwrap();
+        Spi::run("INSERT INTO cluster_mk_ttl VALUES ('cmkttl:y', 'data_y', -1);").unwrap();
+
+        // Verify TTL is fetched correctly (not -2 error fallback)
+        let ttl_x =
+            Spi::get_one::<i64>("SELECT ttl FROM cluster_mk_ttl WHERE key = 'cmkttl:x';").unwrap();
+        assert!(ttl_x.unwrap() > 0 && ttl_x.unwrap() <= 120);
+
+        let ttl_y =
+            Spi::get_one::<i64>("SELECT ttl FROM cluster_mk_ttl WHERE key = 'cmkttl:y';").unwrap();
+        assert_eq!(ttl_y, Some(-1));
+
+        drop_cluster_foreign_table("cluster_mk_ttl");
+        cleanup_redis_cluster_fdw();
+    }
+
+    /// Test cluster batch insert with multi-key pattern
+    #[pg_test]
+    fn test_cluster_batch_insert_multi_key() {
+        setup_redis_cluster_fdw();
+
+        let sql = format!(
+            "CREATE FOREIGN TABLE cluster_mk_batch (key TEXT, value TEXT)
+             SERVER {SERVER_NAME} OPTIONS (
+                database '{TEST_DATABASE}',
+                table_type 'string',
+                table_key_prefix 'cmkbatch:*',
+                batch_size '1000'
+             );",
+        );
+        Spi::run(&sql).unwrap();
+
+        // Batch insert 50 keys
+        Spi::run(
+            "INSERT INTO cluster_mk_batch
+             SELECT 'cmkbatch:item:' || g::text, 'payload_' || g::text
+             FROM generate_series(1, 50) g;",
+        )
+        .unwrap();
+
+        // Verify specific keys via pushdown
+        let val = Spi::get_one::<String>(
+            "SELECT value FROM cluster_mk_batch WHERE key = 'cmkbatch:item:25';",
+        )
+        .unwrap();
+        assert_eq!(val, Some("payload_25".to_string()));
+
+        let count = Spi::get_one::<i64>(
+            "SELECT COUNT(*) FROM cluster_mk_batch WHERE key IN ('cmkbatch:item:1', 'cmkbatch:item:50');",
+        )
+        .unwrap();
+        assert_eq!(count, Some(2));
+
+        drop_cluster_foreign_table("cluster_mk_batch");
+        cleanup_redis_cluster_fdw();
+    }
 }
