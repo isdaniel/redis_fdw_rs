@@ -11,7 +11,7 @@ use crate::{
         types::{DataContainer, DataSet, LoadDataResult, RowVec},
     },
 };
-use smallvec::{smallvec, SmallVec};
+use smallvec::smallvec;
 
 /// Redis Hash table type
 #[derive(Debug, Clone, Default)]
@@ -410,13 +410,12 @@ impl RedisTableOperations for RedisHashTable {
         let results = match pipe_result {
             Ok(r) => r,
             Err(_) => {
-                let mut results: SmallVec<[Vec<(String, String)>; 8]> =
-                    SmallVec::with_capacity(keys.len());
+                let mut results = Vec::with_capacity(keys.len());
                 for key in keys {
                     let r: Vec<(String, String)> = redis::cmd("HGETALL").arg(key).query(conn)?;
                     results.push(r);
                 }
-                results.into_vec()
+                results
             }
         };
 

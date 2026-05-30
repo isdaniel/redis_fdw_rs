@@ -9,8 +9,6 @@ use crate::{
         types::{DataSet, LoadDataResult},
     },
 };
-use smallvec::SmallVec;
-
 /// Redis Set table type
 #[derive(Debug, Clone, Default)]
 pub struct RedisSetTable {
@@ -373,12 +371,12 @@ impl RedisTableOperations for RedisSetTable {
         let results = match pipe_result {
             Ok(r) => r,
             Err(_) => {
-                let mut results: SmallVec<[Vec<String>; 8]> = SmallVec::with_capacity(keys.len());
+                let mut results = Vec::with_capacity(keys.len());
                 for key in keys {
                     let r: Vec<String> = redis::cmd("SMEMBERS").arg(key).query(conn)?;
                     results.push(r);
                 }
-                results.into_vec()
+                results
             }
         };
 

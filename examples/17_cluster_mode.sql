@@ -289,21 +289,6 @@ SELECT * FROM cluster_cache_ttl WHERE key IN (
 -- Pipeline batching groups commands by hash slot and pipelines
 -- within each node for maximum throughput.
 
-CREATE FOREIGN TABLE cluster_batch_hash (field text, value text)
-    SERVER redis_cluster
-    OPTIONS (
-        table_type 'hash',
-        table_key_prefix 'cluster:metrics:cpu',
-        batch_size '1000'
-    );
-
-INSERT INTO cluster_batch_hash
-SELECT
-    'core_' || g::text,
-    (50 + (random() * 50))::int::text || '%'
-FROM generate_series(1, 20) g;
-
-SELECT * FROM cluster_batch_hash;
 
 -- Multi-key batch insert: 30000 keys distributed across shards
 CREATE FOREIGN TABLE cluster_batch_strings (key text, value text)
@@ -313,8 +298,6 @@ CREATE FOREIGN TABLE cluster_batch_strings (key text, value text)
         table_key_prefix 'cbatch:item:*',
         batch_size '10000'
     );
-
-\timing on
 
 INSERT INTO cluster_batch_strings
 SELECT
@@ -328,8 +311,6 @@ SELECT
         END || '"}'
 FROM generate_series(1, 30000) g;
 
-\timing off
-
 -- Point lookup (direct GET, no SCAN)
 EXPLAIN ANALYZE SELECT * FROM cluster_batch_strings WHERE key = 'cbatch:item:15000';
 
@@ -341,7 +322,7 @@ EXPLAIN ANALYZE SELECT * FROM cluster_batch_strings WHERE key IN (
 -- Verify distribution: sample from different key ranges
 EXPLAIN ANALYZE SELECT * FROM cluster_batch_strings WHERE key IN (
     'cbatch:item:7777', 'cbatch:item:14444', 'cbatch:item:21111', 'cbatch:item:28888'
-);
+) LIMIT 2;
 
 -- ============================================================
 -- Part 6: Cross-server verification (same cluster, different entry)
@@ -427,7 +408,6 @@ DROP FOREIGN TABLE IF EXISTS cluster_tags;
 DROP FOREIGN TABLE IF EXISTS cluster_game_scores;
 DROP FOREIGN TABLE IF EXISTS cluster_cache;
 DROP FOREIGN TABLE IF EXISTS cluster_cache_ttl;
-DROP FOREIGN TABLE IF EXISTS cluster_batch_hash;
 DROP FOREIGN TABLE IF EXISTS cluster_batch_strings;
 DROP FOREIGN TABLE IF EXISTS cluster_verify_write;
 DROP FOREIGN TABLE IF EXISTS cluster_verify_read;

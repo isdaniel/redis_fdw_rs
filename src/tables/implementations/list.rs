@@ -9,7 +9,7 @@ use crate::{
         types::{DataContainer, DataSet, LoadDataResult, RowVec},
     },
 };
-use smallvec::{smallvec, SmallVec};
+use smallvec::smallvec;
 use std::borrow::Cow;
 
 /// Redis List table type
@@ -165,12 +165,25 @@ impl RedisTableOperations for RedisListTable {
         }
 
         // Lists don't have efficient filtering in Redis
-        // Load all data and let PostgreSQL handle LIMIT/OFFSET
-        // (PG always re-applies LIMIT/OFFSET on the result, so we must not pre-apply it)
+        // Apply LIMIT/OFFSET via LRANGE when safe (planner ensures no aggregates above)
+        let (start, end) = if limit_offset.has_constraints() {
+            let offset = limit_offset.offset.unwrap_or(0) as isize;
+            let limit = limit_offset.limit.unwrap_or(usize::MAX);
+            let start = offset;
+            let end = if limit == usize::MAX {
+                -1isize
+            } else {
+                offset + limit as isize - 1
+            };
+            (start, end)
+        } else {
+            (0, -1)
+        };
+
         let data: Vec<String> = redis::cmd("LRANGE")
             .arg(key_prefix)
-            .arg(0)
-            .arg(-1)
+            .arg(start)
+            .arg(end)
             .query(conn)?;
         self.dataset = DataSet::Complete(DataContainer::List(data));
         Ok(LoadDataResult::FullyLoaded)
@@ -371,7 +384,7 @@ impl RedisTableOperations for RedisListTable {
         let results = match pipe_result {
             Ok(r) => r,
             Err(_) => {
-                let mut results: SmallVec<[Vec<String>; 8]> = SmallVec::with_capacity(keys.len());
+                let mut results = Vec::with_capacity(keys.len());
                 for key in keys {
                     let r: Vec<String> = redis::cmd("LRANGE")
                         .arg(key)
@@ -380,7 +393,7 @@ impl RedisTableOperations for RedisListTable {
                         .query(conn)?;
                     results.push(r);
                 }
-                results.into_vec()
+                results
             }
         };
 

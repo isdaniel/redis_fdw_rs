@@ -16,7 +16,6 @@ use crate::{
     tables::types::{DataContainer, DataSet, RedisTableType, RowVec},
 };
 use pgrx::{pg_sys, pg_sys::MemoryContext, prelude::*};
-use smallvec::SmallVec;
 use std::collections::HashMap;
 
 const SINGLE_KEY_WARN_THRESHOLD: usize = 500_000;
@@ -625,12 +624,12 @@ impl RedisFdwState {
                 let ttls = match pipe_result {
                     Ok(v) => v,
                     Err(_) => {
-                        let mut ttls: SmallVec<[i64; 64]> = SmallVec::with_capacity(chunk.len());
+                        let mut ttls = Vec::with_capacity(chunk.len());
                         for key in chunk {
                             let ttl: i64 = redis::cmd("TTL").arg(key).query(conn).unwrap_or(-2);
                             ttls.push(ttl);
                         }
-                        ttls.into_vec()
+                        ttls
                     }
                 };
                 for (key, ttl) in chunk.iter().zip(ttls) {
@@ -731,15 +730,22 @@ impl RedisFdwState {
 
             // Batch-fetch TTLs for the scanned keys if TTL column is present
             if self.ttl_column_index.is_some() {
-                let mut pipe = redis::pipe();
-                for key in &keys {
-                    pipe.cmd("TTL").arg(key);
-                }
-                let ttls: Vec<i64> = match pipe.query(conn) {
+                let pipe_result: Result<Vec<i64>, _> = {
+                    let mut pipe = redis::pipe();
+                    for key in &keys {
+                        pipe.cmd("TTL").arg(key);
+                    }
+                    pipe.query(conn)
+                };
+                let ttls = match pipe_result {
                     Ok(v) => v,
-                    Err(e) => {
-                        log!("WARNING: Redis pipeline TTL error: {}", e);
-                        vec![-2; keys.len()]
+                    Err(_) => {
+                        let mut ttls = Vec::with_capacity(keys.len());
+                        for key in &keys {
+                            let ttl: i64 = redis::cmd("TTL").arg(key).query(conn).unwrap_or(-2);
+                            ttls.push(ttl);
+                        }
+                        ttls
                     }
                 };
                 for (key, ttl) in keys.iter().zip(ttls) {

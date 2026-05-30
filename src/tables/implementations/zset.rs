@@ -11,7 +11,7 @@ use crate::{
         types::{DataContainer, DataSet, LoadDataResult, RowVec},
     },
 };
-use smallvec::{smallvec, SmallVec};
+use smallvec::smallvec;
 
 /// Safe default limit for Redis LIMIT argument (works on both 32-bit and 64-bit).
 /// On 64-bit this equals i64::MAX; on 32-bit it equals u32::MAX (usize::MAX).
@@ -694,8 +694,7 @@ impl RedisTableOperations for RedisZSetTable {
         let results = match pipe_result {
             Ok(r) => r,
             Err(_) => {
-                let mut results: SmallVec<[Vec<(String, f64)>; 8]> =
-                    SmallVec::with_capacity(keys.len());
+                let mut results = Vec::with_capacity(keys.len());
                 for key in keys {
                     let r: Vec<(String, f64)> = redis::cmd("ZRANGE")
                         .arg(key)
@@ -705,7 +704,7 @@ impl RedisTableOperations for RedisZSetTable {
                         .query(conn)?;
                     results.push(r);
                 }
-                results.into_vec()
+                results
             }
         };
 
