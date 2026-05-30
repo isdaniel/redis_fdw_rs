@@ -163,6 +163,11 @@ impl RedisTableOperations for RedisListTable {
         let (start, end) = if limit_offset.has_constraints() {
             let offset = limit_offset.offset.unwrap_or(0);
             let limit = limit_offset.limit.unwrap_or(usize::MAX);
+            let start = if offset > isize::MAX as usize {
+                isize::MAX
+            } else {
+                offset as isize
+            };
             let end = if limit == usize::MAX {
                 -1isize
             } else {
@@ -173,7 +178,7 @@ impl RedisTableOperations for RedisListTable {
                     end_val as isize
                 }
             };
-            (offset as isize, end)
+            (start, end)
         } else {
             (0, -1)
         };
