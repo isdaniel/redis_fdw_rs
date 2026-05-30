@@ -115,6 +115,15 @@ mod tests {
             .unwrap();
         assert_eq!(count, 4);
 
+        // Verify LIMIT actually restricts rows when no aggregate is present
+        let limit_count = Spi::connect(|client| {
+            client
+                .select("SELECT value FROM colmap_list_lim LIMIT 2;", None, &[])
+                .unwrap()
+                .len()
+        });
+        assert_eq!(limit_count, 2);
+
         Spi::run("DROP FOREIGN TABLE colmap_list_lim;").unwrap();
         cleanup_redis_key(key);
         cleanup();

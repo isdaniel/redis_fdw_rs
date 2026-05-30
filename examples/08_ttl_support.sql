@@ -85,7 +85,7 @@ CREATE FOREIGN TABLE session_fdw (key text, value text, ttl bigint)
 
 INSERT INTO session_fdw VALUES ('session:user1', '{"logged_in": true, "ip": "10.0.0.1"}',10);
 INSERT INTO session_fdw VALUES ('session:user2', '{"logged_in": true, "ip": "10.0.0.2"}',20);
-INSERT INTO session_fdw VALUES ('session:user3', '{"logged_in": true, "ip": "10.0.0.3"}');
+INSERT INTO session_fdw (key, value) VALUES ('session:user3', '{"logged_in": true, "ip": "10.0.0.3"}');
 
 SELECT * FROM session_fdw where key in ('session:user1','session:user2','session:user3');
 
