@@ -45,7 +45,7 @@ impl RedisZSetTable {
         conn: &mut dyn redis::ConnectionLike,
         key_prefix: &str,
         score_conditions: &[&PushableCondition],
-        _limit_offset: &LimitOffsetInfo,
+        limit_offset: &LimitOffsetInfo,
     ) -> Result<LoadDataResult, redis::RedisError> {
         let mut min_score = "-inf".to_string();
         let mut max_score = "+inf".to_string();
@@ -121,6 +121,12 @@ impl RedisZSetTable {
             .arg(&final_min)
             .arg(&final_max)
             .arg("WITHSCORES");
+
+        if limit_offset.has_constraints() {
+            let offset = limit_offset.offset.unwrap_or(0);
+            let limit = limit_offset.limit.unwrap_or(usize::MAX);
+            cmd.arg("LIMIT").arg(offset).arg(limit);
+        }
 
         let result: Vec<String> = cmd.query(conn)?;
 
