@@ -345,6 +345,11 @@ impl RedisTableOperations for RedisZSetTable {
             }
         }
 
+        if limit_offset.limit == Some(0) {
+            self.dataset = DataSet::Empty;
+            return Ok(LoadDataResult::Empty);
+        }
+
         // No conditions — safe to push LIMIT/OFFSET to Redis via ZRANGE indices
         let (start, end) = if limit_offset.has_constraints() {
             let offset = limit_offset.offset.unwrap_or(0);
