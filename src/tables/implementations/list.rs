@@ -159,16 +159,31 @@ impl RedisTableOperations for RedisListTable {
             }
         }
 
-        // Lists don't have efficient filtering in Redis
-        // Do NOT pre-apply LIMIT/OFFSET here — PG's executor always re-applies them
-        // on top of whatever the FDW returns, causing double-application.
-        // For large lists, the streaming load_batch path handles pagination efficiently.
+        // No conditions — safe to push LIMIT/OFFSET to Redis via LRANGE indices
+        let (start, end) = if limit_offset.has_constraints() {
+            let offset = limit_offset.offset.unwrap_or(0) as isize;
+            let limit = limit_offset.limit.unwrap_or(usize::MAX);
+            let end = if limit == usize::MAX {
+                -1isize
+            } else {
+                offset + limit as isize - 1
+            };
+            (offset, end)
+        } else {
+            (0, -1)
+        };
+
         let data: Vec<String> = redis::cmd("LRANGE")
             .arg(key_prefix)
-            .arg(0)
-            .arg(-1)
+            .arg(start)
+            .arg(end)
             .query(conn)?;
-        self.dataset = DataSet::Complete(DataContainer::List(data));
+
+        if limit_offset.has_constraints() {
+            self.dataset = DataSet::Filtered(data);
+        } else {
+            self.dataset = DataSet::Complete(DataContainer::List(data));
+        }
         Ok(LoadDataResult::FullyLoaded)
     }
 

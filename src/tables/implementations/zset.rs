@@ -339,11 +339,24 @@ impl RedisTableOperations for RedisZSetTable {
             }
         }
 
-        // Load all members — let PostgreSQL handle LIMIT/OFFSET
+        // No conditions — safe to push LIMIT/OFFSET to Redis via ZRANGE indices
+        let (start, end) = if limit_offset.has_constraints() {
+            let offset = limit_offset.offset.unwrap_or(0) as isize;
+            let limit = limit_offset.limit.unwrap_or(usize::MAX);
+            let end = if limit == usize::MAX {
+                -1isize
+            } else {
+                offset + limit as isize - 1
+            };
+            (offset, end)
+        } else {
+            (0, -1)
+        };
+
         let result: Vec<(String, f64)> = redis::cmd("ZRANGE")
             .arg(key_prefix)
-            .arg(0)
-            .arg(-1)
+            .arg(start)
+            .arg(end)
             .arg("WITHSCORES")
             .query(conn)?;
 
