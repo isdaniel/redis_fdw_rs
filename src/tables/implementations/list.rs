@@ -9,7 +9,7 @@ use crate::{
         types::{DataContainer, DataSet, LoadDataResult, RowVec},
     },
 };
-use smallvec::smallvec;
+use smallvec::{smallvec, SmallVec};
 use std::borrow::Cow;
 
 /// Redis List table type
@@ -129,29 +129,12 @@ impl RedisTableOperations for RedisListTable {
                         condition.operator,
                         ComparisonOperator::Equal | ComparisonOperator::In
                     ) {
-                        // For lists, we need to load all data and filter
-                        let all_data: Vec<String> = if limit_offset.has_constraints() {
-                            // Apply LIMIT/OFFSET directly with LRANGE for better performance
-                            let offset = limit_offset.offset.unwrap_or(0);
-                            let limit = limit_offset.limit.unwrap_or(usize::MAX);
-                            let start = offset as isize;
-                            let end = if limit == usize::MAX {
-                                -1isize
-                            } else {
-                                (offset + limit - 1) as isize
-                            };
-                            redis::cmd("LRANGE")
-                                .arg(key_prefix)
-                                .arg(start)
-                                .arg(end)
-                                .query(conn)?
-                        } else {
-                            redis::cmd("LRANGE")
-                                .arg(key_prefix)
-                                .arg(0)
-                                .arg(-1)
-                                .query(conn)?
-                        };
+                        // For lists, load all data and filter by value
+                        let all_data: Vec<String> = redis::cmd("LRANGE")
+                            .arg(key_prefix)
+                            .arg(0)
+                            .arg(-1)
+                            .query(conn)?;
 
                         let filtered: Vec<String> = match condition.operator {
                             ComparisonOperator::Equal => all_data
@@ -182,25 +165,12 @@ impl RedisTableOperations for RedisListTable {
         }
 
         // Lists don't have efficient filtering in Redis
-        // Fall back to loading all data, but apply LIMIT/OFFSET directly with LRANGE
-        let (start, end) = if limit_offset.has_constraints() {
-            let offset = limit_offset.offset.unwrap_or(0);
-            let limit = limit_offset.limit.unwrap_or(usize::MAX);
-            let start = offset as isize;
-            let end = if limit == usize::MAX {
-                -1isize // Redis LRANGE end=-1 means to the end of list
-            } else {
-                (offset + limit - 1) as isize
-            };
-            (start, end)
-        } else {
-            (0, -1) // Get all elements
-        };
-
+        // Load all data and let PostgreSQL handle LIMIT/OFFSET
+        // (PG always re-applies LIMIT/OFFSET on the result, so we must not pre-apply it)
         let data: Vec<String> = redis::cmd("LRANGE")
             .arg(key_prefix)
-            .arg(start)
-            .arg(end)
+            .arg(0)
+            .arg(-1)
             .query(conn)?;
         self.dataset = DataSet::Complete(DataContainer::List(data));
         Ok(LoadDataResult::FullyLoaded)
@@ -389,11 +359,31 @@ impl RedisTableOperations for RedisListTable {
         keys: &[String],
     ) -> Result<Vec<String>, redis::RedisError> {
         const PER_KEY_WARN_THRESHOLD: usize = 200_000;
-        let mut pipe = redis::pipe();
-        for key in keys {
-            pipe.cmd("LRANGE").arg(key).arg(0i64).arg(-1i64);
-        }
-        let results: Vec<Vec<String>> = pipe.query(conn)?;
+
+        let pipe_result: Result<Vec<Vec<String>>, _> = {
+            let mut pipe = redis::pipe();
+            for key in keys {
+                pipe.cmd("LRANGE").arg(key).arg(0i64).arg(-1i64);
+            }
+            pipe.query(conn)
+        };
+
+        let results = match pipe_result {
+            Ok(r) => r,
+            Err(_) => {
+                let mut results: SmallVec<[Vec<String>; 8]> = SmallVec::with_capacity(keys.len());
+                for key in keys {
+                    let r: Vec<String> = redis::cmd("LRANGE")
+                        .arg(key)
+                        .arg(0i64)
+                        .arg(-1i64)
+                        .query(conn)?;
+                    results.push(r);
+                }
+                results.into_vec()
+            }
+        };
+
         let mut all_rows = Vec::with_capacity(keys.len() * self.multi_key_columns_per_row());
         for (key, items) in keys.iter().zip(results) {
             pgrx::check_for_interrupts!();

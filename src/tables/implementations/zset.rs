@@ -11,7 +11,7 @@ use crate::{
         types::{DataContainer, DataSet, LoadDataResult, RowVec},
     },
 };
-use smallvec::smallvec;
+use smallvec::{smallvec, SmallVec};
 
 /// Safe default limit for Redis LIMIT argument (works on both 32-bit and 64-bit).
 /// On 64-bit this equals i64::MAX; on 32-bit it equals u32::MAX (usize::MAX).
@@ -678,15 +678,37 @@ impl RedisTableOperations for RedisZSetTable {
         keys: &[String],
     ) -> Result<Vec<String>, redis::RedisError> {
         const PER_KEY_WARN_THRESHOLD: usize = 200_000;
-        let mut pipe = redis::pipe();
-        for key in keys {
-            pipe.cmd("ZRANGE")
-                .arg(key)
-                .arg(0i64)
-                .arg(-1i64)
-                .arg("WITHSCORES");
-        }
-        let results: Vec<Vec<(String, f64)>> = pipe.query(conn)?;
+
+        let pipe_result: Result<Vec<Vec<(String, f64)>>, _> = {
+            let mut pipe = redis::pipe();
+            for key in keys {
+                pipe.cmd("ZRANGE")
+                    .arg(key)
+                    .arg(0i64)
+                    .arg(-1i64)
+                    .arg("WITHSCORES");
+            }
+            pipe.query(conn)
+        };
+
+        let results = match pipe_result {
+            Ok(r) => r,
+            Err(_) => {
+                let mut results: SmallVec<[Vec<(String, f64)>; 8]> =
+                    SmallVec::with_capacity(keys.len());
+                for key in keys {
+                    let r: Vec<(String, f64)> = redis::cmd("ZRANGE")
+                        .arg(key)
+                        .arg(0i64)
+                        .arg(-1i64)
+                        .arg("WITHSCORES")
+                        .query(conn)?;
+                    results.push(r);
+                }
+                results.into_vec()
+            }
+        };
+
         let mut all_rows = Vec::with_capacity(keys.len() * self.multi_key_columns_per_row());
         for (key, members) in keys.iter().zip(results) {
             pgrx::check_for_interrupts!();

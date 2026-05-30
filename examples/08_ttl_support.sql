@@ -56,5 +56,39 @@ CREATE FOREIGN TABLE demo_cache_persist (value text, ttl bigint)
 INSERT INTO demo_cache_persist VALUES ('{"data": "permanent"}', -1);
 SELECT * FROM demo_cache_persist;
 
+CREATE FOREIGN TABLE user_profile (field text, value text)
+    SERVER redis_server
+    OPTIONS (
+        database '0',
+        table_type 'hash',
+        table_key_prefix 'user:1001'
+    );
+
+-- INSERT adds fields to the hash
+INSERT INTO user_profile VALUES ('name', 'Alice Chen');
+INSERT INTO user_profile VALUES ('email', 'alice@example.com');
+INSERT INTO user_profile VALUES ('role', 'engineer');
+INSERT INTO user_profile VALUES ('team', 'platform');
+
+-- SELECT reads all hash fields
+SELECT * FROM user_profile;
+
+
+CREATE FOREIGN TABLE session_fdw (key text, value text, ttl bigint)
+    SERVER redis_server
+    OPTIONS (
+        database '0',
+        table_type 'string',
+        table_key_prefix 'session:*',
+        ttl '300'
+    );
+
+INSERT INTO session_fdw VALUES ('session:user1', '{"logged_in": true, "ip": "10.0.0.1"}',10);
+INSERT INTO session_fdw VALUES ('session:user2', '{"logged_in": true, "ip": "10.0.0.2"}',20);
+INSERT INTO session_fdw VALUES ('session:user3', '{"logged_in": true, "ip": "10.0.0.3"}');
+
+SELECT * FROM session_fdw where key in ('session:user1','session:user2','session:user3');
+
 -- Cleanup
 DROP FOREIGN TABLE demo_cache_persist;
+DROP FOREIGN TABLE session_fdw;

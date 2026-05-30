@@ -288,6 +288,11 @@ OPTIONS (
 );
 ```
 
+- All single-key table operations (SELECT/INSERT/UPDATE/DELETE/TRUNCATE) work transparently
+- Multi-key pattern tables support key pushdown (`WHERE key = 'x'` or `key IN (...)`)
+- Batch INSERT distributes keys across shards automatically
+- TTL (table-level and per-row) works correctly
+
 ### TLS/SSL
 
 | Scheme | Behavior |
@@ -527,6 +532,11 @@ The FDW automatically detects which columns are used in the join condition from 
 - Both datasets are loaded into memory for the hash join (warning emitted if >500K rows)
 - Redis command errors during join fetch are raised as SQL errors (no silent data loss)
 - LEFT JOIN unmatched rows produce proper SQL NULLs (not string literals)
+
+**Cluster limitations:**
+- Multi-key full SCAN (`SELECT *` from pattern tables) is not supported
+- `WHERE key LIKE 'prefix%'` (narrowed SCAN) is not supported
+- Multi-key TRUNCATE (requires SCAN) is not supported
 
 ### Performance Tips for JOINs
 

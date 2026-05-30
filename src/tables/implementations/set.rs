@@ -9,6 +9,7 @@ use crate::{
         types::{DataSet, LoadDataResult},
     },
 };
+use smallvec::SmallVec;
 
 /// Redis Set table type
 #[derive(Debug, Clone, Default)]
@@ -360,11 +361,27 @@ impl RedisTableOperations for RedisSetTable {
         keys: &[String],
     ) -> Result<Vec<String>, redis::RedisError> {
         const PER_KEY_WARN_THRESHOLD: usize = 200_000;
-        let mut pipe = redis::pipe();
-        for key in keys {
-            pipe.cmd("SMEMBERS").arg(key);
-        }
-        let results: Vec<Vec<String>> = pipe.query(conn)?;
+
+        let pipe_result: Result<Vec<Vec<String>>, _> = {
+            let mut pipe = redis::pipe();
+            for key in keys {
+                pipe.cmd("SMEMBERS").arg(key);
+            }
+            pipe.query(conn)
+        };
+
+        let results = match pipe_result {
+            Ok(r) => r,
+            Err(_) => {
+                let mut results: SmallVec<[Vec<String>; 8]> = SmallVec::with_capacity(keys.len());
+                for key in keys {
+                    let r: Vec<String> = redis::cmd("SMEMBERS").arg(key).query(conn)?;
+                    results.push(r);
+                }
+                results.into_vec()
+            }
+        };
+
         let mut all_rows = Vec::with_capacity(keys.len() * self.multi_key_columns_per_row());
         for (key, members) in keys.iter().zip(results) {
             pgrx::check_for_interrupts!();

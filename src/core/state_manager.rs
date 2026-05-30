@@ -16,6 +16,7 @@ use crate::{
     tables::types::{DataContainer, DataSet, RedisTableType, RowVec},
 };
 use pgrx::{pg_sys, pg_sys::MemoryContext, prelude::*};
+use smallvec::SmallVec;
 use std::collections::HashMap;
 
 const SINGLE_KEY_WARN_THRESHOLD: usize = 500_000;
@@ -614,15 +615,22 @@ impl RedisFdwState {
         if self.ttl_column_index.is_some() {
             self.multi_key_ttl_cache.clear();
             for chunk in keys.chunks(1000) {
-                let mut pipe = redis::pipe();
-                for key in chunk {
-                    pipe.cmd("TTL").arg(key);
-                }
-                let ttls: Vec<i64> = match pipe.query(conn) {
+                let pipe_result: Result<Vec<i64>, _> = {
+                    let mut pipe = redis::pipe();
+                    for key in chunk {
+                        pipe.cmd("TTL").arg(key);
+                    }
+                    pipe.query(conn)
+                };
+                let ttls = match pipe_result {
                     Ok(v) => v,
-                    Err(e) => {
-                        log!("WARNING: Redis pipeline TTL error: {}", e);
-                        vec![-2; chunk.len()]
+                    Err(_) => {
+                        let mut ttls: SmallVec<[i64; 64]> = SmallVec::with_capacity(chunk.len());
+                        for key in chunk {
+                            let ttl: i64 = redis::cmd("TTL").arg(key).query(conn).unwrap_or(-2);
+                            ttls.push(ttl);
+                        }
+                        ttls.into_vec()
                     }
                 };
                 for (key, ttl) in chunk.iter().zip(ttls) {

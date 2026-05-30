@@ -9,6 +9,9 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 **Feature-complete for all CRUD operations plus EXPLAIN, batch INSERT, TRUNCATE, IMPORT FOREIGN SCHEMA, ANALYZE, and COPY FROM.** All Redis types (String, Hash, List, Set, ZSet) support SELECT, INSERT, UPDATE, DELETE, TRUNCATE. Stream supports SELECT, INSERT, DELETE, TRUNCATE only (append-only by design).
 
 ### Recent Work
+- Cluster multi-key pipeline fallback: `load_multi_key_data()` for hash/set/zset/list now uses "try pipeline, fall back to individual commands" pattern for Redis Cluster compatibility (cluster `ClusterConnection` doesn't support `redis::pipe()`)
+- Cluster TTL pipeline fallback: `fetch_multi_key_optimized()` TTL batch in `state_manager.rs` uses same try-pipe-then-individual pattern — TTL values now show real remaining seconds in cluster mode (previously returned -2)
+- SmallVec optimization: fallback paths use `SmallVec<[T; 8]>` (or `SmallVec<[i64; 64]>` for TTL) to avoid heap allocation for typical small key sets from pushdown queries
 - Multi-key pushdown optimization: WHERE conditions on the key column (`=`, `IN`, `LIKE`) bypass full SCAN — direct GET for `=`, pipelined batch for `IN`, narrowed `SCAN MATCH` for `LIKE`
 - `compute_key_column_index()` in `column_utils.rs`: determines key column position accounting for TTL column placement
 - TTL-position-aware modify path: `add_foreign_update_targets` now skips TTL column at position 0, fixing DELETE/UPDATE crashes on TTL-first tables
@@ -45,7 +48,9 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 - Auto-release GitHub pipeline on `v*` tags
 
 ### Known Issues
-- Cluster integration tests (9 tests) fail without Redis Cluster infrastructure running
+- Cluster mode: `SCAN`-based operations (full multi-key scan without key pushdown, `LIKE` pushdown, `TRUNCATE` on patterns) are not yet supported in cluster mode — requires per-node SCAN iteration
+- Cluster mode: List type multi-key INSERT misroutes the key column (treats key as element) — separate fix needed
+- Cluster integration tests (9 tests) require Redis Cluster infrastructure on ports 7001-7006
 - All non-cluster tests pass (including 28 JOIN tests, 16 column validation tests, and 4 pool performance tests)
 
 ## How to Work on This Project

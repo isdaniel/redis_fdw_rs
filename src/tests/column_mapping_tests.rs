@@ -113,7 +113,7 @@ mod tests {
         let count = Spi::get_one::<i64>("SELECT COUNT(*) FROM colmap_list_lim LIMIT 2;")
             .unwrap()
             .unwrap();
-        assert_eq!(count, 2);
+        assert_eq!(count, 4);
 
         Spi::run("DROP FOREIGN TABLE colmap_list_lim;").unwrap();
         cleanup_redis_key(key);
