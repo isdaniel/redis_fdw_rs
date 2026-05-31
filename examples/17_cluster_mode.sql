@@ -333,7 +333,7 @@ INSERT INTO cluster_trunc_hash VALUES ('b', '2');
 INSERT INTO cluster_trunc_hash VALUES ('c', '3');
 SELECT * FROM cluster_trunc_hash;
 
-
+TRUNCATE cluster_trunc_hash;
 SELECT * FROM cluster_trunc_hash;
 
 

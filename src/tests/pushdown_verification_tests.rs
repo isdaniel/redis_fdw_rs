@@ -507,4 +507,47 @@ mod tests {
         teardown_fdw(table);
         cleanup_redis_key(key);
     }
+
+    // ── LIMIT + ORDER BY correctness ───────────────────────────────────
+
+    #[pg_test]
+    fn test_pushdown_verify_limit_not_pushed_with_order_by() {
+        let table = "pv_list_order_limit";
+        let key = "pv_test:list_order_limit";
+        cleanup_redis_key(key);
+        setup_fdw(table, "element text", "list", key);
+
+        for i in 0..10 {
+            Spi::run(&format!("INSERT INTO {table} VALUES ('item_{i:02}');")).unwrap();
+        }
+
+        let count = get_count(&format!(
+            "SELECT COUNT(*) FROM (SELECT element FROM {table} ORDER BY element LIMIT 5) sub"
+        ));
+        assert_eq!(
+            count, 5,
+            "ORDER BY ... LIMIT 5 on 10-element list should return 5 rows"
+        );
+
+        let first = get_one(&format!(
+            "SELECT element FROM {table} ORDER BY element ASC LIMIT 1"
+        ));
+        assert_eq!(
+            first.as_deref(),
+            Some("item_00"),
+            "ORDER BY ASC LIMIT 1 should return the smallest element"
+        );
+
+        let last = get_one(&format!(
+            "SELECT element FROM {table} ORDER BY element DESC LIMIT 1"
+        ));
+        assert_eq!(
+            last.as_deref(),
+            Some("item_09"),
+            "ORDER BY DESC LIMIT 1 should return the largest element"
+        );
+
+        teardown_fdw(table);
+        cleanup_redis_key(key);
+    }
 }

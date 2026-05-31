@@ -54,11 +54,12 @@ pub unsafe fn extract_limit_offset_info(root: *mut pg_sys::PlannerInfo) -> Optio
         return None;
     }
 
-    // LIMIT/OFFSET cannot be pushed to the scan level when there are row-reducing operations above (aggregates, window funcs, GROUP BY, DISTINCT), In those cases the LIMIT applies to the output of the aggregate, not the base scan.
+    // LIMIT/OFFSET cannot be pushed to the scan level when there are row-reducing or reordering operations above. In those cases the LIMIT applies to the output of the aggregate/sort, not the base scan.
     if (*parse).hasAggs
         || (*parse).hasWindowFuncs
         || !(*parse).groupClause.is_null()
         || !(*parse).distinctClause.is_null()
+        || !(*parse).sortClause.is_null()
     {
         return None;
     }

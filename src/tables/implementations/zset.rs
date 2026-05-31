@@ -124,7 +124,7 @@ impl RedisZSetTable {
 
         if limit_offset.has_constraints() {
             let offset = limit_offset.offset.unwrap_or(0);
-            let limit = limit_offset.limit.unwrap_or(usize::MAX);
+            let limit = limit_offset.limit.unwrap_or(i64::MAX as usize);
             cmd.arg("LIMIT").arg(offset).arg(limit);
         }
 
