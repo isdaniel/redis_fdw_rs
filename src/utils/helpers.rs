@@ -51,13 +51,6 @@ unsafe fn get_options_from_fdw(relid: Oid) -> *mut pg_sys::List {
     opts_list
 }
 
-#[inline]
-pub unsafe fn exec_clear_tuple(slot: *mut pgrx::pg_sys::TupleTableSlot) {
-    if let Some(clear) = (*(*slot).tts_ops).clear {
-        clear(slot);
-    }
-}
-
 pub unsafe fn tuple_table_slot_to_row(slot: *mut pgrx::pg_sys::TupleTableSlot) -> Row {
     let tup_desc = PgTupleDesc::from_pg_copy((*slot).tts_tupleDescriptor);
 

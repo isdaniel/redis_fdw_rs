@@ -17,7 +17,7 @@ pg_test = []
 
 [dependencies]
 pgrx = "=0.18.0"
-redis = { version = "1.2.1", features = ["cluster", "streams", "r2d2", "tls-rustls", "tls-rustls-insecure"] }
+redis = { version = "1.2.2", features = ["cluster", "streams", "r2d2", "tls-rustls", "tls-rustls-insecure"] }
 thiserror = "2.0.18"
 rand = "0.10.1"
 r2d2 = "0.8.10"

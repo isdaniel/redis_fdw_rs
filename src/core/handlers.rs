@@ -22,7 +22,7 @@ use crate::{
     utils::{helpers::*, memory::create_wrappers_memctx, row::Row},
 };
 use pgrx::{
-    pg_sys::{Index, ModifyTable, PlannerInfo},
+    pg_sys::{ExecClearTuple, Index, ModifyTable, PlannerInfo},
     prelude::*,
     PgMemoryContexts, PgRelation,
 };
@@ -441,7 +441,7 @@ unsafe extern "C-unwind" fn iterate_foreign_scan(
     let slot = (*node).ss.ss_ScanTupleSlot;
     let tupdesc = (*slot).tts_tupleDescriptor;
 
-    exec_clear_tuple(slot);
+    ExecClearTuple(slot);
 
     // Join pushdown mode
     if state.is_join_scan {
