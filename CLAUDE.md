@@ -38,7 +38,7 @@ cargo fmt
 ## Key Architecture
 
 ### Module Structure
-- `src/core/` — FDW handler callbacks (`handlers.rs`), join pushdown logic (`join_handlers.rs`), EXPLAIN output (`explain.rs`), schema import & analyze (`schema_import.rs`), truncate (`truncate.rs`), shared column/TTL utilities (`column_utils.rs`), state management (`state_manager.rs`), connection pool (`pool_manager.rs`), connection factory (`connection_factory.rs`), DDL validator (`validator.rs`), DDL-time column validation hook (`ddl_hook.rs`)
+- `src/core/` — FDW handler callbacks (`handlers.rs`), join pushdown logic (`join_handlers.rs`), EXPLAIN output (`explain/` — `report.rs` pure-Rust model, `emit.rs` pg_sys adapter, `mod.rs` handlers), schema import & analyze (`schema_import.rs`), truncate (`truncate.rs`), shared column/TTL utilities (`column_utils.rs`), state management (`state_manager.rs`), connection pool (`pool_manager.rs`), connection factory (`connection_factory.rs`), DDL validator (`validator.rs`), DDL-time column validation hook (`ddl_hook.rs`)
 - `src/tables/` — Trait interface (`interface.rs`), type enum + dispatch (`types.rs`, `macros.rs`), per-type implementations in `implementations/`
 - `src/query/` — WHERE pushdown (`pushdown.rs`), cost estimation (`cost_estimation.rs`), LIMIT handling (`limit.rs`), scan ops (`scan_ops.rs`)
 - `src/join/` — JOIN support: FDW-to-FDW pushdown (`foreign_join.rs`), types (`types.rs`)
@@ -53,7 +53,7 @@ cargo fmt
 2. **Scanning**: `begin_foreign_scan` → `iterate_foreign_scan` → `re_scan_foreign_scan` → `end_foreign_scan`
    - `recheck_foreign_scan` (returns true; no lossy filtering)
    - `shutdown_foreign_scan` (early connection release back to pool)
-3. **Explain**: `explain_foreign_scan`, `explain_foreign_modify` (EXPLAIN output with server, key, type, pushdown, batch info)
+3. **Explain**: `explain_foreign_scan`, `explain_foreign_modify`. Output is built by `ExplainReport` (pure Rust in `src/core/explain/report.rs`) then rendered via `emit()`. Labels: `Redis Server`, `Redis Key`, `Table Type`, `Multi-Key Mode`, `Pushdown`, `Pushdown Skipped` (when blocked), `Redis Ops`, `Batch Size`. Join scans emit `Redis Join` and `Redis Server`. `ANALYZE` adds `Rows Fetched`.
 4. **Modify**: `plan_foreign_modify` → `begin_foreign_modify` → `exec_foreign_insert`/`update`/`delete` → `end_foreign_modify`
    - `add_foreign_update_targets` registers the row identity column (first non-TTL column) for UPDATE/DELETE operations; skips TTL column at position 0
 5. **Batch Insert**: `get_foreign_modify_batch_size` → `exec_foreign_batch_insert` (pipelined multi-row)

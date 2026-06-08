@@ -79,3 +79,6 @@ pub mod ddl_validation_tests;
 
 #[cfg(any(test, feature = "pg_test"))]
 pub mod ffi_safety_tests;
+
+#[cfg(any(test, feature = "pg_test"))]
+pub mod explain_tests;
