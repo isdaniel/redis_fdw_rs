@@ -10,7 +10,8 @@
 -- 1. Create the extension
 CREATE EXTENSION IF NOT EXISTS redis_fdw_rs;
 
--- 2. Create the Foreign Data Wrapper
+-- 2. Create the Foreign Data Wrapper (idempotent: drop + recreate)
+DROP FOREIGN DATA WRAPPER IF EXISTS redis_wrapper CASCADE;
 CREATE FOREIGN DATA WRAPPER redis_wrapper
     HANDLER redis_fdw_handler
     VALIDATOR redis_fdw_validator;

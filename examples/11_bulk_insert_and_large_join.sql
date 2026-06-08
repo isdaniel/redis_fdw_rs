@@ -11,6 +11,16 @@
 --   Part 3: Pushdown JOIN — Redis FDW ↔ Redis FDW.
 --             SET membership + HASH lookup, both pushed.
 --   Part 4: Bonus — ZSet score-range pushdown at scale.
+--   Part 5: Parameterized JOIN with join_batch_size + per-param
+--             cache. Today's NestLoop drives one outer row at a
+--             time, so the fast path issues a single direct
+--             HGET / SISMEMBER / ZSCORE / GET per cache miss
+--             (no pipeline needed). join_batch_size caps the
+--             per-param cache to avoid unbounded memory growth;
+--             the pipelined HMGET / SISMEMBER / ZSCORE / MGET
+--             path stays ready for when a future planner sends
+--             multi-param batches. A/B with join_batch_size '1'
+--             shows the cache effect.
 --
 -- The trick: PG only pushes "field = $1" when the planner picks
 -- a Nested Loop with a parameterized inner-side Foreign Scan.
@@ -136,7 +146,7 @@ EXPLAIN (ANALYZE, VERBOSE)
 SELECT a.member AS user_id, p.value AS profile
 FROM bulk_active_users a
 JOIN bulk_user_profiles p ON p.field = a.member
-WHERE a.member qIN (
+WHERE a.member IN (
     'user:1','user:42','user:100','user:777','user:9999',
     'user:12345','user:55555','user:88888','user:99999','user:99000'
 );
@@ -177,6 +187,87 @@ WHERE score >= 99000
 ORDER BY score DESC;
 
 -- ============================================================
+-- PART 5: Batched parameterized JOIN — join_batch_size in action
+-- ============================================================
+-- New in PR-2: when the planner picks a parameterized nested-loop,
+-- the FDW routes the inner lookup through batch_parameterized_lookup
+-- with a per-param cache (capped at join_batch_size). NestLoop today
+-- drives one outer row at a time, so the params.len()==1 fast path
+-- issues a single direct command (HGET / SISMEMBER / ZSCORE / GET).
+-- The pipelined fallback (HMGET / pipelined SISMEMBER / pipelined
+-- ZSCORE / MGET) is kept ready for if/when the planner sends
+-- multi-param batches.
+--
+-- EXPLAIN shows three new labels on the inner Foreign Scan:
+--   Join Batch Size: 256 rows                  -- (cache cap)
+--   Join Batch Mode: pipeline | fallback | n/a -- (multi-param mode)
+--   Redis Ops: HGET, HMGET                     -- (single-param fast / multi-param fallback)
+--   Pushdown In Join: <condition> (filtered after lookup)
+--
+-- Mode is "pipeline" on standalone, "fallback" on cluster
+-- (ClusterConnection rejects multi-key pipelines), "n/a" otherwise.
+
+-- 5A. Default join_batch_size (256) — fast-path HGET per cache miss
+CREATE FOREIGN TABLE bulk_user_profiles_batched (field text, value text)
+    SERVER redis_server
+    OPTIONS (
+        database '0',
+        table_type 'hash',
+        table_key_prefix 'demo11:users:profiles',  -- reuse PART 1 data
+        batch_size '10000',
+        join_batch_size '256'
+    );
+
+EXPLAIN (ANALYZE, VERBOSE)
+SELECT v.user_id, p.value
+FROM vip_users v
+JOIN bulk_user_profiles_batched p ON p.field = v.user_id;
+
+-- 5B. A/B comparison — same join with the per-param cache disabled (cap=1)
+CREATE FOREIGN TABLE bulk_user_profiles_unbatched (field text, value text)
+    SERVER redis_server
+    OPTIONS (
+        database '0',
+        table_type 'hash',
+        table_key_prefix 'demo11:users:profiles',
+        batch_size '10000',
+        join_batch_size '1'
+    );
+
+EXPLAIN (ANALYZE, VERBOSE)
+SELECT v.user_id, p.value
+FROM vip_users v
+JOIN bulk_user_profiles_unbatched p ON p.field = v.user_id;
+
+-- 5C. ZSet score-range under a join — uses ZSCORE per outer row
+--     (single direct command in the params.len()==1 fast-path).
+--     The score range is applied as a post-fetch filter.
+--     EXPLAIN shows "Redis Ops: ZSCORE" and
+--     "Pushdown In Join: score >= '50000' (filtered after lookup)".
+--     ZRANGEBYSCORE is intentionally NOT used in the per-param join
+--     path — it would fetch the whole range per outer row, which is
+--     catastrophically slow on low-selectivity ranges.
+CREATE FOREIGN TABLE bulk_leaderboard_batched (member text, score float8)
+    SERVER redis_server
+    OPTIONS (
+        database '0',
+        table_type 'zset',
+        table_key_prefix 'demo11:leaderboard',
+        batch_size '10000',
+        join_batch_size '256'
+    );
+
+CREATE TEMPORARY TABLE leaderboard_picks (player_id text PRIMARY KEY);
+INSERT INTO leaderboard_picks
+SELECT 'player:' || g::text FROM generate_series(1, 200) g;
+
+EXPLAIN (ANALYZE, VERBOSE)
+SELECT lp.player_id, lb.score
+FROM leaderboard_picks lp
+JOIN bulk_leaderboard_batched lb ON lb.member = lp.player_id
+WHERE lb.score >= 50000;
+
+-- ============================================================
 -- Cleanup
 -- ============================================================
 TRUNCATE bulk_user_profiles_slow;
@@ -185,6 +276,10 @@ TRUNCATE bulk_active_users;
 TRUNCATE bulk_leaderboard;
 DROP FOREIGN TABLE bulk_user_profiles_slow;
 DROP FOREIGN TABLE bulk_user_profiles;
+DROP FOREIGN TABLE bulk_user_profiles_batched;
+DROP FOREIGN TABLE bulk_user_profiles_unbatched;
 DROP FOREIGN TABLE bulk_active_users;
 DROP FOREIGN TABLE bulk_leaderboard;
+DROP FOREIGN TABLE bulk_leaderboard_batched;
 DROP TABLE vip_users;
+DROP TABLE leaderboard_picks;

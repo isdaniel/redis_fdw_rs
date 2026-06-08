@@ -409,4 +409,52 @@ impl RedisTableOperations for RedisSetTable {
     fn set_filtered_data(&mut self, data: Vec<String>) {
         self.dataset = DataSet::Filtered(data);
     }
+
+    fn batch_parameterized_lookup(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        params: &[String],
+    ) -> Result<Vec<Option<Vec<String>>>, redis::RedisError> {
+        if params.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Fast path: NestLoop today drives one outer row at a time, so
+        // params.len() is usually 1. Skip the pipeline overhead (and
+        // pipeline-not-supported failure on cluster) for the common case.
+        if params.len() == 1 {
+            let p = &params[0];
+            let hit: bool = redis::cmd("SISMEMBER").arg(key_prefix).arg(p).query(conn)?;
+            return Ok(vec![if hit { Some(vec![p.clone()]) } else { None }]);
+        }
+
+        let mut pipe = redis::pipe();
+        for p in params {
+            pipe.cmd("SISMEMBER").arg(key_prefix).arg(p);
+        }
+        let pipeline_result: Result<Vec<bool>, redis::RedisError> = pipe.query(conn);
+
+        let bools: Vec<bool> = match pipeline_result {
+            Ok(v) => v,
+            Err(e) => {
+                pgrx::log!(
+                    "redis_fdw: SISMEMBER pipeline failed, falling back per-key: {}",
+                    e
+                );
+                let mut out = Vec::with_capacity(params.len());
+                for p in params {
+                    let hit: bool = redis::cmd("SISMEMBER").arg(key_prefix).arg(p).query(conn)?;
+                    out.push(hit);
+                }
+                out
+            }
+        };
+
+        Ok(bools
+            .into_iter()
+            .zip(params.iter())
+            .map(|(hit, p)| if hit { Some(vec![p.clone()]) } else { None })
+            .collect())
+    }
 }

@@ -288,4 +288,43 @@ impl RedisTableOperations for RedisStringTable {
     fn set_filtered_data(&mut self, data: Vec<String>) {
         self.dataset = DataSet::Filtered(data);
     }
+
+    fn batch_parameterized_lookup(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        _key_prefix: &str,
+        params: &[String],
+    ) -> Result<Vec<Option<Vec<String>>>, redis::RedisError> {
+        if params.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Fast path for single-param (NestLoop's common shape today): direct
+        // GET is lighter than MGET when there's only one key.
+        if params.len() == 1 {
+            let p = &params[0];
+            let v: Option<String> = redis::cmd("GET").arg(p).query(conn)?;
+            return Ok(vec![v.map(|val| vec![p.clone(), val])]);
+        }
+
+        let pipeline_result: Result<Vec<Option<String>>, redis::RedisError> =
+            redis::cmd("MGET").arg(params).query(conn);
+
+        match pipeline_result {
+            Ok(values) => Ok(values
+                .into_iter()
+                .zip(params.iter())
+                .map(|(v, p)| v.map(|val| vec![p.clone(), val]))
+                .collect()),
+            Err(e) => {
+                pgrx::log!("redis_fdw: MGET failed, falling back per-key: {}", e);
+                let mut out = Vec::with_capacity(params.len());
+                for p in params {
+                    let v: Option<String> = redis::cmd("GET").arg(p).query(conn)?;
+                    out.push(v.map(|val| vec![p.clone(), val]));
+                }
+                Ok(out)
+            }
+        }
+    }
 }

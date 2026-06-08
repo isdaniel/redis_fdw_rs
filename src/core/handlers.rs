@@ -366,6 +366,25 @@ extern "C-unwind" fn begin_foreign_scan(
                 }
             }
 
+            if let Some(v) = state.opts.get("join_batch_size") {
+                if let Ok(n) = v.parse::<usize>() {
+                    state.join_batch_size = n.clamp(1, 4096);
+                }
+            }
+
+            state.join_batch_mode = if state.join_batch_size <= 1 {
+                crate::core::state_manager::BatchMode::NotApplicable
+            } else if state
+                .redis_connection
+                .as_ref()
+                .map(|c| c.is_cluster())
+                .unwrap_or(false)
+            {
+                crate::core::state_manager::BatchMode::Fallback
+            } else {
+                crate::core::state_manager::BatchMode::Pipeline
+            };
+
             state.set_table_type();
         });
 
@@ -663,6 +682,8 @@ extern "C-unwind" fn re_scan_foreign_scan(node: *mut pgrx::pg_sys::ForeignScanSt
             state.scan_complete = false;
             state.cached_ttl = None;
             state.multi_key_ttl_cache.clear();
+            // Clear parameterized-join lookup cache so re-execution sees fresh Redis state.
+            state.join_batch_cache.clear();
             state.table_type.clear_data();
         }
     }

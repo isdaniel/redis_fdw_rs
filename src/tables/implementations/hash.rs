@@ -453,4 +453,47 @@ impl RedisTableOperations for RedisHashTable {
     fn multi_key_columns_per_row(&self) -> usize {
         3
     }
+
+    fn batch_parameterized_lookup(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        params: &[String],
+    ) -> Result<Vec<Option<Vec<String>>>, redis::RedisError> {
+        if params.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Fast path for single-param (NestLoop's common shape today): direct
+        // HGET is lighter than HMGET when there's only one field.
+        if params.len() == 1 {
+            let p = &params[0];
+            let v: Option<String> = redis::cmd("HGET").arg(key_prefix).arg(p).query(conn)?;
+            return Ok(vec![v.map(|val| vec![p.clone(), val])]);
+        }
+
+        let pipeline_result: Result<Vec<Option<String>>, redis::RedisError> =
+            redis::cmd("HMGET").arg(key_prefix).arg(params).query(conn);
+
+        match pipeline_result {
+            Ok(values) => Ok(values
+                .into_iter()
+                .zip(params.iter())
+                .map(|(v, p)| v.map(|val| vec![p.clone(), val]))
+                .collect()),
+            Err(e) => {
+                pgrx::log!(
+                    "redis_fdw: HMGET failed during batch parameterized lookup, falling back: {}",
+                    e
+                );
+                let mut out = Vec::with_capacity(params.len());
+                for p in params {
+                    let v: Option<String> =
+                        redis::cmd("HGET").arg(key_prefix).arg(p).query(conn)?;
+                    out.push(v.map(|val| vec![p.clone(), val]));
+                }
+                Ok(out)
+            }
+        }
+    }
 }

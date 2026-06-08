@@ -13,12 +13,25 @@ use crate::{
         pushdown_types::{ComparisonOperator, PushdownAnalysis},
         scan_ops::PatternMatcher,
     },
-    tables::types::{DataContainer, DataSet, RedisTableType, RowVec},
+    tables::{
+        interface::RedisTableOperations,
+        types::{RedisTableType, RowVec},
+    },
 };
 use pgrx::{pg_sys, pg_sys::MemoryContext, prelude::*};
 use std::collections::HashMap;
 
 const SINGLE_KEY_WARN_THRESHOLD: usize = 500_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchMode {
+    /// Not a parameterized scan, or join_batch_size == 1.
+    NotApplicable,
+    /// redis::pipe() multi-command.
+    Pipeline,
+    /// Per-key fallback (cluster).
+    Fallback,
+}
 
 /// Simplified Redis FDW state focused on state management
 pub struct RedisFdwState {
@@ -52,6 +65,13 @@ pub struct RedisFdwState {
     pub cached_ttl: Option<i64>,
     /// Cached TTL values for multi-key mode (batch-fetched via pipeline)
     pub multi_key_ttl_cache: HashMap<String, i64>,
+    /// Batch size for parameterized join lookups (default 256).
+    pub join_batch_size: usize,
+    /// Cache populated lazily on first miss during a parameterized scan;
+    /// keyed by param value, holds the row that was returned (or absence).
+    pub join_batch_cache: std::collections::HashMap<String, Option<Vec<String>>>,
+    /// Whether batching uses pipelined Redis (standalone) or per-key fallback (cluster).
+    pub join_batch_mode: BatchMode,
     /// Whether this is a join pushdown scan (FDW-to-FDW on same server)
     pub is_join_scan: bool,
     /// Join execution state (populated during begin_foreign_scan for join scans)
@@ -95,6 +115,9 @@ impl RedisFdwState {
             strict_key_prefix: false,
             cached_ttl: None,
             multi_key_ttl_cache: HashMap::new(),
+            join_batch_size: 256,
+            join_batch_cache: std::collections::HashMap::new(),
+            join_batch_mode: BatchMode::NotApplicable,
             is_join_scan: false,
             join_state: None,
             join_executed: false,
@@ -1236,114 +1259,157 @@ impl RedisFdwState {
     }
 
     /// Execute a parameterized point-lookup for a single value.
-    /// Used during NestLoop joins to fetch only the matching row instead of full scan.
+    /// Consults `join_batch_cache` first; on miss, calls the per-type
+    /// `batch_parameterized_lookup` for one element and caches the result.
+    /// Applies any pushable WHERE conditions post-fetch so Redis-side
+    /// predicates narrow rows even when a join chose the parameterized path.
+    ///
+    /// NOTE on "batching": PostgreSQL's NestLoop executor drives the inner
+    /// FDW scan one row at a time, so we cannot synchronously assemble a
+    /// batch of outer keys here — `params` is always a single-element slice
+    /// today. The amortization comes from `join_batch_cache` collapsing
+    /// repeated outer keys to one round-trip; `join_batch_size` is thus
+    /// effectively the *cache* size cap. True look-ahead batching (gathering
+    /// N future outer values before issuing one MGET/HMGET) requires either
+    /// CustomScan or asynchronous Foreign Scan paths — tracked as follow-up.
+    /// The per-type `batch_parameterized_lookup` impls accept slices >1 so
+    /// the trait surface is ready when that follow-up lands.
     pub fn parameterized_lookup(&mut self, param_value: &str) -> bool {
-        let conn = match self.redis_connection.as_mut() {
-            Some(c) => c.as_connection_like_mut(),
-            None => return false,
+        // Fast path: cache hit (either Some(row) or None for known miss).
+        if let Some(cached) = self.join_batch_cache.get(param_value).cloned() {
+            return self.apply_cached_lookup(cached);
+        }
+
+        // Slow path: fetch via the per-type batch trait method (single param for now).
+        // Borrow `table_key_prefix` immutably alongside the mutable borrows of
+        // `redis_connection` / `table_type` — Rust's split-borrow allows this
+        // since they're disjoint fields, saving a String clone per cache miss.
+        let key_prefix: &str = &self.table_key_prefix;
+        let params = [param_value.to_string()];
+
+        // batch_parameterized_lookup returns Result so per-type impls don't
+        // call pgrx::error! (which longjmps past Rust destructors). We handle
+        // the Err here at the FDW boundary, where the call stack is shallow.
+        let lookup_result: Result<Vec<Option<Vec<String>>>, redis::RedisError> = {
+            let conn = match self.redis_connection.as_mut() {
+                Some(c) => c.as_connection_like_mut(),
+                None => return false,
+            };
+            use crate::tables::types::RedisTableType as RT;
+            match &mut self.table_type {
+                RT::String(t) => t.batch_parameterized_lookup(conn, key_prefix, &params),
+                RT::Hash(t) => t.batch_parameterized_lookup(conn, key_prefix, &params),
+                RT::List(t) => t.batch_parameterized_lookup(conn, key_prefix, &params),
+                RT::Set(t) => t.batch_parameterized_lookup(conn, key_prefix, &params),
+                RT::ZSet(t) => t.batch_parameterized_lookup(conn, key_prefix, &params),
+                RT::Stream(t) => t.batch_parameterized_lookup(conn, key_prefix, &params),
+                RT::None => Ok(vec![None]),
+            }
+        };
+        let lookup_result = match lookup_result {
+            Ok(v) => v,
+            Err(e) => pgrx::error!(
+                "redis_fdw: parameterized lookup for '{}' failed: {}",
+                param_value,
+                e
+            ),
         };
 
-        match &mut self.table_type {
-            RedisTableType::Hash(ref mut t) => {
-                if self.param_column == t.pushdown_column_index {
-                    let val: Option<String> = match redis::cmd("HGET")
-                        .arg(&self.table_key_prefix)
-                        .arg(param_value)
-                        .query(conn)
-                    {
-                        Ok(v) => v,
-                        Err(e) => {
-                            pgrx::warning!(
-                                "redis_fdw: HGET failed during parameterized lookup: {}",
-                                e
-                            );
-                            None
-                        }
-                    };
-                    if let Some(v) = val {
-                        t.dataset = DataSet::Filtered(vec![param_value.to_string(), v]);
-                        return true;
-                    }
-                    t.dataset = DataSet::Empty;
-                }
-                false
-            }
-            RedisTableType::Set(ref mut t) => {
-                let exists: bool = match redis::cmd("SISMEMBER")
-                    .arg(&self.table_key_prefix)
-                    .arg(param_value)
-                    .query(conn)
-                {
-                    Ok(v) => v,
-                    Err(e) => {
-                        pgrx::warning!(
-                            "redis_fdw: SISMEMBER failed during parameterized lookup: {}",
-                            e
-                        );
-                        false
-                    }
-                };
-                if exists {
-                    t.dataset = DataSet::Filtered(vec![param_value.to_string()]);
-                    true
-                } else {
-                    t.dataset = DataSet::Empty;
-                    false
-                }
-            }
-            RedisTableType::ZSet(ref mut t) => {
-                if self.param_column == t.pushdown_column_index {
-                    let score: Option<f64> = match redis::cmd("ZSCORE")
-                        .arg(&self.table_key_prefix)
-                        .arg(param_value)
-                        .query(conn)
-                    {
-                        Ok(v) => v,
-                        Err(e) => {
-                            pgrx::warning!(
-                                "redis_fdw: ZSCORE failed during parameterized lookup: {}",
-                                e
-                            );
-                            None
-                        }
-                    };
-                    if let Some(s) = score {
-                        t.dataset = DataSet::Complete(DataContainer::ZSet(vec![(
-                            param_value.to_string(),
-                            s,
-                        )]));
-                        return true;
-                    }
-                    t.dataset = DataSet::Empty;
-                }
-                false
-            }
-            RedisTableType::String(ref mut t) => {
-                let expected_col = crate::core::column_utils::compute_pushdown_column_index(
-                    self.ttl_column_index,
-                    false,
-                );
-                if self.is_multi_key && self.param_column == expected_col {
-                    let val: Option<String> = match redis::cmd("GET").arg(param_value).query(conn) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            pgrx::warning!(
-                                "redis_fdw: GET failed during parameterized lookup: {}",
-                                e
-                            );
-                            None
-                        }
-                    };
-                    if let Some(v) = val {
-                        t.dataset = DataSet::Filtered(vec![param_value.to_string(), v]);
-                        return true;
-                    }
-                    t.dataset = DataSet::Empty;
-                }
-                false
-            }
-            _ => false,
+        let row = lookup_result.into_iter().next().flatten();
+        // Enforce `join_batch_size` as the cache-size cap. Once full, further
+        // misses still serve correctly (they just won't be cached for repeat
+        // probes). Prevents unbounded memory growth on joins with many
+        // distinct outer keys (which would otherwise OOM the PG backend).
+        if self.join_batch_cache.len() < self.join_batch_size {
+            self.join_batch_cache
+                .insert(param_value.to_string(), row.clone());
         }
+        self.apply_cached_lookup(row)
+    }
+
+    /// Take a (possibly cached) lookup result, apply WHERE filters, and
+    /// materialize it onto the type-specific dataset. Returns true if the
+    /// row survived filtering, false otherwise.
+    fn apply_cached_lookup(&mut self, row: Option<Vec<String>>) -> bool {
+        let Some(row) = row else {
+            self.table_type.clear_data();
+            return false;
+        };
+
+        if let Some(analysis) = self.pushdown_analysis.as_ref() {
+            for cond in &analysis.pushable_conditions {
+                if !row_matches_condition(&row, cond, self.ttl_column_index) {
+                    self.table_type.clear_data();
+                    return false;
+                }
+            }
+        }
+
+        self.table_type.set_multi_key_data(row);
+        true
+    }
+}
+
+/// Evaluate a single PushableCondition against a row by column index.
+///
+/// `cond.column_index` is the 0-based attribute index in the PostgreSQL tuple
+/// descriptor — which INCLUDES the optional TTL column. The `row` returned
+/// from Redis does NOT include the TTL column. So when a TTL column is
+/// present at or before `cond.column_index`, we have to translate the index:
+///
+/// - if cond targets the TTL column itself → always matches (we don't have
+///   the row's TTL here; PG will filter)
+/// - if cond targets a column AFTER the TTL → subtract one
+///
+/// Returns true if the row matches (or if the translated index is out of
+/// range — be permissive rather than drop legitimate data).
+fn row_matches_condition(
+    row: &[String],
+    cond: &crate::query::pushdown_types::PushableCondition,
+    ttl_column_index: Option<usize>,
+) -> bool {
+    use crate::query::pushdown_types::ComparisonOperator;
+    let mut col_idx = cond.column_index;
+    if let Some(ttl_idx) = ttl_column_index {
+        if col_idx == ttl_idx {
+            return true;
+        }
+        if col_idx > ttl_idx {
+            col_idx -= 1;
+        }
+    }
+    let cell = match row.get(col_idx) {
+        Some(s) => s,
+        None => return true,
+    };
+    match cond.operator {
+        ComparisonOperator::Equal => cell == &cond.value,
+        ComparisonOperator::NotEqual => cell != &cond.value,
+        ComparisonOperator::GreaterThan
+        | ComparisonOperator::GreaterThanOrEqual
+        | ComparisonOperator::LessThan
+        | ComparisonOperator::LessThanOrEqual => {
+            let (l, r) = (cell.parse::<f64>(), cond.value.parse::<f64>());
+            match (l, r) {
+                (Ok(a), Ok(b)) => match cond.operator {
+                    ComparisonOperator::GreaterThan => a > b,
+                    ComparisonOperator::GreaterThanOrEqual => a >= b,
+                    ComparisonOperator::LessThan => a < b,
+                    ComparisonOperator::LessThanOrEqual => a <= b,
+                    _ => unreachable!(),
+                },
+                _ => match cond.operator {
+                    ComparisonOperator::GreaterThan => cell.as_str() > cond.value.as_str(),
+                    ComparisonOperator::GreaterThanOrEqual => cell.as_str() >= cond.value.as_str(),
+                    ComparisonOperator::LessThan => cell.as_str() < cond.value.as_str(),
+                    ComparisonOperator::LessThanOrEqual => cell.as_str() <= cond.value.as_str(),
+                    _ => unreachable!(),
+                },
+            }
+        }
+        ComparisonOperator::Like => PatternMatcher::from_like_pattern(&cond.value).matches(cell),
+        ComparisonOperator::In => cond.value.split(',').any(|val| cell == val),
+        ComparisonOperator::NotIn => !cond.value.split(',').any(|val| cell == val),
     }
 }
 

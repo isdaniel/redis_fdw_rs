@@ -731,4 +731,57 @@ impl RedisTableOperations for RedisZSetTable {
     fn multi_key_columns_per_row(&self) -> usize {
         3
     }
+
+    fn batch_parameterized_lookup(
+        &mut self,
+        conn: &mut dyn redis::ConnectionLike,
+        key_prefix: &str,
+        params: &[String],
+    ) -> Result<Vec<Option<Vec<String>>>, redis::RedisError> {
+        if params.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Fast path for single-param (the only shape NestLoop produces today):
+        // direct ZSCORE avoids pipeline overhead and pipeline-not-supported
+        // failure on ClusterConnection.
+        if params.len() == 1 {
+            let p = &params[0];
+            let score: Option<f64> = redis::cmd("ZSCORE").arg(key_prefix).arg(p).query(conn)?;
+            return Ok(vec![score.map(|s| vec![p.clone(), s.to_string()])]);
+        }
+
+        // ZSCORE is O(1) per param. A score-range WHERE through the join is
+        // filtered post-fetch by row_matches_condition in state_manager.rs —
+        // doing ZRANGEBYSCORE per param would fetch the whole range every
+        // call (catastrophic on low-selectivity ranges), so we deliberately
+        // do NOT issue ZRANGEBYSCORE in the per-param join path.
+        let mut pipe = redis::pipe();
+        for p in params {
+            pipe.cmd("ZSCORE").arg(key_prefix).arg(p);
+        }
+        let pipeline_result: Result<Vec<Option<f64>>, redis::RedisError> = pipe.query(conn);
+
+        let scores: Vec<Option<f64>> = match pipeline_result {
+            Ok(v) => v,
+            Err(e) => {
+                pgrx::log!(
+                    "redis_fdw: ZSCORE pipeline failed, falling back per-key: {}",
+                    e
+                );
+                let mut out = Vec::with_capacity(params.len());
+                for p in params {
+                    let s: Option<f64> = redis::cmd("ZSCORE").arg(key_prefix).arg(p).query(conn)?;
+                    out.push(s);
+                }
+                out
+            }
+        };
+
+        Ok(scores
+            .into_iter()
+            .zip(params.iter())
+            .map(|(s, p)| s.map(|score| vec![p.clone(), score.to_string()]))
+            .collect())
+    }
 }

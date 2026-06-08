@@ -9,6 +9,9 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 **Feature-complete for all CRUD operations plus EXPLAIN, batch INSERT, TRUNCATE, IMPORT FOREIGN SCHEMA, ANALYZE, and COPY FROM.** All Redis types (String, Hash, List, Set, ZSet) support SELECT, INSERT, UPDATE, DELETE, TRUNCATE. Stream supports SELECT, INSERT, DELETE, TRUNCATE only (append-only by design).
 
 ### Recent Work
+- Parameterized join lookups with per-param cache: `RedisFdwState::parameterized_lookup` consults `join_batch_cache` (`HashMap<param, Option<row>>`, capped at `join_batch_size` to prevent unbounded growth) before issuing Redis commands. Misses dispatch to `RedisTableOperations::batch_parameterized_lookup`, which returns `Result<Vec<Option<Vec<String>>>, redis::RedisError>` so per-type impls propagate errors via `?` and `parameterized_lookup` raises `pgrx::error!` at the FDW boundary (avoids `longjmp` past Rust destructors deep inside table impls). NestLoop drives one outer row at a time today, so the per-type fast path issues a single direct command (`HGET` / `GET` / `SISMEMBER` / `ZSCORE`) when `params.len() == 1`; the pipelined batch path (`HMGET` / `MGET` / pipelined `SISMEMBER` / pipelined `ZSCORE`) remains in place as a fallback for if/when a future planner shape sends multi-param batches. On `ClusterConnection` the multi-param pipeline fails and `batch_parameterized_lookup` falls back to per-key commands inside the same call (`Join Batch Mode: fallback` in EXPLAIN). Cache cleared on `re_scan_foreign_scan`. The `join_batch_size` table option (default 256, range 1–4096) sizes the cache cap.
+- Post-fetch filter operators: `row_matches_condition` in `state_manager.rs` translates `cond.column_index` from the PG tuple-descriptor position to the Redis-row position (subtracts 1 if a TTL column sits at or before the target index; matches always-true if the condition targets the TTL column itself). Supported operators: `Equal`, `NotEqual`, numeric/lexicographic comparisons, `Like` (via `PatternMatcher::from_like_pattern`), `In` / `NotIn` (comma-split value list).
+- Pushdown under parameterized join: when a join is chosen and there are pushable WHERE conditions on the Redis side, `parameterized_lookup` applies them as a structural filter after the per-key fetch (see `row_matches_condition` in `state_manager.rs`). This includes zset score-range conditions (`score >= X`, `score < Y`, etc.) — the per-param path stays on the O(1) ZSCORE command and filters the returned score CPU-side. We intentionally do NOT issue `ZRANGEBYSCORE` per param in the join path: for low-selectivity score ranges it would fetch the entire range per outer row and was empirically ~200x slower than ZSCORE+filter. EXPLAIN surfaces the post-filter via `Pushdown In Join`.
 - Cluster multi-key pipeline fallback: `load_multi_key_data()` for hash/set/zset/list now uses "try pipeline, fall back to individual commands" pattern for Redis Cluster compatibility (cluster `ClusterConnection` doesn't support `redis::pipe()`)
 - Cluster TTL pipeline fallback: `fetch_multi_key_optimized()` TTL batch in `state_manager.rs` uses same try-pipe-then-individual pattern — TTL values now show real remaining seconds in cluster mode (previously returned -2)
 - SmallVec optimization: `RowVec<'a> = SmallVec<[Cow<'a, str>; 4]>` keeps per-row data on the stack (rows are 1-4 columns). Fallback paths for cluster mode use `Vec::with_capacity()` since result sets are unbounded
@@ -30,7 +33,7 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 - COPY FROM / INSERT SELECT: `begin_foreign_insert` / `end_foreign_insert` callbacks
 - ShutdownForeignScan: early connection release back to R2D2 pool for better concurrency
 - RecheckForeignScan: correctness for join rechecks (returns true unconditionally)
-- EXPLAIN support: `explain_foreign_scan` and `explain_foreign_modify`. Output is built by `ExplainReport` (pure Rust in `src/core/explain/report.rs`) then rendered via `emit()`. Labels: `Redis Server`, `Redis Key`, `Table Type`, `Multi-Key Mode`, `Pushdown`, `Pushdown Skipped` (when blocked), `Redis Ops`, `Batch Size`. Join scans emit `Redis Join` and `Redis Server`. `ANALYZE` adds `Rows Fetched`.
+- EXPLAIN support: `explain_foreign_scan` and `explain_foreign_modify`. Output is built by `ExplainReport` (pure Rust in `src/core/explain/report.rs`) then rendered via `emit()`. Labels: `Redis Server`, `Redis Key`, `Table Type`, `Multi-Key Mode`, `Pushdown`, `Pushdown Skipped` (when blocked), `Pushdown In Join`, `Redis Ops`, `Batch Size`, `Join Batch Size`, `Join Batch Mode`. Join scans emit `Redis Join` and `Redis Server`. `ANALYZE` adds `Rows Fetched`.
 - Batch INSERT: `exec_foreign_batch_insert` with pipelined Redis commands and configurable `batch_size`
 - TRUNCATE: `exec_foreign_truncate` using UNLINK (single-key) or SCAN+UNLINK (multi-key patterns)
 - IMPORT FOREIGN SCHEMA: `import_foreign_schema` auto-discovers keys, groups by prefix, generates DDL
@@ -173,7 +176,8 @@ FDW Callbacks (handlers.rs — registration + core scan/modify)
     ├── Explain (explain/): explain_foreign_scan, explain_foreign_modify
     │       └── ExplainReport (report.rs) → emit() (emit.rs)
     │           Labels: Redis Server, Redis Key, Table Type, Multi-Key Mode,
-    │           Pushdown, Pushdown Skipped (when blocked), Redis Ops, Batch Size;
+    │           Pushdown, Pushdown Skipped (when blocked), Pushdown In Join,
+    │           Redis Ops, Batch Size, Join Batch Size, Join Batch Mode;
     │           Redis Join (join scans); Rows Fetched (ANALYZE)
     │
     ├── Modify: begin_foreign_modify → exec_foreign_{insert,update,delete}
