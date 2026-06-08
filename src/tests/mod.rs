@@ -69,6 +69,9 @@ pub mod pool_performance_tests;
 pub mod join_tests;
 
 #[cfg(any(test, feature = "pg_test"))]
+pub mod join_batched_tests;
+
+#[cfg(any(test, feature = "pg_test"))]
 pub mod column_mapping_tests;
 
 #[cfg(any(test, feature = "pg_test"))]

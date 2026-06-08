@@ -176,4 +176,43 @@ mod tests {
         .unwrap();
         cleanup();
     }
+
+    #[pg_test]
+    fn join_batch_size_validates_range() {
+        let _ = Spi::run("DROP FOREIGN TABLE IF EXISTS jbs_ok;");
+        let _ = Spi::run("DROP SERVER IF EXISTS jbs_srv CASCADE;");
+        let _ = Spi::run("DROP FOREIGN DATA WRAPPER IF EXISTS jbs_wrap CASCADE;");
+
+        Spi::run("CREATE FOREIGN DATA WRAPPER jbs_wrap HANDLER redis_fdw_handler VALIDATOR redis_fdw_validator;").unwrap();
+        Spi::run("CREATE SERVER jbs_srv FOREIGN DATA WRAPPER jbs_wrap OPTIONS (host_port '127.0.0.1:8899');").unwrap();
+
+        // Valid value accepted
+        Spi::run("CREATE FOREIGN TABLE jbs_ok (field text, value text) SERVER jbs_srv OPTIONS (table_type 'hash', table_key_prefix 'jbs:1', join_batch_size '256');").unwrap();
+
+        let _ = Spi::run("DROP FOREIGN TABLE IF EXISTS jbs_ok;");
+        let _ = Spi::run("DROP SERVER IF EXISTS jbs_srv CASCADE;");
+        let _ = Spi::run("DROP FOREIGN DATA WRAPPER IF EXISTS jbs_wrap CASCADE;");
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "join_batch_size must be between 1 and 4096")]
+    fn join_batch_size_rejects_zero() {
+        setup_fdw_with_server();
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE jbs_zero (field text, value text) SERVER {} OPTIONS (table_type 'hash', table_key_prefix 'jbs:2', join_batch_size '0');",
+            SERVER_NAME
+        ))
+        .unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "join_batch_size must be between 1 and 4096")]
+    fn join_batch_size_rejects_too_large() {
+        setup_fdw_with_server();
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE jbs_big (field text, value text) SERVER {} OPTIONS (table_type 'hash', table_key_prefix 'jbs:3', join_batch_size '5000');",
+            SERVER_NAME
+        ))
+        .unwrap();
+    }
 }

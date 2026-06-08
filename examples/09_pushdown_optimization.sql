@@ -91,7 +91,6 @@ EXPLAIN (ANALYZE, VERBOSE) SELECT * FROM demo_sessions WHERE key = 'session:user
 -- Single-key DELETE through the pattern table
 -- redis-cli> DEL session:user99999
 DELETE FROM demo_sessions WHERE key = 'session:user99999';
-SELECT COUNT(*) AS total_after_delete FROM demo_sessions;
 
 -- Cleanup
 DROP FOREIGN TABLE demo_product;

@@ -422,6 +422,10 @@ impl PooledConnection {
             PooledConnection::Single(_) => None,
         }
     }
+
+    pub fn is_cluster(&self) -> bool {
+        matches!(self, PooledConnection::Cluster(_))
+    }
 }
 
 /// High-level helper to get a connection from the global pool

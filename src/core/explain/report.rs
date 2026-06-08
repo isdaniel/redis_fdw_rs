@@ -102,6 +102,21 @@ impl ExplainReport {
         }
     }
 
+    /// Emit batched parameterized join info: batch size (rows) and execution mode
+    /// (`pipeline` | `fallback` | `n/a`).
+    pub fn add_batch_join_info(&mut self, batch_size: usize, mode: &str) {
+        self.int("Join Batch Size", Some("rows"), batch_size as i64);
+        self.text("Join Batch Mode", mode.to_string());
+    }
+
+    /// Emit the Pushdown In Join label when Redis-side WHERE conditions filter
+    /// the lookup result (post-fetch). `None` emits nothing.
+    pub fn add_pushdown_in_join(&mut self, summary: Option<&str>) {
+        if let Some(s) = summary {
+            self.text("Pushdown In Join", s.to_string());
+        }
+    }
+
     /// Render which Redis commands this scan will issue. Helps users understand
     /// the actual access pattern at a glance.
     pub fn add_redis_ops(&mut self, ops: &[&'static str]) {
@@ -182,7 +197,7 @@ impl ExplainReport {
 
         let ops = redis_ops_for(state);
         let skip = pushdown_skip_reason(state);
-        Self::from_scan_inputs(
+        let mut report = Self::from_scan_inputs(
             &state.host_port,
             &state.table_key_prefix,
             state.table_type.redis_type_name(),
@@ -193,7 +208,36 @@ impl ExplainReport {
             &ops,
             analyze,
             state.row_count,
-        )
+        );
+
+        // PR-2: surface batched parameterized join info.
+        if state.is_parameterized {
+            let mode = match state.join_batch_mode {
+                crate::core::state_manager::BatchMode::Pipeline => "pipeline",
+                crate::core::state_manager::BatchMode::Fallback => "fallback",
+                crate::core::state_manager::BatchMode::NotApplicable => "n/a",
+            };
+            report.add_batch_join_info(state.join_batch_size, mode);
+
+            if let Some(a) = state.pushdown_analysis.as_ref() {
+                if a.has_optimizations() {
+                    let summary = a
+                        .pushable_conditions
+                        .iter()
+                        .map(|c| {
+                            format!(
+                                "{} {} '{}' (filtered after lookup)",
+                                c.column_name, c.operator, c.value
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    report.add_pushdown_in_join(Some(&summary));
+                }
+            }
+        }
+
+        report
     }
 
     pub fn for_modify(state: &crate::core::state_manager::RedisFdwState) -> Self {
@@ -209,6 +253,19 @@ impl ExplainReport {
 /// PR-2 extends this to reflect batched/parameterized ops.
 fn redis_ops_for(state: &crate::core::state_manager::RedisFdwState) -> Vec<&'static str> {
     use crate::tables::types::RedisTableType;
+    if state.is_parameterized {
+        // Reflect what batch_parameterized_lookup actually issues: the
+        // fast-path uses the single-key command (HGET/GET/SISMEMBER/ZSCORE)
+        // for params.len() == 1, falling back to the multi-key/pipelined
+        // command for batches >1.
+        return match &state.table_type {
+            RedisTableType::Hash(_) => vec!["HGET", "HMGET"],
+            RedisTableType::Set(_) => vec!["SISMEMBER"],
+            RedisTableType::ZSet(_) => vec!["ZSCORE"],
+            RedisTableType::String(_) => vec!["GET", "MGET"],
+            _ => vec![],
+        };
+    }
     match &state.table_type {
         RedisTableType::String(_) if state.is_multi_key => vec!["SCAN", "MGET"],
         RedisTableType::String(_) => vec!["GET"],
@@ -413,6 +470,43 @@ mod tests {
         r.add_redis_ops(&[]);
         assert!(r.props.iter().any(|p| matches!(p,
             Prop::Text { label: "Redis Ops", value } if value == "none"
+        )));
+    }
+
+    #[test]
+    fn add_batch_join_info_emits_label() {
+        let mut r = ExplainReport::new();
+        r.add_batch_join_info(256, "pipeline");
+        assert!(r.props.iter().any(|p| matches!(
+            p,
+            Prop::Int {
+                label: "Join Batch Size",
+                unit: Some("rows"),
+                value: 256
+            }
+        )));
+        assert!(r.props.iter().any(|p| matches!(p,
+            Prop::Text { label: "Join Batch Mode", value } if value == "pipeline"
+        )));
+    }
+
+    #[test]
+    fn add_pushdown_in_join_emits_when_present() {
+        let mut r = ExplainReport::new();
+        r.add_pushdown_in_join(Some("score >= 2.0 (filtered after lookup)"));
+        assert!(r.props.iter().any(|p| matches!(p,
+            Prop::Text { label: "Pushdown In Join", value }
+                if value == "score >= 2.0 (filtered after lookup)"
+        )));
+
+        let mut empty = ExplainReport::new();
+        empty.add_pushdown_in_join(None);
+        assert!(!empty.props.iter().any(|p| matches!(
+            p,
+            Prop::Text {
+                label: "Pushdown In Join",
+                ..
+            }
         )));
     }
 

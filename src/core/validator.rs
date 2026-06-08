@@ -12,6 +12,7 @@ const KNOWN_TABLE_OPTIONS: &[&str] = &[
     "ttl",
     "batch_size",
     "strict_key_prefix",
+    "join_batch_size",
 ];
 
 // Register the validator function with text[] SQL type so PostgreSQL can find it
@@ -142,6 +143,28 @@ fn validate_table_options(opts: &HashMap<String, String>) {
     if let Some(bs) = opts.get("batch_size") {
         if !validation_rules::is_valid_batch_size(bs) {
             error!("batch_size must be between 100 and 100000, got '{}'", bs);
+        }
+    }
+
+    if let Some(jbs) = opts.get("join_batch_size") {
+        // Avoid `unwrap_or_else(|_| error!(...))`: pgrx::error! is a
+        // diverging ereport(ERROR) that longjmps past Rust unwinding, so
+        // invoking it inside a closure can skip destructor cleanup in outer
+        // scopes. Use a plain match instead.
+        let v: i64 = match jbs.parse() {
+            Ok(n) => n,
+            Err(_) => {
+                error!(
+                    "redis_fdw: join_batch_size must be an integer, got '{}'",
+                    jbs
+                );
+            }
+        };
+        if !(1..=4096).contains(&v) {
+            error!(
+                "redis_fdw: join_batch_size must be between 1 and 4096 (got {})",
+                v
+            );
         }
     }
 
