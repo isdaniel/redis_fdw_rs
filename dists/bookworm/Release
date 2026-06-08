@@ -1,0 +1,28 @@
+Origin: redis_fdw_rs
+Label: redis_fdw_rs
+Suite: bookworm
+Codename: bookworm
+Date: Mon, 08 Jun 2026 13:17:31 UTC
+Architectures: amd64 arm64
+Components: main
+MD5Sum:
+ a6ef4e7d8545bc1a986521385cb312de 3515 main/binary-amd64/Packages
+ 429bd2de59b139c100fca42d20109eba 935 main/binary-amd64/Packages.gz
+ 2c09e6b2d30914f5ba78fb550f8db1da 95 main/binary-amd64/Release
+ d41d8cd98f00b204e9800998ecf8427e 0 main/binary-arm64/Packages
+ 7029066c27ac6f5ef18d660d5741979a 20 main/binary-arm64/Packages.gz
+ adb28fbc99bc431819a917fe286e91d0 95 main/binary-arm64/Release
+SHA1:
+ a50ea15a4914aed2e4d2388929dcbb712005c2f0 3515 main/binary-amd64/Packages
+ 9d5106e31ecde08c07b93f1b795d2dbc2e3758e8 935 main/binary-amd64/Packages.gz
+ e3a3179900b07db5e6ed4caaddd0c6221b57ef28 95 main/binary-amd64/Release
+ da39a3ee5e6b4b0d3255bfef95601890afd80709 0 main/binary-arm64/Packages
+ 46c6643f07aa7f6bfe7118de926b86defc5087c4 20 main/binary-arm64/Packages.gz
+ bb370480b992516365a5b9d81846ebfd64fd4740 95 main/binary-arm64/Release
+SHA256:
+ 8a0e49dfe98444f2f30bbb67b1dc6d09ec78917502a482dd9df0e72194a931f0 3515 main/binary-amd64/Packages
+ 90d3f20b0080a5300c52f319bc07c7bd470665ac00acca5896bd28db4218b3bf 935 main/binary-amd64/Packages.gz
+ d1f02a6a99db817599d8af6eaaa93b9f56a32a27e608aebcbbeb50e6e92d9548 95 main/binary-amd64/Release
+ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 0 main/binary-arm64/Packages
+ 59869db34853933b239f1e2219cf7d431da006aa919635478511fabbfc8849d2 20 main/binary-arm64/Packages.gz
+ e637229d97f64d204be63945a9719439ed242598ceace44aee5a0d90c61f9d04 95 main/binary-arm64/Release

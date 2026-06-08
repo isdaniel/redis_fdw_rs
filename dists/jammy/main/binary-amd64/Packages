@@ -1,0 +1,75 @@
+Package: postgresql-14-redis-fdw-rs
+Version: 0.6.0-1
+Architecture: amd64
+Depends: postgresql-14
+Maintainer: Daniel Shih <dog830228@gmail.com>
+Priority: optional
+Section: database
+Filename: pool/main/p/postgresql-14-redis-fdw-rs/postgresql-14-redis-fdw-rs_0.6.0-1_amd64.deb
+Size: 1496796
+SHA256: b1be336f1e079e35df06e22e172189034fad956ba81f7f11b38e833481d1f649
+SHA1: 3c672921398afe2368e700970a0c279e14dc0550
+MD5sum: 840a970ad4dcf0df817a8c778ebe4c7b
+Description: PostgreSQL Foreign Data Wrapper for Redis (Rust) Exposes Redis data structures (string, hash, list, set, zset, stream) as PostgreSQL foreign tables. Supports standalone and cluster modes.
+Homepage: https://github.com/danielshih/redis_fdw_rs
+
+Package: postgresql-15-redis-fdw-rs
+Version: 0.6.0-1
+Architecture: amd64
+Depends: postgresql-15
+Maintainer: Daniel Shih <dog830228@gmail.com>
+Priority: optional
+Section: database
+Filename: pool/main/p/postgresql-15-redis-fdw-rs/postgresql-15-redis-fdw-rs_0.6.0-1_amd64.deb
+Size: 1495818
+SHA256: 960b6c56e603a1f7d3434e03ab6f00a842ba10cca60f2b566ce1d44d7f1cea12
+SHA1: 4bdf8bbb80f7f164a75f4cdfc8774b14b6a0d5bf
+MD5sum: 54856875cbbd770a7ea57bde5bde76cb
+Description: PostgreSQL Foreign Data Wrapper for Redis (Rust) Exposes Redis data structures (string, hash, list, set, zset, stream) as PostgreSQL foreign tables. Supports standalone and cluster modes.
+Homepage: https://github.com/danielshih/redis_fdw_rs
+
+Package: postgresql-16-redis-fdw-rs
+Version: 0.6.0-1
+Architecture: amd64
+Depends: postgresql-16
+Maintainer: Daniel Shih <dog830228@gmail.com>
+Priority: optional
+Section: database
+Filename: pool/main/p/postgresql-16-redis-fdw-rs/postgresql-16-redis-fdw-rs_0.6.0-1_amd64.deb
+Size: 1496720
+SHA256: 0d2c1e32e57c74c11e9416d27fdaee1ae6a956c39f088da3d492de5194a226f3
+SHA1: 20a141aef42b653601b67d51d0771bdd4543598a
+MD5sum: fed101bdcb33833a0bf0e44519f49a33
+Description: PostgreSQL Foreign Data Wrapper for Redis (Rust) Exposes Redis data structures (string, hash, list, set, zset, stream) as PostgreSQL foreign tables. Supports standalone and cluster modes.
+Homepage: https://github.com/danielshih/redis_fdw_rs
+
+Package: postgresql-17-redis-fdw-rs
+Version: 0.6.0-1
+Architecture: amd64
+Depends: postgresql-17
+Maintainer: Daniel Shih <dog830228@gmail.com>
+Priority: optional
+Section: database
+Filename: pool/main/p/postgresql-17-redis-fdw-rs/postgresql-17-redis-fdw-rs_0.6.0-1_amd64.deb
+Size: 1494292
+SHA256: def5fd1c07f7a204a4463c26f74f093aa0c8cb89b8bccee8e1313052bd5c6c0d
+SHA1: b1c0f92a8242cffff73824896503e45fe0ab94fc
+MD5sum: e4e888a39fc6994f17ffb563b950317b
+Description: PostgreSQL Foreign Data Wrapper for Redis (Rust) Exposes Redis data structures (string, hash, list, set, zset, stream) as PostgreSQL foreign tables. Supports standalone and cluster modes.
+Homepage: https://github.com/danielshih/redis_fdw_rs
+
+Package: postgresql-18-redis-fdw-rs
+Version: 0.6.0-1
+Architecture: amd64
+Depends: postgresql-18
+Maintainer: Daniel Shih <dog830228@gmail.com>
+Priority: optional
+Section: database
+Filename: pool/main/p/postgresql-18-redis-fdw-rs/postgresql-18-redis-fdw-rs_0.6.0-1_amd64.deb
+Size: 1496298
+SHA256: 23f96f956d7860656bb887f85c0f2a49a1b8f0951904742583345bd3797c1b56
+SHA1: fdcb54c2d1166a9fbcbb2babc4ba2a3d916e88cc
+MD5sum: 490011fb3b96dde26fc90e5967663cbe
+Description: PostgreSQL Foreign Data Wrapper for Redis (Rust) Exposes Redis data structures (string, hash, list, set, zset, stream) as PostgreSQL foreign tables. Supports standalone and cluster modes.
+Homepage: https://github.com/danielshih/redis_fdw_rs
+

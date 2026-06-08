@@ -1,0 +1,5 @@
+Archive: jammy
+Component: main
+Origin: redis_fdw_rs
+Label: redis_fdw_rs
+Architecture: amd64
