@@ -99,18 +99,11 @@ SELECT v.user_id, p.value AS profile
 FROM vip_users v
 JOIN bulk_user_profiles p ON v.user_id = p.field;
 
--- ---- 2B. Force pushdown plan via Nested Loop ----
--- Disable hash/merge join so PG picks Nested Loop with
--- parameterized Foreign Scan. EXPLAIN should now show:
---   Foreign Scan on bulk_user_profiles
---     Filter: (field = v.user_id)      ← pushed to HGET
-SET LOCAL enable_hashjoin = off;
-SET LOCAL enable_mergejoin = off;
-
 EXPLAIN (ANALYZE, VERBOSE)
 SELECT v.user_id, p.value AS profile
 FROM vip_users v
-JOIN bulk_user_profiles p ON v.user_id = p.field;
+JOIN bulk_user_profiles p ON v.user_id = p.field
+WHERE v.user_id = 'user:42';
 
 -- Same shape — aggregation over the pushdown plan
 EXPLAIN (ANALYZE, VERBOSE)
@@ -121,9 +114,6 @@ FROM vip_users v
 JOIN bulk_user_profiles p ON v.user_id = p.field
 ORDER BY v.user_id
 LIMIT 10;
-
-RESET enable_hashjoin;
-RESET enable_mergejoin;
 
 -- ============================================================
 -- PART 3: Pushdown JOIN — Redis FDW × Redis FDW
@@ -141,27 +131,17 @@ WHERE a.member IN (
     'user:12345','user:55555','user:88888','user:99999','user:99000'
 );
 
--- ---- 3B. Two-sided pushdown: small SET filter feeds HASH HGETs ----
--- Outer: SET filtered by IN list (pushed to SISMEMBER per item).
--- Inner: HASH looked up by field = a.member (pushed to HGET).
-SET LOCAL enable_hashjoin = off;
-SET LOCAL enable_mergejoin = off;
 
 EXPLAIN (ANALYZE, VERBOSE)
 SELECT a.member AS user_id, p.value AS profile
 FROM bulk_active_users a
 JOIN bulk_user_profiles p ON p.field = a.member
-WHERE a.member IN (
+WHERE a.member qIN (
     'user:1','user:42','user:100','user:777','user:9999',
     'user:12345','user:55555','user:88888','user:99999','user:99000'
 );
 
-RESET enable_hashjoin;
-RESET enable_mergejoin;
 
--- ---- 3C. Contrast: same JOIN without the selective filter ----
--- Both sides scanned fully (HGETALL + SMEMBERS) and hash-joined
--- in PG. Useful to show the default plan when the driver is large.
 EXPLAIN (ANALYZE, VERBOSE)
 SELECT COUNT(*) AS active_with_profile
 FROM bulk_user_profiles p

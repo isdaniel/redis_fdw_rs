@@ -30,7 +30,7 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 - COPY FROM / INSERT SELECT: `begin_foreign_insert` / `end_foreign_insert` callbacks
 - ShutdownForeignScan: early connection release back to R2D2 pool for better concurrency
 - RecheckForeignScan: correctness for join rechecks (returns true unconditionally)
-- EXPLAIN support: `explain_foreign_scan` and `explain_foreign_modify` callbacks with server, key, type, pushdown, batch info
+- EXPLAIN support: `explain_foreign_scan` and `explain_foreign_modify`. Output is built by `ExplainReport` (pure Rust in `src/core/explain/report.rs`) then rendered via `emit()`. Labels: `Redis Server`, `Redis Key`, `Table Type`, `Multi-Key Mode`, `Pushdown`, `Pushdown Skipped` (when blocked), `Redis Ops`, `Batch Size`. Join scans emit `Redis Join` and `Redis Server`. `ANALYZE` adds `Rows Fetched`.
 - Batch INSERT: `exec_foreign_batch_insert` with pipelined Redis commands and configurable `batch_size`
 - TRUNCATE: `exec_foreign_truncate` using UNLINK (single-key) or SCAN+UNLINK (multi-key patterns)
 - IMPORT FOREIGN SCHEMA: `import_foreign_schema` auto-discovers keys, groups by prefix, generates DDL
@@ -145,7 +145,7 @@ JOIN tests create temporary local tables + Redis foreign tables and verify:
 |------|---------|
 | `src/core/handlers.rs` | FDW callback registration + core scan/modify flow |
 | `src/core/join_handlers.rs` | Join pushdown: parameterized paths, FDW-to-FDW join planning/execution |
-| `src/core/explain.rs` | EXPLAIN output for scan and modify operations |
+| `src/core/explain/` | EXPLAIN output: `report.rs` pure-Rust model, `emit.rs` pg_sys adapter, `mod.rs` handlers |
 | `src/core/schema_import.rs` | IMPORT FOREIGN SCHEMA + ANALYZE + acquire_sample_rows |
 | `src/core/truncate.rs` | TRUNCATE implementation (UNLINK / SCAN+UNLINK) |
 | `src/core/column_utils.rs` | Shared utilities: TTL detection, column validation, data transformation |
@@ -170,8 +170,11 @@ FDW Callbacks (handlers.rs — registration + core scan/modify)
     ├── Scanning: begin_foreign_scan → iterate → recheck → shutdown → end_foreign_scan
     │       └── state_manager.rs → RedisTableType dispatch → implementations/*
     │
-    ├── Explain (explain.rs): explain_foreign_scan, explain_foreign_modify
-    │       └── Reports server, key, type, pushdown, batch size, rows fetched
+    ├── Explain (explain/): explain_foreign_scan, explain_foreign_modify
+    │       └── ExplainReport (report.rs) → emit() (emit.rs)
+    │           Labels: Redis Server, Redis Key, Table Type, Multi-Key Mode,
+    │           Pushdown, Pushdown Skipped (when blocked), Redis Ops, Batch Size;
+    │           Redis Join (join scans); Rows Fetched (ANALYZE)
     │
     ├── Modify: begin_foreign_modify → exec_foreign_{insert,update,delete}
     │       └── state_manager.rs → RedisTableType dispatch → implementations/*

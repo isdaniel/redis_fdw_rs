@@ -16,7 +16,7 @@ pg18 = ["pgrx/pg18", "pgrx-tests/pg18" ]
 pg_test = []
 
 [dependencies]
-pgrx = "=0.18.0"
+pgrx = "=0.18.1"
 redis = { version = "1.2.2", features = ["cluster", "streams", "r2d2", "tls-rustls", "tls-rustls-insecure"] }
 thiserror = "2.0.18"
 rand = "0.10.1"
@@ -24,7 +24,7 @@ r2d2 = "0.8.10"
 smallvec = "1.15.1"
 
 [dev-dependencies]
-pgrx-tests = "=0.18.0"
+pgrx-tests = "=0.18.1"
 
 [profile.dev]
 panic = "unwind"
