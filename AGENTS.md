@@ -10,6 +10,7 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 
 ### Recent Work
 - Parameterized join lookups with per-param cache: `RedisFdwState::parameterized_lookup` consults `join_batch_cache` (`HashMap<param, Option<row>>`, capped at `join_batch_size` to prevent unbounded growth) before issuing Redis commands. Misses dispatch to `RedisTableOperations::batch_parameterized_lookup`, which returns `Result<Vec<Option<Vec<String>>>, redis::RedisError>` so per-type impls propagate errors via `?` and `parameterized_lookup` raises `pgrx::error!` at the FDW boundary (avoids `longjmp` past Rust destructors deep inside table impls). NestLoop drives one outer row at a time today, so the per-type fast path issues a single direct command (`HGET` / `GET` / `SISMEMBER` / `ZSCORE`) when `params.len() == 1`; the pipelined batch path (`HMGET` / `MGET` / pipelined `SISMEMBER` / pipelined `ZSCORE`) remains in place as a fallback for if/when a future planner shape sends multi-param batches. On `ClusterConnection` the multi-param pipeline fails and `batch_parameterized_lookup` falls back to per-key commands inside the same call (`Join Batch Mode: fallback` in EXPLAIN). Cache cleared on `re_scan_foreign_scan`. The `join_batch_size` table option (default 256, range 1–4096) sizes the cache cap.
+- Parameterized lookup fast-path types: Hash (`HGET`/`HMGET`), Set (`SISMEMBER` / pipelined), ZSet (`ZSCORE` / pipelined), String (`GET`/`MGET`), **Stream (`XRANGE id id` / pipelined)**. List has no natural fast-path and falls through to the default impl.
 - Post-fetch filter operators: `row_matches_condition` in `state_manager.rs` translates `cond.column_index` from the PG tuple-descriptor position to the Redis-row position (subtracts 1 if a TTL column sits at or before the target index; matches always-true if the condition targets the TTL column itself). Supported operators: `Equal`, `NotEqual`, numeric/lexicographic comparisons, `Like` (via `PatternMatcher::from_like_pattern`), `In` / `NotIn` (comma-split value list).
 - Pushdown under parameterized join: when a join is chosen and there are pushable WHERE conditions on the Redis side, `parameterized_lookup` applies them as a structural filter after the per-key fetch (see `row_matches_condition` in `state_manager.rs`). This includes zset score-range conditions (`score >= X`, `score < Y`, etc.) — the per-param path stays on the O(1) ZSCORE command and filters the returned score CPU-side. We intentionally do NOT issue `ZRANGEBYSCORE` per param in the join path: for low-selectivity score ranges it would fetch the entire range per outer row and was empirically ~200x slower than ZSCORE+filter. EXPLAIN surfaces the post-filter via `Pushdown In Join`.
 - Cluster multi-key pipeline fallback: `load_multi_key_data()` for hash/set/zset/list now uses "try pipeline, fall back to individual commands" pattern for Redis Cluster compatibility (cluster `ClusterConnection` doesn't support `redis::pipe()`)
@@ -22,6 +23,7 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 - TTL-aware FDW-to-FDW join columns: `get_foreign_join_paths` adjusts join column indices for TTL stripping via `adjust_column_for_ttl_strip()`
 - Single-key String join guard: FDW-to-FDW pushdown correctly rejects single-key String tables (no join column to match)
 - ZSet score-range pushdown: `WHERE score >= X` / `score <= Y` uses ZRANGEBYSCORE instead of full ZSCAN (O(log N + M) vs O(N))
+- Stream id pushdown: `WHERE stream_id =/>=/<=/>/<` translates to `XRANGE start end` (with `(x` exclusive prefix for strict bounds, Redis 6.2+). `BETWEEN a AND b` combines both. Malformed ids fall back silently to full `XRANGE - +` (the `pgrx::warning!` macro can't be added on this code path — see Gotchas for the linker rationale). Implementation: `parse_stream_id_bound` in `src/tables/implementations/stream.rs`.
 - DDL-time column validation: `object_access_hook` in `ddl_hook.rs` validates column count at `CREATE FOREIGN TABLE` time (no longer deferred to first query)
 - Position-based column filtering: `PushableCondition.column_index` replaces hardcoded column name checks in hash/zset pushdown
 - Column validation: `validate_column_count()` enforces per-type column constraints at first query time (string=1, hash=2, list=1-2, set=1, zset=2, stream=2+)
@@ -33,7 +35,7 @@ A **PostgreSQL Foreign Data Wrapper** that maps Redis data structures to SQL tab
 - COPY FROM / INSERT SELECT: `begin_foreign_insert` / `end_foreign_insert` callbacks
 - ShutdownForeignScan: early connection release back to R2D2 pool for better concurrency
 - RecheckForeignScan: correctness for join rechecks (returns true unconditionally)
-- EXPLAIN support: `explain_foreign_scan` and `explain_foreign_modify`. Output is built by `ExplainReport` (pure Rust in `src/core/explain/report.rs`) then rendered via `emit()`. Labels: `Redis Server`, `Redis Key`, `Table Type`, `Multi-Key Mode`, `Pushdown`, `Pushdown Skipped` (when blocked), `Pushdown In Join`, `Redis Ops`, `Batch Size`, `Join Batch Size`, `Join Batch Mode`. Join scans emit `Redis Join` and `Redis Server`. `ANALYZE` adds `Rows Fetched`.
+- EXPLAIN support: `explain_foreign_scan` and `explain_foreign_modify`. Output is built by `ExplainReport` (pure Rust in `src/core/explain/report.rs`) then rendered via `emit()`. Labels: `Redis Server`, `Redis Key`, `Table Type`, `Multi-Key Mode`, `Pushdown`, `Pushdown Skipped` (when blocked), `Pushdown In Join`, `Redis Ops`, `Batch Size`, `Join Batch Size`, `Join Batch Mode`. Join scans emit `Redis Join` and `Redis Server`. `ANALYZE` adds `Rows Fetched`. `Redis Ops` is **dynamic** — it reflects the actual command the scan will issue, derived from `pushdown_conditions`. Source of truth: `classify_redis_ops_for_inputs` in `src/core/explain/report.rs`. Tests at `src/tests/explain_tests.rs` lock the mapping.
 - Batch INSERT: `exec_foreign_batch_insert` with pipelined Redis commands and configurable `batch_size`
 - TRUNCATE: `exec_foreign_truncate` using UNLINK (single-key) or SCAN+UNLINK (multi-key patterns)
 - IMPORT FOREIGN SCHEMA: `import_foreign_schema` auto-discovers keys, groups by prefix, generates DDL
@@ -215,6 +217,10 @@ FDW Callbacks (handlers.rs — registration + core scan/modify)
 - **Error handling**: Return `Result<(), redis::RedisError>` from trait methods; convert to `pgrx::error!()` at the handler level
 - **Data flow**: All data between PG and Redis passes as `Vec<String>` or `&[String]`
 - **Connection**: Never create raw connections — always go through pool manager
+
+## Gotchas
+
+- `pgrx::warning!` / `pgrx::log!` cannot be added to previously-cold code paths in `src/tables/implementations/stream.rs` under pgrx 0.18.1 + rustc 1.95 — triggers rust-lld undefined-symbol errors against pgrx-pg-sys (palloc0/pfree/errstart/message_level_is_interesting). Stream code uses silent fallback on malformed bounds.
 
 ## Dependencies
 

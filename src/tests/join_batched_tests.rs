@@ -250,4 +250,93 @@ mod tests {
         Spi::run("DROP SERVER exp_srv CASCADE;").ok();
         Spi::run("DROP FOREIGN DATA WRAPPER exp_wrap CASCADE;").ok();
     }
+
+    fn explain_plan_for(sql: &str) -> String {
+        let q = format!("EXPLAIN (VERBOSE, FORMAT TEXT) {}", sql);
+        Spi::connect(|client| {
+            let mut out = String::new();
+            let result = client.select(&q, None, &[]).unwrap();
+            for row in result {
+                if let Some(line) = row.get::<&str>(1).unwrap() {
+                    out.push_str(line);
+                    out.push('\n');
+                }
+            }
+            out
+        })
+    }
+
+    #[pg_test]
+    fn test_join_stream_parameterized_uses_xrange_per_id() {
+        Spi::run("DROP FOREIGN TABLE IF EXISTS join_stream_fdw;").ok();
+        Spi::run("DROP SERVER IF EXISTS join_stream_srv CASCADE;").ok();
+        Spi::run("DROP FOREIGN DATA WRAPPER IF EXISTS join_stream_wrap CASCADE;").ok();
+        Spi::run("CREATE FOREIGN DATA WRAPPER join_stream_wrap HANDLER redis_fdw_handler VALIDATOR redis_fdw_validator;").unwrap();
+        Spi::run("CREATE SERVER join_stream_srv FOREIGN DATA WRAPPER join_stream_wrap OPTIONS (host_port '127.0.0.1:8899');").unwrap();
+
+        // Seed Redis stream with 100 entries
+        let stream_key = "test:join_stream_param";
+        let mut c = redis::Client::open("redis://127.0.0.1:8899/15")
+            .unwrap()
+            .get_connection()
+            .unwrap();
+        let _: i64 = redis::cmd("DEL").arg(stream_key).query(&mut c).unwrap_or(0);
+        for i in 0..100u64 {
+            let _: String = redis::cmd("XADD")
+                .arg(stream_key)
+                .arg(format!("{}-0", 5_000_000 + i))
+                .arg("v")
+                .arg(i.to_string())
+                .query(&mut c)
+                .unwrap();
+        }
+
+        Spi::run(
+            "CREATE FOREIGN TABLE join_stream_fdw (stream_id text, v_field text, v_value text) \
+             SERVER join_stream_srv \
+             OPTIONS (database '15', table_type 'stream', table_key_prefix 'test:join_stream_param');"
+        ).unwrap();
+        Spi::run("DROP TABLE IF EXISTS pg_ids;").ok();
+        Spi::run("CREATE TABLE pg_ids (id text);").unwrap();
+        Spi::run("INSERT INTO pg_ids VALUES ('5000010-0'),('5000020-0'),('5000030-0'),('5000040-0'),('5000050-0');").unwrap();
+        Spi::run("ANALYZE pg_ids;").unwrap();
+
+        // Force a plan that should pick the parameterized path
+        Spi::run("SET enable_hashjoin = off; SET enable_mergejoin = off;").unwrap();
+        Spi::run("SET enable_material = off;").unwrap();
+
+        let n: i64 = Spi::get_one(
+            "SELECT count(*) FROM pg_ids p JOIN join_stream_fdw s ON s.stream_id = p.id",
+        )
+        .unwrap()
+        .unwrap_or(0);
+        assert_eq!(n, 5, "expected 5 joined rows");
+
+        // EXPLAIN should reflect parameterized XRANGE
+        let plan = explain_plan_for(
+            "SELECT count(*) FROM pg_ids p JOIN join_stream_fdw s ON s.stream_id = p.id",
+        );
+        assert!(
+            plan.contains("Redis Ops: XRANGE"),
+            "expected XRANGE in parameterized EXPLAIN, got:\n{}",
+            plan
+        );
+        // Verify the parameterized path was actually chosen — Join Batch Mode
+        // is only emitted when is_parameterized is set. Without a Stream
+        // batch_parameterized_lookup override, the planner falls back to the
+        // default impl which yields no rows on each NestLoop iteration; this
+        // assertion locks in that the fast-path is wired.
+        assert!(
+            plan.contains("Join Batch Mode:"),
+            "expected parameterized path (Join Batch Mode label) in EXPLAIN, got:\n{}",
+            plan
+        );
+
+        Spi::run("RESET enable_hashjoin; RESET enable_mergejoin; RESET enable_material;").ok();
+        Spi::run("DROP FOREIGN TABLE IF EXISTS join_stream_fdw;").ok();
+        Spi::run("DROP TABLE IF EXISTS pg_ids;").ok();
+        Spi::run("DROP SERVER IF EXISTS join_stream_srv CASCADE;").ok();
+        Spi::run("DROP FOREIGN DATA WRAPPER IF EXISTS join_stream_wrap CASCADE;").ok();
+        let _: i64 = redis::cmd("DEL").arg(stream_key).query(&mut c).unwrap_or(0);
+    }
 }

@@ -35,14 +35,16 @@ CREATE FOREIGN TABLE demo_sessions (key text, value text)
     );
 
 -- SELECT scans all keys matching the pattern
+EXPLAIN (ANALYZE, VERBOSE)
 SELECT * FROM demo_sessions;
 
 -- Use PostgreSQL filtering on the results
+EXPLAIN (ANALYZE, VERBOSE)
 SELECT key, value FROM demo_sessions WHERE key LIKE '%user101%';
 
 -- INSERT into a specific key (first column = key name)
+EXPLAIN (ANALYZE, VERBOSE)
 INSERT INTO demo_sessions VALUES ('session:user104', '{"logged_in": true, "ip": "10.0.0.4"}');
-SELECT * FROM demo_sessions;
 
 -- DELETE a specific key
 DELETE FROM demo_sessions WHERE key = 'session:user104';

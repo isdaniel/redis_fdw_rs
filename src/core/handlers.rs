@@ -203,6 +203,7 @@ extern "C-unwind" fn get_foreign_paths(
                 RedisTableType::Hash(_) | RedisTableType::Set(_) | RedisTableType::ZSet(_) => {
                     !state.is_multi_key
                 }
+                RedisTableType::Stream(_) => !state.is_multi_key,
                 RedisTableType::String(_) => state.is_multi_key,
                 _ => false,
             };

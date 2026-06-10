@@ -157,6 +157,7 @@ pub(crate) unsafe fn add_parameterized_paths(
             RedisTableType::Hash(_) => my_col_idx == pushdown_col,
             RedisTableType::Set(_) => my_col_idx == pushdown_col,
             RedisTableType::ZSet(_) => my_col_idx == pushdown_col,
+            RedisTableType::Stream(_) => my_col_idx == pushdown_col,
             RedisTableType::String(_) if state.is_multi_key => my_col_idx == pushdown_col,
             _ => false,
         };

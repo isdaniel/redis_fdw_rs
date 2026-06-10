@@ -48,7 +48,6 @@ INSERT INTO demo_upd_hash VALUES
 SELECT * FROM demo_upd_hash;
 
 -- Update one field — pushdown uses HSET (not HGETALL + rewrite)
-EXPLAIN (VERBOSE) UPDATE demo_upd_hash SET value = 'staff engineer' WHERE field = 'role';
 UPDATE demo_upd_hash SET value = 'staff engineer' WHERE field = 'role';
 SELECT * FROM demo_upd_hash;
 

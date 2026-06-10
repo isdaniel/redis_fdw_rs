@@ -313,7 +313,10 @@ EXPLAIN ANALYZE SELECT * FROM cluster_batch_strings WHERE key IN (
 -- Verify distribution: sample from different key ranges
 EXPLAIN ANALYZE SELECT * FROM cluster_batch_strings WHERE key IN (
     'cbatch:item:7777', 'cbatch:item:14444', 'cbatch:item:21111', 'cbatch:item:28888'
-) LIMIT 2;
+) 
+--ORDER BY key
+LIMIT 2;
+
 
 -- ============================================================
 -- Part 7: TRUNCATE on cluster (single-key only)
