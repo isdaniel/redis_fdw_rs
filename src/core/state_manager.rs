@@ -382,6 +382,25 @@ impl RedisFdwState {
                     return true;
                 }
             }
+
+            // Use direct load for Stream id-range conditions — bounded XRANGE
+            // start/end is O(log N + M), far cheaper than cursor-based batch scan.
+            if let RedisTableType::Stream(ref s) = self.table_type {
+                let id_idx = s.pushdown_column_index;
+                let has_id_range = analysis.pushable_conditions.iter().any(|c| {
+                    c.column_index == id_idx
+                        && matches!(
+                            c.operator,
+                            ComparisonOperator::GreaterThan
+                                | ComparisonOperator::GreaterThanOrEqual
+                                | ComparisonOperator::LessThan
+                                | ComparisonOperator::LessThanOrEqual
+                        )
+                });
+                if has_id_range {
+                    return true;
+                }
+            }
         }
         false
     }

@@ -223,22 +223,6 @@ SELECT v.user_id, p.value
 FROM vip_users v
 JOIN bulk_user_profiles_batched p ON p.field = v.user_id;
 
--- 5B. A/B comparison — same join with the per-param cache disabled (cap=1)
-CREATE FOREIGN TABLE bulk_user_profiles_unbatched (field text, value text)
-    SERVER redis_server
-    OPTIONS (
-        database '0',
-        table_type 'hash',
-        table_key_prefix 'demo11:users:profiles',
-        batch_size '10000',
-        join_batch_size '1'
-    );
-
-EXPLAIN (ANALYZE, VERBOSE)
-SELECT v.user_id, p.value
-FROM vip_users v
-JOIN bulk_user_profiles_unbatched p ON p.field = v.user_id;
-
 -- 5C. ZSet score-range under a join — uses ZSCORE per outer row
 --     (single direct command in the params.len()==1 fast-path).
 --     The score range is applied as a post-fetch filter.
@@ -267,6 +251,11 @@ FROM leaderboard_picks lp
 JOIN bulk_leaderboard_batched lb ON lb.member = lp.player_id
 WHERE lb.score >= 50000;
 
+EXPLAIN (ANALYZE, VERBOSE)
+SELECT *
+FROM  bulk_leaderboard_batched lb 
+WHERE lb.score between 50000 and 60000;
+
 -- ============================================================
 -- Cleanup
 -- ============================================================
@@ -277,7 +266,7 @@ TRUNCATE bulk_leaderboard;
 DROP FOREIGN TABLE bulk_user_profiles_slow;
 DROP FOREIGN TABLE bulk_user_profiles;
 DROP FOREIGN TABLE bulk_user_profiles_batched;
-DROP FOREIGN TABLE bulk_user_profiles_unbatched;
+DROP FOREIGN TABLE IF EXISTS bulk_user_profiles_unbatched;
 DROP FOREIGN TABLE bulk_active_users;
 DROP FOREIGN TABLE bulk_leaderboard;
 DROP FOREIGN TABLE bulk_leaderboard_batched;

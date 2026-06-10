@@ -249,37 +249,160 @@ impl ExplainReport {
     }
 }
 
-/// Compute which Redis commands this scan will issue. Static today;
-/// PR-2 extends this to reflect batched/parameterized ops.
-fn redis_ops_for(state: &crate::core::state_manager::RedisFdwState) -> Vec<&'static str> {
-    use crate::tables::types::RedisTableType;
-    if state.is_parameterized {
-        // Reflect what batch_parameterized_lookup actually issues: the
-        // fast-path uses the single-key command (HGET/GET/SISMEMBER/ZSCORE)
-        // for params.len() == 1, falling back to the multi-key/pipelined
-        // command for batches >1.
-        return match &state.table_type {
-            RedisTableType::Hash(_) => vec!["HGET", "HMGET"],
-            RedisTableType::Set(_) => vec!["SISMEMBER"],
-            RedisTableType::ZSet(_) => vec!["ZSCORE"],
-            RedisTableType::String(_) => vec!["GET", "MGET"],
+/// Inputs to the Redis-op classifier. Decoupled from `RedisFdwState` so the
+/// logic is trivially unit-testable.
+pub(crate) struct ClassifierInputs<'a> {
+    pub type_name: &'static str,
+    pub is_multi_key: bool,
+    pub is_parameterized: bool,
+    pub pushdown_column_index: usize,
+    pub score_column_index: Option<usize>,
+    /// Key column index (multi-key mode only). When present and the analysis
+    /// has Equal/In on this column, the runtime path bypasses SCAN entirely
+    /// via `fetch_multi_key_optimized`, so the classifier omits SCAN from
+    /// the predicted ops list.
+    pub key_column_index: Option<usize>,
+    pub analysis: Option<&'a crate::query::pushdown_types::PushdownAnalysis>,
+}
+
+/// Pure classifier: given table type + pushdown analysis, return the Redis
+/// commands that the scan will actually issue. Source of truth shared with
+/// the scan implementations so EXPLAIN cannot drift from runtime behavior.
+pub(crate) fn classify_redis_ops_for_inputs(inputs: ClassifierInputs) -> Vec<&'static str> {
+    use crate::query::pushdown_types::ComparisonOperator;
+
+    // Parameterized JOIN path: per-type point-lookup command.
+    if inputs.is_parameterized {
+        return match inputs.type_name {
+            "hash" => vec!["HGET", "HMGET"],
+            "set" => vec!["SISMEMBER"],
+            "zset" => vec!["ZSCORE"],
+            "string" => vec!["GET", "MGET"],
+            "stream" => vec!["XRANGE"],
             _ => vec![],
         };
     }
-    match &state.table_type {
-        RedisTableType::String(_) if state.is_multi_key => vec!["SCAN", "MGET"],
-        RedisTableType::String(_) => vec!["GET"],
-        RedisTableType::Hash(_) if state.is_multi_key => vec!["SCAN", "HGETALL"],
-        RedisTableType::Hash(_) => vec!["HGETALL"],
-        RedisTableType::List(_) if state.is_multi_key => vec!["SCAN", "LRANGE"],
-        RedisTableType::List(_) => vec!["LRANGE"],
-        RedisTableType::Set(_) if state.is_multi_key => vec!["SCAN", "SMEMBERS"],
-        RedisTableType::Set(_) => vec!["SMEMBERS"],
-        RedisTableType::ZSet(_) if state.is_multi_key => vec!["SCAN", "ZRANGE"],
-        RedisTableType::ZSet(_) => vec!["ZRANGE"],
-        RedisTableType::Stream(_) => vec!["XRANGE"],
-        RedisTableType::None => vec![],
-    }
+
+    // Helper closures over pushdown_conditions.
+    let conds = inputs
+        .analysis
+        .map(|a| a.pushable_conditions.as_slice())
+        .unwrap_or(&[]);
+    let target_idx = inputs.pushdown_column_index;
+    let score_idx = inputs.score_column_index;
+
+    // In multi-key mode, an Equal/In condition on the key column lets
+    // fetch_multi_key_optimized skip SCAN entirely and route directly to the
+    // type's lookup command (HGETALL/SMEMBERS/ZRANGE/MGET/LRANGE).
+    let skip_scan_via_key_lookup = inputs.is_multi_key
+        && inputs.key_column_index.is_some_and(|kidx| {
+            conds.iter().any(|c| {
+                c.column_index == kidx
+                    && matches!(
+                        c.operator,
+                        ComparisonOperator::Equal | ComparisonOperator::In
+                    )
+            })
+        });
+
+    let has_target = |op: ComparisonOperator| {
+        conds
+            .iter()
+            .any(|c| c.column_index == target_idx && c.operator == op)
+    };
+    let has_score_range = || {
+        score_idx.is_some_and(|s| {
+            conds.iter().any(|c| {
+                c.column_index == s
+                    && matches!(
+                        c.operator,
+                        ComparisonOperator::GreaterThan
+                            | ComparisonOperator::GreaterThanOrEqual
+                            | ComparisonOperator::LessThan
+                            | ComparisonOperator::LessThanOrEqual
+                            | ComparisonOperator::Equal
+                    )
+            })
+        })
+    };
+
+    let base: Vec<&'static str> = match inputs.type_name {
+        "string" if inputs.is_multi_key && skip_scan_via_key_lookup => vec!["MGET"],
+        "string" if inputs.is_multi_key => vec!["SCAN", "MGET"],
+        "string" => vec!["GET"],
+
+        "hash" if inputs.is_multi_key && skip_scan_via_key_lookup => vec!["HGETALL"],
+        "hash" if inputs.is_multi_key => vec!["SCAN", "HGETALL"],
+        "hash" if has_target(ComparisonOperator::Equal) => vec!["HGET"],
+        "hash" if has_target(ComparisonOperator::In) => vec!["HMGET"],
+        "hash" if has_target(ComparisonOperator::Like) => vec!["HSCAN"],
+        "hash" => vec!["HGETALL"],
+
+        "set" if inputs.is_multi_key && skip_scan_via_key_lookup => vec!["SMEMBERS"],
+        "set" if inputs.is_multi_key => vec!["SCAN", "SMEMBERS"],
+        "set" if has_target(ComparisonOperator::Equal) => vec!["SISMEMBER"],
+        "set" if has_target(ComparisonOperator::In) => vec!["SMISMEMBER"],
+        "set" if has_target(ComparisonOperator::Like) => vec!["SSCAN"],
+        "set" => vec!["SMEMBERS"],
+
+        "zset" if inputs.is_multi_key && skip_scan_via_key_lookup => vec!["ZRANGE"],
+        "zset" if inputs.is_multi_key => vec!["SCAN", "ZRANGE"],
+        "zset" if has_target(ComparisonOperator::Equal) => vec!["ZSCORE"],
+        "zset" if has_target(ComparisonOperator::In) => vec!["ZMSCORE"],
+        "zset" if has_target(ComparisonOperator::Like) => vec!["ZSCAN"],
+        "zset" if has_score_range() => vec!["ZRANGEBYSCORE"],
+        "zset" => vec!["ZRANGE"],
+
+        "list" if inputs.is_multi_key && skip_scan_via_key_lookup => vec!["LRANGE"],
+        "list" if inputs.is_multi_key => vec!["SCAN", "LRANGE"],
+        "list" => vec!["LRANGE"],
+
+        // Stream: id-range and id-equality both go through XRANGE (label
+        // unchanged; the args differ — Pushdown line shows the bounds).
+        "stream" => vec!["XRANGE"],
+
+        _ => vec![],
+    };
+
+    base
+}
+
+/// Adapter from `RedisFdwState` to the pure classifier.
+fn redis_ops_for(state: &crate::core::state_manager::RedisFdwState) -> Vec<&'static str> {
+    use crate::tables::types::RedisTableType;
+    let (pushdown_col, score_col) = match &state.table_type {
+        RedisTableType::ZSet(z) => (z.pushdown_column_index, Some(z.score_column_index)),
+        RedisTableType::Hash(h) => (h.pushdown_column_index, None),
+        // Set has no per-type `pushdown_column_index` field, so compute the
+        // expected position from TTL + multi-key offsets. Without this,
+        // a TTL column at position 0 would shift the member column to 1
+        // and the classifier would predict SMEMBERS instead of SISMEMBER.
+        RedisTableType::Set(_) => (
+            crate::core::column_utils::compute_pushdown_column_index(
+                state.ttl_column_index,
+                state.is_multi_key,
+            ),
+            None,
+        ),
+        RedisTableType::Stream(s) => (s.pushdown_column_index, None),
+        _ => (0, None),
+    };
+    let key_col = if state.is_multi_key {
+        Some(crate::core::column_utils::compute_key_column_index(
+            state.ttl_column_index,
+        ))
+    } else {
+        None
+    };
+    classify_redis_ops_for_inputs(ClassifierInputs {
+        type_name: state.table_type.redis_type_name(),
+        is_multi_key: state.is_multi_key,
+        is_parameterized: state.is_parameterized,
+        pushdown_column_index: pushdown_col,
+        score_column_index: score_col,
+        key_column_index: key_col,
+        analysis: state.pushdown_analysis.as_ref(),
+    })
 }
 
 /// Determine whether pushdown was skipped and why. Returns `None` when no
@@ -508,6 +631,258 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    // --- classify_redis_ops tests ---
+
+    use crate::query::pushdown_types::{ComparisonOperator, PushableCondition, PushdownAnalysis};
+
+    fn cond(col: usize, op: ComparisonOperator, val: &str) -> PushableCondition {
+        PushableCondition {
+            column_name: format!("c{}", col),
+            column_index: col,
+            operator: op,
+            value: val.to_string(),
+        }
+    }
+
+    fn analysis_of(conds: Vec<PushableCondition>) -> PushdownAnalysis {
+        PushdownAnalysis {
+            can_optimize: !conds.is_empty(),
+            pushable_conditions: conds,
+            limit_offset: None,
+        }
+    }
+
+    #[test]
+    fn classify_zset_score_range_picks_zrangebyscore() {
+        let analysis = analysis_of(vec![
+            cond(1, ComparisonOperator::GreaterThanOrEqual, "10"),
+            cond(1, ComparisonOperator::LessThanOrEqual, "20"),
+        ]);
+        let ops = classify_redis_ops_for_inputs(ClassifierInputs {
+            type_name: "zset",
+            is_multi_key: false,
+            is_parameterized: false,
+            pushdown_column_index: 0,
+            score_column_index: Some(1),
+            key_column_index: None,
+            analysis: Some(&analysis),
+        });
+        assert_eq!(ops, vec!["ZRANGEBYSCORE"]);
+    }
+
+    #[test]
+    fn classify_zset_member_eq_picks_zscore() {
+        let analysis = analysis_of(vec![cond(0, ComparisonOperator::Equal, "alice")]);
+        let ops = classify_redis_ops_for_inputs(ClassifierInputs {
+            type_name: "zset",
+            is_multi_key: false,
+            is_parameterized: false,
+            pushdown_column_index: 0,
+            score_column_index: Some(1),
+            key_column_index: None,
+            analysis: Some(&analysis),
+        });
+        assert_eq!(ops, vec!["ZSCORE"]);
+    }
+
+    #[test]
+    fn classify_zset_member_in_picks_zmscore() {
+        let analysis = analysis_of(vec![cond(0, ComparisonOperator::In, "a,b,c")]);
+        let ops = classify_redis_ops_for_inputs(ClassifierInputs {
+            type_name: "zset",
+            is_multi_key: false,
+            is_parameterized: false,
+            pushdown_column_index: 0,
+            score_column_index: Some(1),
+            key_column_index: None,
+            analysis: Some(&analysis),
+        });
+        assert_eq!(ops, vec!["ZMSCORE"]);
+    }
+
+    #[test]
+    fn classify_zset_member_like_picks_zscan() {
+        let analysis = analysis_of(vec![cond(0, ComparisonOperator::Like, "a%")]);
+        let ops = classify_redis_ops_for_inputs(ClassifierInputs {
+            type_name: "zset",
+            is_multi_key: false,
+            is_parameterized: false,
+            pushdown_column_index: 0,
+            score_column_index: Some(1),
+            key_column_index: None,
+            analysis: Some(&analysis),
+        });
+        assert_eq!(ops, vec!["ZSCAN"]);
+    }
+
+    #[test]
+    fn classify_zset_no_pushdown_picks_zrange() {
+        let ops = classify_redis_ops_for_inputs(ClassifierInputs {
+            type_name: "zset",
+            is_multi_key: false,
+            is_parameterized: false,
+            pushdown_column_index: 0,
+            score_column_index: Some(1),
+            key_column_index: None,
+            analysis: None,
+        });
+        assert_eq!(ops, vec!["ZRANGE"]);
+    }
+
+    #[test]
+    fn classify_hash_eq_picks_hget() {
+        let analysis = analysis_of(vec![cond(0, ComparisonOperator::Equal, "x")]);
+        let ops = classify_redis_ops_for_inputs(ClassifierInputs {
+            type_name: "hash",
+            is_multi_key: false,
+            is_parameterized: false,
+            pushdown_column_index: 0,
+            score_column_index: None,
+            key_column_index: None,
+            analysis: Some(&analysis),
+        });
+        assert_eq!(ops, vec!["HGET"]);
+    }
+
+    #[test]
+    fn classify_hash_in_picks_hmget() {
+        let analysis = analysis_of(vec![cond(0, ComparisonOperator::In, "a,b")]);
+        let ops = classify_redis_ops_for_inputs(ClassifierInputs {
+            type_name: "hash",
+            is_multi_key: false,
+            is_parameterized: false,
+            pushdown_column_index: 0,
+            score_column_index: None,
+            key_column_index: None,
+            analysis: Some(&analysis),
+        });
+        assert_eq!(ops, vec!["HMGET"]);
+    }
+
+    #[test]
+    fn classify_hash_like_picks_hscan() {
+        let analysis = analysis_of(vec![cond(0, ComparisonOperator::Like, "x%")]);
+        let ops = classify_redis_ops_for_inputs(ClassifierInputs {
+            type_name: "hash",
+            is_multi_key: false,
+            is_parameterized: false,
+            pushdown_column_index: 0,
+            score_column_index: None,
+            key_column_index: None,
+            analysis: Some(&analysis),
+        });
+        assert_eq!(ops, vec!["HSCAN"]);
+    }
+
+    #[test]
+    fn classify_set_eq_picks_sismember() {
+        let analysis = analysis_of(vec![cond(0, ComparisonOperator::Equal, "m")]);
+        let ops = classify_redis_ops_for_inputs(ClassifierInputs {
+            type_name: "set",
+            is_multi_key: false,
+            is_parameterized: false,
+            pushdown_column_index: 0,
+            score_column_index: None,
+            key_column_index: None,
+            analysis: Some(&analysis),
+        });
+        assert_eq!(ops, vec!["SISMEMBER"]);
+    }
+
+    #[test]
+    fn classify_set_in_picks_smismember() {
+        let analysis = analysis_of(vec![cond(0, ComparisonOperator::In, "a,b,c")]);
+        let ops = classify_redis_ops_for_inputs(ClassifierInputs {
+            type_name: "set",
+            is_multi_key: false,
+            is_parameterized: false,
+            pushdown_column_index: 0,
+            score_column_index: None,
+            key_column_index: None,
+            analysis: Some(&analysis),
+        });
+        assert_eq!(ops, vec!["SMISMEMBER"]);
+    }
+
+    #[test]
+    fn classify_stream_id_range_picks_xrange_bounded() {
+        let analysis = analysis_of(vec![
+            cond(0, ComparisonOperator::GreaterThanOrEqual, "1-0"),
+            cond(0, ComparisonOperator::LessThanOrEqual, "9-0"),
+        ]);
+        let ops = classify_redis_ops_for_inputs(ClassifierInputs {
+            type_name: "stream",
+            is_multi_key: false,
+            is_parameterized: false,
+            pushdown_column_index: 0,
+            score_column_index: None,
+            key_column_index: None,
+            analysis: Some(&analysis),
+        });
+        assert_eq!(ops, vec!["XRANGE"]);
+    }
+
+    #[test]
+    fn classify_multi_key_prefixes_scan() {
+        let analysis = analysis_of(vec![cond(0, ComparisonOperator::Equal, "x")]);
+        let ops = classify_redis_ops_for_inputs(ClassifierInputs {
+            type_name: "hash",
+            is_multi_key: true,
+            is_parameterized: false,
+            pushdown_column_index: 0,
+            score_column_index: None,
+            key_column_index: None,
+            analysis: Some(&analysis),
+        });
+        assert_eq!(ops, vec!["SCAN", "HGETALL"]);
+    }
+
+    #[test]
+    fn classify_parameterized_stream_picks_xrange_point() {
+        let ops = classify_redis_ops_for_inputs(ClassifierInputs {
+            type_name: "stream",
+            is_multi_key: false,
+            is_parameterized: true,
+            pushdown_column_index: 0,
+            score_column_index: None,
+            key_column_index: None,
+            analysis: None,
+        });
+        assert_eq!(ops, vec!["XRANGE"]);
+    }
+
+    #[test]
+    fn classify_zset_eq_on_shifted_target_picks_zscore() {
+        // TTL column at pos 0, member at pos 1, score at pos 2.
+        let analysis = analysis_of(vec![cond(1, ComparisonOperator::Equal, "alice")]);
+        let ops = classify_redis_ops_for_inputs(ClassifierInputs {
+            type_name: "zset",
+            is_multi_key: false,
+            is_parameterized: false,
+            pushdown_column_index: 1,
+            score_column_index: Some(2),
+            key_column_index: None,
+            analysis: Some(&analysis),
+        });
+        assert_eq!(ops, vec!["ZSCORE"]);
+    }
+
+    #[test]
+    fn classify_zset_eq_on_wrong_column_falls_through_to_zrange() {
+        // Target is column 1, but condition is on column 0 (TTL) — should NOT push down.
+        let analysis = analysis_of(vec![cond(0, ComparisonOperator::Equal, "x")]);
+        let ops = classify_redis_ops_for_inputs(ClassifierInputs {
+            type_name: "zset",
+            is_multi_key: false,
+            is_parameterized: false,
+            pushdown_column_index: 1,
+            score_column_index: Some(2),
+            key_column_index: None,
+            analysis: Some(&analysis),
+        });
+        assert_eq!(ops, vec!["ZRANGE"]);
     }
 
     #[test]

@@ -13,3 +13,4 @@ benchmark_results_*
 *.deb
 apt-repo/
 postgresql-*-redis-fdw-rs_*/
+examples/users_100k.csv

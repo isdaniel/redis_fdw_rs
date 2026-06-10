@@ -550,4 +550,171 @@ mod tests {
         teardown_fdw(table);
         cleanup_redis_key(key);
     }
+
+    // ── Stream id-range pushdown tests ─────────────────────────────────
+
+    /// Stream tests need to seed entries with explicit IDs via XADD, which the
+    /// FDW INSERT path does not allow (it always uses `*`). We use a direct
+    /// Redis connection pinned to DB 15 to match the FDW server config.
+    fn redis_conn_db15() -> redis::Connection {
+        redis::Client::open("redis://127.0.0.1:8899/15")
+            .expect("Failed to create Redis client")
+            .get_connection()
+            .expect("Failed to connect to Redis")
+    }
+
+    fn cleanup_redis_key_db15(key: &str) {
+        let mut conn = redis_conn_db15();
+        let _: () = redis::cmd("DEL").arg(key).query(&mut conn).unwrap_or(());
+    }
+
+    /// Custom setup_fdw variant that allows passing `batch_size` as a table option.
+    /// We use a small batch so that without bounded XRANGE pushdown, entries
+    /// beyond the batch are invisible to the scan — making the assertion
+    /// actually detect whether bounds were pushed.
+    fn setup_stream_fdw_with_batch(table_name: &str, key_prefix: &str, batch_size: usize) {
+        let wrapper = format!("pv_{}_wrapper", table_name);
+        let server = format!("pv_{}_server", table_name);
+
+        Spi::run(&format!(
+            "CREATE FOREIGN DATA WRAPPER {wrapper} HANDLER redis_fdw_handler;"
+        ))
+        .unwrap();
+        Spi::run(&format!(
+            "CREATE SERVER {server} FOREIGN DATA WRAPPER {wrapper} \
+             OPTIONS (host_port '127.0.0.1:8899');"
+        ))
+        .unwrap();
+        Spi::run(&format!(
+            "CREATE FOREIGN TABLE {table_name} (stream_id text, field1 text, value1 text) \
+             SERVER {server} OPTIONS (\
+               database '15', \
+               table_type 'stream', \
+               batch_size '{batch_size}', \
+               table_key_prefix '{key_prefix}'\
+             );"
+        ))
+        .unwrap();
+    }
+
+    #[pg_test]
+    fn test_pushdown_verify_stream_id_range_uses_xrange_bounded() {
+        let key = "pv_test:stream_range";
+        cleanup_redis_key_db15(key);
+        let mut c = redis_conn_db15();
+        // Seed 200 entries so a narrow range in the upper half is invisible
+        // without bounded XRANGE (since batch_size below caps the unbounded scan).
+        for i in 0..200u64 {
+            let _: String = redis::cmd("XADD")
+                .arg(key)
+                .arg(format!("{}-0", 1_000_000 + i))
+                .arg("v")
+                .arg(i.to_string())
+                .query(&mut c)
+                .unwrap();
+        }
+
+        // batch_size 100 < 150 (the lower bound's position) — without bounds
+        // push-down the scan would XRANGE - + COUNT 100 and only see the
+        // first 100 entries, returning 0 matches for a range in 1000150..1000160.
+        setup_stream_fdw_with_batch("stream_range_fdw", key, 100);
+
+        let before = get_all_command_counts();
+        let n = get_count(
+            "SELECT count(*) FROM stream_range_fdw \
+             WHERE stream_id >= '1000150-0' AND stream_id <= '1000160-0'",
+        );
+        let after = get_all_command_counts();
+
+        assert_eq!(
+            n, 11,
+            "expected 11 matching rows in bounded range (got {} — bounds not pushed?)",
+            n
+        );
+        let xrange_delta = command_delta(&before, &after, "xrange");
+        // The real proof of bounded pushdown is n=11 above (impossible without
+        // bounds given batch_size=100 < 150). delta count is a noisy secondary
+        // signal because tests share the global INFO commandstats counters.
+        assert!(
+            xrange_delta >= 1,
+            "expected at least one XRANGE call, saw delta={}",
+            xrange_delta
+        );
+
+        teardown_fdw("stream_range_fdw");
+        cleanup_redis_key_db15(key);
+    }
+
+    #[pg_test]
+    fn test_pushdown_verify_stream_id_eq_uses_xrange_point() {
+        let key = "pv_test:stream_eq";
+        cleanup_redis_key_db15(key);
+        let mut c = redis_conn_db15();
+        let _: String = redis::cmd("XADD")
+            .arg(key)
+            .arg("2000000-0")
+            .arg("k")
+            .arg("v")
+            .query(&mut c)
+            .unwrap();
+        let _: String = redis::cmd("XADD")
+            .arg(key)
+            .arg("2000001-0")
+            .arg("k")
+            .arg("v")
+            .query(&mut c)
+            .unwrap();
+
+        setup_fdw(
+            "stream_eq_fdw",
+            "stream_id text, field1 text, value1 text",
+            "stream",
+            key,
+        );
+
+        let before = get_all_command_counts();
+        let n = get_count("SELECT count(*) FROM stream_eq_fdw WHERE stream_id = '2000000-0'");
+        let after = get_all_command_counts();
+
+        assert_eq!(n, 1);
+        let xrange_delta = command_delta(&before, &after, "xrange");
+        assert!(
+            xrange_delta >= 1,
+            "expected at least one XRANGE call, saw delta={}",
+            xrange_delta
+        );
+
+        teardown_fdw("stream_eq_fdw");
+        cleanup_redis_key_db15(key);
+    }
+
+    #[pg_test]
+    fn test_pushdown_verify_stream_id_gt_exclusive() {
+        let key = "pv_test:stream_gt";
+        cleanup_redis_key_db15(key);
+        let mut c = redis_conn_db15();
+        for i in 0..5u64 {
+            let _: String = redis::cmd("XADD")
+                .arg(key)
+                .arg(format!("{}-0", 3_000_000 + i))
+                .arg("k")
+                .arg("v")
+                .query(&mut c)
+                .unwrap();
+        }
+
+        setup_fdw(
+            "stream_gt_fdw",
+            "stream_id text, field1 text, value1 text",
+            "stream",
+            key,
+        );
+
+        // > excludes the bound; expect 4 of 5 rows
+        let n = get_count("SELECT count(*) FROM stream_gt_fdw WHERE stream_id > '3000000-0'");
+        assert_eq!(n, 4, "exclusive lower bound should drop the boundary row");
+
+        teardown_fdw("stream_gt_fdw");
+        cleanup_redis_key_db15(key);
+    }
 }

@@ -85,3 +85,6 @@ pub mod ffi_safety_tests;
 
 #[cfg(any(test, feature = "pg_test"))]
 pub mod explain_tests;
+
+#[cfg(any(test, feature = "pg_test"))]
+pub mod where_limit_order_tests;

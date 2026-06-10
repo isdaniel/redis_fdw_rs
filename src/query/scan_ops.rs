@@ -238,6 +238,8 @@ impl RedisScanBuilder {
 pub fn extract_scan_conditions(conditions: &[PushableCondition]) -> ScanConditions {
     let mut pattern_conditions = Vec::new();
     let mut exact_conditions = Vec::new();
+    let mut range_conditions = Vec::new();
+    let mut other_conditions = Vec::new();
     let mut pattern_matcher = None;
 
     for condition in conditions {
@@ -252,8 +254,18 @@ pub fn extract_scan_conditions(conditions: &[PushableCondition]) -> ScanConditio
             ComparisonOperator::Equal => {
                 exact_conditions.push(condition.clone());
             }
+            ComparisonOperator::GreaterThan
+            | ComparisonOperator::GreaterThanOrEqual
+            | ComparisonOperator::LessThan
+            | ComparisonOperator::LessThanOrEqual => {
+                // Range operators are surfaced via `range_conditions` so callers
+                // that care (e.g. Stream id-range pushdown) can translate them
+                // into bounded server-side queries.
+                range_conditions.push(condition.clone());
+            }
             _ => {
-                // Other operators are not optimizable for SCAN
+                // Operators we can't push to Redis directly (NotEqual, NotIn, In, …). Surfaced so callers can still apply them as a client-side post- filter — otherwise paths like Stream's load_with_stream_optimization would silently drop them once should_use_direct_load returns true.
+                other_conditions.push(condition.clone());
             }
         }
     }
@@ -261,6 +273,8 @@ pub fn extract_scan_conditions(conditions: &[PushableCondition]) -> ScanConditio
     ScanConditions {
         pattern_conditions,
         exact_conditions,
+        range_conditions,
+        other_conditions,
         pattern_matcher,
     }
 }
@@ -270,13 +284,22 @@ pub fn extract_scan_conditions(conditions: &[PushableCondition]) -> ScanConditio
 pub struct ScanConditions {
     pub pattern_conditions: Vec<PushableCondition>,
     pub exact_conditions: Vec<PushableCondition>,
+    /// Inequality conditions (>=, >, <=, <). Currently consumed by Stream
+    /// id-range pushdown to produce bounded XRANGE start/end arguments.
+    pub range_conditions: Vec<PushableCondition>,
+    /// Conditions that Redis can't satisfy directly (NotEqual, NotIn, In…).
+    /// Callers that take the direct-load path must apply these client-side
+    /// or the planner-level WHERE will be silently dropped.
+    pub other_conditions: Vec<PushableCondition>,
     pub pattern_matcher: Option<PatternMatcher>,
 }
 
 impl ScanConditions {
     /// Check if we have any optimizable conditions
     pub fn has_optimizable_conditions(&self) -> bool {
-        !self.pattern_conditions.is_empty() || !self.exact_conditions.is_empty()
+        !self.pattern_conditions.is_empty()
+            || !self.exact_conditions.is_empty()
+            || !self.range_conditions.is_empty()
     }
 
     /// Get the most restrictive pattern for SCAN optimization

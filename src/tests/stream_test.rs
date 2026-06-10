@@ -29,8 +29,15 @@ mod tests {
         assert!(table.supports_pushdown(&ComparisonOperator::Equal));
         assert!(table.supports_pushdown(&ComparisonOperator::NotEqual));
         assert!(table.supports_pushdown(&ComparisonOperator::Like));
-        assert!(!table.supports_pushdown(&ComparisonOperator::In));
-        assert!(!table.supports_pushdown(&ComparisonOperator::NotIn));
+        // In/NotIn are now declared so load_with_stream_optimization's
+        // client-side filter sees them. Range operators are likewise
+        // declared (translated to bounded XRANGE start/end).
+        assert!(table.supports_pushdown(&ComparisonOperator::In));
+        assert!(table.supports_pushdown(&ComparisonOperator::NotIn));
+        assert!(table.supports_pushdown(&ComparisonOperator::GreaterThan));
+        assert!(table.supports_pushdown(&ComparisonOperator::GreaterThanOrEqual));
+        assert!(table.supports_pushdown(&ComparisonOperator::LessThan));
+        assert!(table.supports_pushdown(&ComparisonOperator::LessThanOrEqual));
     }
 
     // Integration tests with real Redis server
