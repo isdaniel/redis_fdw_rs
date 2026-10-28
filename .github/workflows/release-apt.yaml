@@ -67,14 +67,15 @@ jobs:
 
       - name: Build amd64 package
         run: |
-          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
-          wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo wget --quiet -O /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          sudo sh -c '. /etc/os-release; echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $VERSION_CODENAME-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
           sudo apt-get update
           sudo apt-get install -y \
             build-essential clang llvm libreadline-dev zlib1g-dev \
             postgresql-${{ env.PG_VER }} \
             postgresql-server-dev-${{ env.PG_VER }}
-          cargo install cargo-pgrx --version 0.18.0
+          cargo install cargo-pgrx --version 0.19.2
           cargo pgrx init --pg${{ env.PG_VER }} /usr/lib/postgresql/${{ env.PG_VER }}/bin/pg_config
           sudo chmod 777 /usr/share/postgresql/${{ env.PG_VER }} -R
           sudo chmod 777 /usr/lib/postgresql/${{ env.PG_VER }} -R

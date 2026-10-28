@@ -387,7 +387,9 @@ mod tests {
         // The FDW should:
         // 1. Push down the field = 'name' condition to Redis (HGET)
         // 2. Apply the LIKE filter at PostgreSQL level
-        log!("Mixed pushdown should optimize Redis access while handling complex filters in PostgreSQL");
+        log!(
+            "Mixed pushdown should optimize Redis access while handling complex filters in PostgreSQL"
+        );
 
         // Clean up
         Spi::run("DROP FOREIGN TABLE user_data;").unwrap();

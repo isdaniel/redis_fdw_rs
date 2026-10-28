@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-PostgreSQL Foreign Data Wrapper (FDW) extension written in Rust that exposes Redis data as PostgreSQL tables. Built with **pgrx 0.18.0**, supports PostgreSQL 14-18, Redis standalone and cluster modes.
+PostgreSQL Foreign Data Wrapper (FDW) extension written in Rust that exposes Redis data as PostgreSQL tables. Built with **pgrx 0.19.2**, supports PostgreSQL 14-18, Redis standalone and cluster modes.
 
 ## Build & Test Commands
 
@@ -227,7 +227,7 @@ The FDW maps columns by **position**, not by name. Users MUST declare columns in
 
 ## Common Gotchas
 
-- pgrx version must match exactly: `cargo-pgrx 0.18.0` ↔ `pgrx = "=0.18.0"`
+- pgrx version must match exactly: `cargo-pgrx 0.19.2` ↔ `pgrx = "=0.19.2"` (and pgrx 0.19.x requires rustc ≥ 1.96 — `rust-toolchain.toml` pins it)
 - `IsForeignRelUpdatable` uses CmdType bit positions: CMD_UPDATE=2, CMD_INSERT=3, CMD_DELETE=4 → bitmask is `(1<<CmdType)`
 - Memory contexts: FDW state lives in a custom `MemoryContext` created per scan/modify operation
 - `PgBox::from_pg()` does NOT take ownership — the memory is still managed by PG

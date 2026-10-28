@@ -38,7 +38,7 @@ CREATE FOREIGN TABLE demo_cache_ttl (value text, ttl bigint)
         table_key_prefix 'cache:api:response'
     );
 
--- Insert with custom TTL (60 seconds)
+-- redis-cli TTL cache:api:response
 INSERT INTO demo_cache_ttl VALUES ('{"data": "fresh"}', 60);
 SELECT * FROM demo_cache_ttl;
 -- The ttl column shows remaining seconds

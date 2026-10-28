@@ -439,7 +439,10 @@ impl RedisFdwState {
         match pipe_result {
             Ok(v) => v,
             Err(e) => {
-                log!("Redis pipeline for TTL failed (likely cluster mode), falling back to individual commands: {}", e);
+                log!(
+                    "Redis pipeline for TTL failed (likely cluster mode), falling back to individual commands: {}",
+                    e
+                );
                 let mut ttls = Vec::with_capacity(keys.len());
                 for key in keys {
                     let ttl: i64 = redis::cmd("TTL").arg(key).query(conn).unwrap_or(-2);

@@ -572,7 +572,7 @@ OPTIONS (
 ### Building
 
 ```bash
-cargo install --locked cargo-pgrx --version 0.18.0
+cargo install --locked cargo-pgrx --version 0.19.2
 cargo pgrx init
 cargo pgrx install --release
 ```

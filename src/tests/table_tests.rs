@@ -488,14 +488,14 @@ mod tests {
         // Test with various string types
         let test_strings = vec![
             "simple string",
-            "",  // empty string
+            "", // empty string
             "string with spaces and symbols !@#$%^&*()",
             "multi\nline\nstring\nwith\nnewlines",
             "unicode: 你好世界 🌍",
             "very long string that could represent a large text value or JSON document or any other type of data that might be stored in Redis as a string value",
-            "123456789",  // numeric string
-            "true",       // boolean string
-            "null",       // null string
+            "123456789", // numeric string
+            "true",      // boolean string
+            "null",      // null string
         ];
 
         for test_string in test_strings {

@@ -22,8 +22,7 @@ unsafe extern "C-unwind" fn redis_fdw_object_access_hook(
     arg: *mut std::ffi::c_void,
 ) {
     if let Some(prev) = PREV_OBJECT_ACCESS_HOOK {
-        // Fn-pointer dispatch is not auto-wrapped by pgrx (only named pg_sys::* symbols are).
-        // Without this guard, a longjmp from another extension's hook would skip the Rust frame and bypass Drop on any locals.
+        // Fn-pointer dispatch is not auto-wrapped by pgrx (only named pg_sys::* symbols are), without this guard, a longjmp from another extension's hook would skip the Rust frame and bypass Drop on any locals.
         pgrx::pg_sys::ffi::pg_guard_ffi_boundary(|| unsafe {
             prev(access, class_id, object_id, sub_id, arg)
         });
@@ -53,15 +52,13 @@ unsafe fn validate_foreign_table_columns(rel_id: pg_sys::Oid) {
 
     let data_column_count = count_data_columns(rel_id);
 
-    // At this point only `table_type` (small enum) + primitives are alive.
-    // No HashMap, no owned String. A panic here leaks nothing on the Rust heap.
+    // At this point only `table_type` (small enum) + primitives are alive, no HashMap, no owned String. A panic here leaks nothing on the Rust heap.
     validate_column_count(&table_type, data_column_count, is_multi_key);
 }
 
 /// Phase 1: is this foreign table backed by `redis_fdw_handler`?
 ///
-/// All allocations (`handler_name: String`, plus the palloc'd C string) are
-/// confined to this function's scope and freed before return.
+/// All allocations (`handler_name: String`, plus the palloc'd C string) are confined to this function's scope and freed before return.
 unsafe fn is_our_foreign_table(rel_id: pg_sys::Oid) -> bool {
     let ft = pg_sys::GetForeignTable(rel_id);
     if ft.is_null() {
@@ -90,9 +87,7 @@ unsafe fn is_our_foreign_table(rel_id: pg_sys::Oid) -> bool {
 
 /// Phase 2: read table options and resolve into a validated `(type, multi_key)` pair.
 ///
-/// The `HashMap<String, String>` returned by `get_foreign_table_options` lives only
-/// inside this function; it's dropped on return. Only the cheap `RedisTableType`
-/// enum + `bool` escape.
+/// The `HashMap<String, String>` returned by `get_foreign_table_options` lives only inside this function; it's dropped on return.
 unsafe fn extract_validation_inputs(rel_id: pg_sys::Oid) -> Option<(RedisTableType, bool)> {
     let opts = get_foreign_table_options(rel_id);
 
@@ -112,8 +107,7 @@ unsafe fn extract_validation_inputs(rel_id: pg_sys::Oid) -> Option<(RedisTableTy
 
 /// Phase 3: open the relation, count non-TTL data columns, close.
 ///
-/// The lock is released before return — no PG lock is held across the eventual
-/// `pgrx::error!()` call site.
+/// The lock is released before return — no PG lock is held across the eventual `pgrx::error!()` call site.
 unsafe fn count_data_columns(rel_id: pg_sys::Oid) -> usize {
     let rel = pg_sys::relation_open(rel_id, pg_sys::AccessShareLock as i32);
     let tupdesc = (*rel).rd_att;

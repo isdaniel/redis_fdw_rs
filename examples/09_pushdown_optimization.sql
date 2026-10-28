@@ -65,7 +65,8 @@ CREATE FOREIGN TABLE demo_sessions (key text, value text)
         database '0',
         table_type 'string',
         table_key_prefix 'session:*',
-        batch_size '10000'
+        batch_size '10000',
+        ttl '300'
     );
 
 -- Bulk-seed 20000 session keys via generate_series

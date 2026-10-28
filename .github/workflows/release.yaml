@@ -40,8 +40,9 @@ jobs:
 
       - name: Install PostgreSQL ${{ env.PG_VER }} and dev headers
         run: |
-          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
-          wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo wget --quiet -O /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          sudo sh -c '. /etc/os-release; echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $VERSION_CODENAME-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
@@ -53,7 +54,7 @@ jobs:
             postgresql-server-dev-${{ env.PG_VER }}
 
       - name: Install cargo-pgrx
-        run: cargo install cargo-pgrx --version 0.18.0
+        run: cargo install cargo-pgrx --version 0.19.2
 
       - name: Initialize pgrx
         run: cargo pgrx init --pg${{ env.PG_VER }} ${{ env.PG_BIN }}/pg_config

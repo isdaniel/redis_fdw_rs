@@ -290,6 +290,9 @@ CREATE FOREIGN TABLE cluster_batch_strings (key text, value text)
         batch_size '10000'
     );
 
+--redis-cli -p 7001 CLUSTER NODES
+--for p in 7001 7002 7003 7004 7005 7006; do if redis-cli -p $p ROLE | grep -q "master"; then echo -n "Port $p (Primary) 數量: "; redis-cli -p $p --scan --pattern "cbatch:item:*" | wc -l; fi; done
+
 INSERT INTO cluster_batch_strings
 SELECT
     'cbatch:item:' || g::text,
